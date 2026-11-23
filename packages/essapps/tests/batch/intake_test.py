@@ -9,9 +9,15 @@ import pandas as pd
 import pytest
 
 from ess.apps import Client
-from ess.apps.batch import BatchManager, FolderDefinitions, Intake, NotKept, Range
+from ess.apps.batch import (
+    BatchManager,
+    FolderDefinitions,
+    Intake,
+    NotKept,
+    Range,
+    RowSource,
+)
 from ess.apps.batch.definition import (
-    FOLLOWING,
     Key,
     header_key,
     settings_key,
@@ -421,12 +427,21 @@ def test_a_batch_whose_source_is_refused_is_removed_again(
     assert intake.following is None
 
 
-def test_the_source_of_a_batch_is_written_after_its_header_and_following_last(
-    intake: Intake, refusing: Refusing
-) -> None:
-    intake.create('plain', title='A', source='pairs', label='b', follow=True)
+def _broken(files: Any) -> pd.DataFrame:
+    raise AssertionError('the source is listed')
 
-    assert refusing.saved[-3:] == [header_key('b'), source_key('b'), FOLLOWING]
+
+@pytest.mark.parametrize(
+    ('spec', 'label', 'said'),
+    [('iofq', None, 'no spec iofq'), ('plain', 'a/b', 'a label is')],
+)
+def test_a_spec_or_label_is_refused_before_the_source_is_listed(
+    manager: BatchManager, spec: str, label: str | None, said: str
+) -> None:
+    intake = Intake(manager, sources={'broken': RowSource(_broken, fills=())})
+
+    with pytest.raises(ValueError, match=said):
+        intake.create(spec, title='A', source='broken', label=label)
 
 
 # Which batch follows
@@ -441,6 +456,25 @@ def two(intake: Intake) -> Intake:
     intake.create('plain', title='A', source='pairs', label='a', follow=True)
     intake.create('plain', title='B', source='pairs', label='b')
     return intake
+
+
+def _follows(definitions: FolderDefinitions) -> list[str]:
+    """The labels whose ``source.json`` says that they follow."""
+    return [
+        label
+        for label in definitions.labels()
+        if (made := definitions.load(source_key(label), source_of)) is not None
+        and made.follows
+    ]
+
+
+def test_a_batch_made_to_follow_ends_follow_on_the_one_before_then_writes_its_own(
+    two: Intake, refusing: Refusing, definitions: FolderDefinitions
+) -> None:
+    two.create('plain', title='C', source='pairs', label='c', follow=True)
+
+    assert refusing.saved[-3:] == [header_key('c'), source_key('a'), source_key('c')]
+    assert _follows(definitions) == ['c']
 
 
 def test_a_batch_made_to_follow_follows_in_place_of_the_one_before(
@@ -510,6 +544,54 @@ def test_a_batch_removed_through_the_manager_follows_no_longer(
     assert _again(client, definitions).following is None
 
 
+@pytest.mark.parametrize(
+    'remake',
+    [
+        lambda i: i.manager.create('plain', title='A again', label='a'),
+        lambda i: i.create('plain', title='A again', source='pairs', label='a'),
+    ],
+    ids=['manager', 'intake'],
+)
+def test_a_label_removed_and_made_again_without_follow_does_not_follow(
+    two: Intake,
+    client: Client,
+    definitions: FolderDefinitions,
+    remake: Callable[[Intake], object],
+) -> None:
+    two.manager.remove('a')
+    remake(two)
+
+    assert two.following is None
+    assert _again(client, definitions).following is None
+
+
+class _Counting(Refusing):
+    """:class:`Refusing` that counts the tables loaded."""
+
+    def __init__(self, definitions: FolderDefinitions) -> None:
+        super().__init__(definitions)
+        self.loads = 0
+
+    def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None:
+        self.loads += 1
+        return super().load(key, read)
+
+
+def test_which_batch_follows_is_read_again_only_after_a_change_of_the_headers(
+    two: Intake, client: Client, definitions: FolderDefinitions
+) -> None:
+    counting = _Counting(definitions)
+    intake = Intake(BatchManager(client, definitions=counting), sources=SOURCES)
+    assert intake.following == 'a'
+    loads = counting.loads
+
+    assert intake.following == 'a'
+    assert counting.loads == loads
+    intake.manager.change('b', title='B again')
+    assert intake.following == 'a'
+    assert counting.loads > loads
+
+
 def test_a_kept_label_without_a_header_follows_not(
     two: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
@@ -521,7 +603,7 @@ def test_a_kept_label_without_a_header_follows_not(
 def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
     two: Intake, refusing: Refusing
 ) -> None:
-    refusing.part = 'following'
+    refusing.part = source_key('a')
 
     with pytest.raises(NotKept):
         two.create('plain', title='C', source='pairs', label='c', follow=True)

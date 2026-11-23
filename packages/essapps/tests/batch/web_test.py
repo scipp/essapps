@@ -2647,13 +2647,14 @@ def test_a_header_change_the_definitions_refuse_answers_422_and_changes_nothing(
 def test_a_batch_to_follow_whose_follow_the_definitions_refuse_is_not_made(
     http: TestClient, manager: BatchManager, intake: Intake, refusing: Refusing
 ) -> None:
-    refusing.part = 'following'
+    refusing.part = 'source'
 
     answer = http.post('/api/batches', json=new_batch(follow=True))
 
-    assert (answer.status_code, answer.json()) == (
-        422,
-        {'message': "The change was not kept: ('following',): refused"},
+    assert answer.status_code == 422
+    assert re.fullmatch(
+        r"The change was not kept: \('labels', '[\d-]+', 'source'\): refused",
+        answer.json()['message'],
     )
     assert (list(manager.headers()), intake.following) == (['scan'], None)
 

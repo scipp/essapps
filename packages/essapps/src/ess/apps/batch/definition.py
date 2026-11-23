@@ -12,18 +12,17 @@ rows of a batch are written by its ``Batch``, which the manager makes:
     settings      the template: spec, settings, fills         Batch.settings,
                                                               Batch.make_setting
     rows          the table                                  Batch.put
-    source        the row source a batch was made from, and  Intake
-                  the keys of it that the batch has considered
-    following     the label of the batch that follows        Intake
+    source        the row source a batch was made from, the  Intake
+                  keys of it that the batch has considered,
+                  and whether the batch follows
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
-one table of them. The following label is the workspace's too. The others are
-of a label. A :class:`DefinitionStore`, *the definitions*, keeps each table as
-plain data under a key::
+one table of them. The others are of a label, so removing a label removes
+them all, also whether its batch follows. A :class:`DefinitionStore`, *the
+definitions*, keeps each table as plain data under a key::
 
     ('corrections',)
-    ('following',)
     ('labels', label, 'header')
     ('labels', label, 'settings')
     ('labels', label, 'rows')
@@ -40,8 +39,8 @@ The plain data of each table, as the functions below give and read it::
     header        {'title': 'Sample runs', 'description': ''}
     settings      {'spec': ..., 'params': {...}, 'blanks': ['sample']}: a template
     rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
-    source        {'source': 'sample-runs', 'considered': ['60337', '60338']}
-    following     {'label': '20261118-130204'}, or {'label': None}
+    source        {'source': 'sample-runs', 'considered': ['60337', '60338'],
+                   'follows': True}
 
 The settings are a template in the format of the file that a person saves
 from a page: its params are the settings of the batch, also those at the
@@ -63,7 +62,7 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol
 from urllib.parse import quote, unquote
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -77,7 +76,6 @@ type Key = tuple[str, ...]
 """Names a table: ``('corrections',)``, or ``('labels', label, part)``."""
 
 CORRECTIONS: Key = ('corrections',)
-FOLLOWING: Key = ('following',)
 
 
 def header_key(label: str) -> Key:
@@ -142,7 +140,6 @@ class FolderDefinitions:
         definitions/labels/auto%2Fiofq/settings.json
         definitions/labels/auto%2Fiofq/rows.json
         definitions/labels/auto%2Fiofq/source.json
-        definitions/following.json
 
     Each name of a key is a folder or a file, with ``/``, ``%`` and ``.``
     written as ``%2F``, ``%25`` and ``%2E``, so that no label reaches out of
@@ -265,25 +262,22 @@ class Header:
 @dataclass(frozen=True)
 class FromSource:
     """
-    What a batch made from a row source keeps of it: the name of the source,
-    and the keys of its rows that the batch has considered, those put into
-    the batch from the source or left out when the batch was made. Data with
-    other entries is refused when read.
+    What a batch made from a row source keeps of it: the name of the source;
+    the keys of its rows that the batch has considered, those put into the
+    batch from the source or left out when the batch was made; and whether
+    the batch follows its source. Data with other entries, or without one of
+    these, is refused when read.
     """
 
     __pydantic_config__ = ConfigDict(extra='forbid')
 
     source: str
     considered: frozenset[str]
-
-
-class _Following(TypedDict):
-    label: str | None
+    follows: bool
 
 
 _HEADER = TypeAdapter(Header)
 _FROM_SOURCE = TypeAdapter(FromSource)
-_FOLLOWING = TypeAdapter(_Following)
 _CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
 _TEMPLATE = TypeAdapter(Template)
 
@@ -327,19 +321,13 @@ def header_of(data: Any) -> Header:
 
 def source_data(made: FromSource) -> dict[str, Any]:
     """What a batch keeps of its source, as plain data; the keys sorted."""
-    return {'source': made.source, 'considered': sorted(made.considered)}
+    return {
+        'source': made.source,
+        'considered': sorted(made.considered),
+        'follows': made.follows,
+    }
 
 
 def source_of(data: Any) -> FromSource:
     """The source of :func:`source_data`; ``ValueError`` names an entry."""
     return _checked(_FROM_SOURCE, data)
-
-
-def following_data(label: str | None) -> dict[str, Any]:
-    """The label that follows, or ``None`` if none does, as plain data."""
-    return {'label': label}
-
-
-def following_of(data: Any) -> str | None:
-    """The label of :func:`following_data`; ``ValueError`` names an entry."""
-    return _checked(_FOLLOWING, data)['label']

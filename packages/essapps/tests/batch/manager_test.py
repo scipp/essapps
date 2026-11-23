@@ -571,14 +571,15 @@ def test_a_create_cut_off_at_any_write_leaves_what_remove_removes(
         try:
             _create(_intake(client, stopping), follow=True)
         except NotKept:
-            # No batch a, or one made without a source; z follows still.
+            # No batch a, or one made without a source; z follows still, or
+            # none does if the cut came after Follow on z ended.
             again = _intake(client, definitions)
             assert set(again.manager.headers()) - {'z'} <= {'a'}
-            assert again.following == 'z'
+            assert again.following in ('z', None)
             _made_again(client, definitions, follow=True)
         else:
             break
-    assert at > 5  # rows, settings, header, source, following
+    assert at > 5  # rows, settings, header, source of z, source of a
 
 
 def test_a_remove_cut_off_at_any_write_leaves_what_remove_removes(
@@ -587,7 +588,7 @@ def test_a_remove_cut_off_at_any_write_leaves_what_remove_removes(
     sample(1, 'water')
     for at in itertools.count(1):
         definitions = FolderDefinitions(tmp_path / str(at))
-        _create(_intake(client, definitions), follow=False)
+        _create(_intake(client, definitions), follow=True)
         stopping = Stopping(definitions, at)
         manager = BatchManager(client, definitions=stopping)
         try:

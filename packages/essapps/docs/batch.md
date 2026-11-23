@@ -142,17 +142,16 @@ Other tables are always named with what they are of:
 | `definitions/labels/<label>/header.json` | `{"title": ..., "description": ...}` | manager |
 | `definitions/labels/<label>/settings.json` | a template: the spec; the settings in `params`, also those of a parameter that has a column; `batch.fills` as its `blanks` | `Batch` |
 | `definitions/labels/<label>/rows.json` | the batch table: `{"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}]}` | `Batch.put` |
-| `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...]}`; only for a batch made from a source | intake |
-| `definitions/following.json` | `{"label": ...}` or `{"label": null}` | intake |
+| `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...], "follows": true}`; only for a batch made from a source | intake |
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
 | `store/`, the log | the records | the workspace |
 
 A label is a batch if and only if `header.json` exists.
 `manager.create` writes rows and settings, then the header.
-`intake.create` then writes `source.json`, then `following.json` if the batch follows; if the definitions refuse one of the two, it removes the batch again.
-A process that stops between the header and `source.json` leaves a batch made without a source, which neither offers rows nor follows.
+`intake.create` then, if the batch follows, writes `"follows": false` to the `source.json` of the batch that followed, then writes the `source.json` of the batch; if the definitions refuse a write, it removes the batch again.
+A process that stops between the header and the batch's `source.json` leaves a batch made without a source, which neither offers rows nor follows, and no batch that follows.
 `manager.remove` deletes the header, then every other file of the label, `source.json` too.
-It does not write `following.json`: `intake.following` counts a label without a header as none.
+So whether a batch follows goes with its label: a batch made again with the label does not follow unless made so.
 Each file has one writer.
 
 `rows.json` has the shape that pandas writes with `to_json(orient='table')`: a schema with the dtype of each column, and one record per row.
@@ -185,7 +184,7 @@ batch = intake.create('loki-iofq', title='Afternoon', source='sample-runs',
 ```
 
 `intake.create` lists the source once and gives `choose` the rows that are filled; a `Range` picks those from 60339 on. In code, `choose` may be any function that picks rows and adds columns.
-On disk: `header.json`, `settings.json`, `rows.json` with rows 60339 and 60340, `source.json` with `considered` = 60337 to 60340, and `following.json` with `afternoon`.
+On disk: `header.json`, `settings.json`, `rows.json` with rows 60339 and 60340, and `source.json` with `considered` = 60337 to 60340 and `"follows": true`.
 Rows 60337 and 60338 are considered and not in the table: they were left out when the batch was made, so Follow never adds them.
 A row that waits when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor considered: Follow adds it once it is filled.
 
@@ -241,7 +240,7 @@ intake.following             # 'afternoon'
 intake.step()                # adds 60343 and reduces it
 ```
 
-The manager reads the headers, the intake `following.json`.
+The manager reads the headers; the intake finds the batch that follows in their `source.json`.
 `manager.batch('afternoon')` reads `settings.json` and `rows.json` and makes the `Batch`.
 The results are read from the records, so no row is reduced twice.
 
@@ -527,7 +526,8 @@ arrived = given[filled]                  # a value in each of source.fills
 table = arrived if choose is None else choose(arrived)
 considered = arrived.index               # the rows taken and those left out
 batch = manager.create(spec, rows=table, fills=source.fills, ...)
-# then source.json: the source and considered; then following.json if follow
+# with follow: "follows": false to the batch that followed
+# then source.json: the source, considered, and whether it follows
 ```
 
 `Range` refuses an end that is not a key of the rows that arrived (a row that waits is not one), a first row after the last, and an end with `later=True`.
@@ -605,7 +605,7 @@ sequenceDiagram
 - A row with a result is never reduced by a step, also when it is outdated, failed or cancelled.
 - A row whose request is refused does not hold back the others; `done.refused` says why, and the next step tries again.
 - A batch of the manager persists what it submits.
-- `manager.remove(label)` of the batch that follows ends Follow: `intake.following` counts a label without a header as none, and `intake.step()` then does nothing.
+- `manager.remove(label)` of the batch that follows ends Follow, since `source.json` goes with the label: `intake.following` is then `None`, and `intake.step()` does nothing. A batch made again with the label does not follow unless made so.
 
 A source whose row grows, such as the runs of a sample so far, gives the grown list a new key:
 
@@ -675,7 +675,7 @@ A cell may name a record that still runs. If that record failed or was cancelled
 ## Where the definitions are kept
 
 `DefinitionStore` is a protocol: `load(key, read)`, `save(key, data)`, `delete(key)`, `labels()`.
-A key is a tuple, such as `('labels', label, 'rows')` or `('following',)`.
+A key is a tuple, such as `('labels', label, 'rows')` or `('corrections',)`.
 `FolderDefinitions(folder)` keeps each table of the definitions as a JSON file under `definitions/`, written whole through a temporary file.
 `rows.json` holds `data_of(table)`, and `frame_of(data)` reads it back equal, dtypes and floats included; both are in `ess.apps.batch.table`.
 A refused write raises `NotKept`.

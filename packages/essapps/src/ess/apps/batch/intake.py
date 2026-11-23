@@ -8,19 +8,20 @@ is the section "Follow" of ``packages/essapps/docs/batch.md``; the decision
 is ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
 
 ``Intake`` makes and reads the batches through its
-:class:`~.manager.BatchManager`, and writes two tables of the definitions
-(:mod:`.definition`)::
+:class:`~.manager.BatchManager`, and writes one table of the definitions
+(:mod:`.definition`) for each batch made from a source::
 
-    source      the source and the keys considered      of a batch made from a source
-    following   the label of the batch that follows     of the workspace
+    source      the source, the keys considered, and whether the batch follows
 
+Whether a batch follows is kept with its label, so a removal through the
+manager, which deletes every table of the label, ends Follow, and a batch
+made again with the label does not follow unless made so.
 :meth:`Intake.create` makes the batch with the manager, which writes its
-settings, rows and header, then writes ``source``, then ``following`` if the
-batch follows. A batch follows from the time it is made, if made so, until
-:meth:`Intake.stop` or its removal; nothing turns Follow on for a batch made
-before. The manager removes a batch without writing ``following``, so a
-label of ``following`` without a header counts as none, at each read
-(:attr:`Intake.following`). :meth:`Intake.step` is one step of Follow on the
+settings, rows and header; with ``follow``, it then ends Follow on the batch
+that followed; then it writes ``source``. So no two batches follow, also
+when a process stops in between. A batch follows from the time it is made,
+if made so, until :meth:`Intake.stop` or its removal; nothing turns Follow
+on for a batch made before. :meth:`Intake.step` is one step of Follow on the
 batch that follows::
 
     made = source_of(label)                                  # source.json
@@ -46,11 +47,8 @@ from ess.spec import WorkflowSpec
 from . import auto
 from .auto import SourceError, Step
 from .definition import (
-    FOLLOWING,
     FromSource,
     NotKept,
-    following_data,
-    following_of,
     source_data,
     source_key,
     source_of,
@@ -95,8 +93,9 @@ class Intake:
     source that raises.
 
     :attr:`version` moves whenever :attr:`following` may give something else
-    by a call of this object; a removal through the manager moves
-    :attr:`.manager.BatchManager.version`.
+    by a call of this object. A change through the manager, such as a
+    removal, moves :attr:`.manager.BatchManager.version` instead, and
+    :attr:`following` is read again from the definitions after it.
 
     Parameters
     ----------
@@ -111,8 +110,9 @@ class Intake:
     ) -> None:
         self.manager = manager
         self.sources = sources
-        self._following = manager.definitions.load(FOLLOWING, following_of)
         self._version = 0
+        # The batch that follows, as read when the manager had this version.
+        self._read: tuple[int, str | None] | None = None
 
     @property
     def version(self) -> int:
@@ -122,24 +122,43 @@ class Intake:
     @property
     def following(self) -> str | None:
         """
-        The label of the batch that follows, ``None`` if none does. It is
-        kept in the definitions and read when the intake is made; a label
-        without a header counts as none.
+        The label of the batch whose ``source.json`` says that it follows,
+        ``None`` if none does. It is read from the definitions at the first
+        call and whenever :attr:`.manager.BatchManager.version` moved since.
+        If several say so, which no call of ``Intake`` makes, it is the first
+        in the order of :meth:`~.manager.BatchManager.headers`.
         """
-        if self._following not in self.manager.headers():
-            return None
-        return self._following
+        version = self.manager.version
+        if self._read is None or self._read[0] != version:
+            self._read = (version, self._kept_following())
+        return self._read[1]
+
+    def _kept_following(self) -> str | None:
+        """The first label whose ``source.json`` says that its batch follows."""
+        for label in self.manager.headers():
+            if (made := self._from(label)) is not None and made.follows:
+                return label
+        return None
+
+    def _set_following(self, label: str | None) -> None:
+        """Hold ``label`` as the batch that follows, as now written."""
+        self._read = (self.manager.version, label)
+        self._version += 1
+
+    def _write_follows(self, label: str, follows: bool) -> None:
+        """Write whether the batch of ``label`` follows."""
+        made = replace(self._made(label), follows=follows)
+        self.manager.definitions.save(source_key(label), source_data(made))
 
     def stop(self) -> None:
         """
         End Follow: no batch follows from then on, and the batch that followed
         cannot follow again. Nothing is done if no batch follows.
         """
-        if self.following is None:
+        if (label := self.following) is None:
             return
-        self.manager.definitions.save(FOLLOWING, following_data(None))
-        self._following = None
-        self._version += 1
+        self._write_follows(label, False)
+        self._set_following(None)
 
     def _source(self, name: str) -> RowSource:
         """The source registered as ``name``; ``ValueError`` if none is."""
@@ -215,13 +234,16 @@ class Intake:
         an empty cell there means that the row waits for its file, and the
         settings given are left out there.
 
-        The manager writes the settings, the rows and the header; then
-        ``source.json`` is written, then, with ``follow``, ``following``. If
-        the definitions refuse one of these two, the batch is removed again
-        (:meth:`~.manager.BatchManager.remove`), and which batch follows
-        stays. A process that stops between the header and ``source.json``
-        leaves a batch made without a source, which neither offers rows nor
-        follows.
+        The label and the spec are checked before the source is listed. The
+        manager writes the settings, the rows and the header; then, with
+        ``follow``, the ``source.json`` of the batch that followed says that
+        it follows no more; then the ``source.json`` of the batch is written.
+        If the definitions refuse one of these writes, the batch is removed
+        again (:meth:`~.manager.BatchManager.remove`), and the batch that
+        followed is written to follow again, if its Follow was ended. A process
+        that stops between the header and the batch's ``source.json`` leaves
+        a batch made without a source, which neither offers rows nor
+        follows, and no batch that follows.
 
         Parameters
         ----------
@@ -258,11 +280,16 @@ class Intake:
                 'a batch that follows takes every row that arrives later, '
                 'so it has no last row'
             )
+        # Checked before the source is listed, which may be slow or raise.
+        if label is not None:
+            self.manager.check_label(label)
+        self.manager.spec_named(spec)
         found = self._source(source)
         given = self._given(found, found.fills)
         arrived = given[~given['waits']].drop(columns='waits')
         rows = arrived if choose is None else choose(arrived)
         _check_chosen(rows, arrived)
+        before = self.following
         batch = self.manager.create(
             spec,
             title=title,
@@ -273,19 +300,23 @@ class Intake:
             settings=settings,
             label=label,
         )
-        definitions = self.manager.definitions
+        made = FromSource(source, frozenset(arrived.index), follows=follow)
+        ended = None  # the batch whose Follow was ended, to follow again
         try:
-            made = FromSource(source, frozenset(arrived.index))
-            definitions.save(source_key(batch.label), source_data(made))
-            if follow:
-                definitions.save(FOLLOWING, following_data(batch.label))
+            if follow and before is not None:
+                self._write_follows(before, False)
+                ended = before
+            self.manager.definitions.save(source_key(batch.label), source_data(made))
         except NotKept:
-            with suppress(NotKept):  # the first error is what to say
+            # The first error is what to say.
+            with suppress(NotKept):
                 self.manager.remove(batch.label)
+            if ended is not None:
+                with suppress(NotKept):
+                    self._write_follows(ended, True)
             raise
         if follow:
-            self._following = batch.label
-            self._version += 1
+            self._set_following(batch.label)
         return batch
 
     def _from(self, label: str) -> FromSource | None:

@@ -78,8 +78,7 @@ So the records of a removed batch never show as results of another batch.
 
 ```
 definitions/labels/20261118-130204/header.json   {"title": "Afternoon, 2 mm cells", "description": "..."}
-definitions/labels/20261118-130204/...           the settings and the table (ADR 0012), the source (ADR 0013)
-definitions/following.json                       {"label": "20261118-130204"}, or {"label": null}
+definitions/labels/20261118-130204/...           the settings and the table (ADR 0012), the source and whether the batch follows (ADR 0013)
 definitions/corrections.json                     metadata of runs set by hand
 ```
 
@@ -92,7 +91,7 @@ Nothing checks that the batches cover every row or that they do not overlap.
 
 ### One batch follows
 
-The intake keeps the label of the batch that follows, or none:
+The intake keeps which batch follows, if any:
 
 ```python
 intake.create(..., source='sample-runs', follow=True)    # this batch follows, and no other
@@ -101,8 +100,8 @@ intake.stop()                                            # none follows
 intake.step()                                            # one step of Follow on it (ADR 0013)
 ```
 
-- One value means that at most one batch follows, with no rule to enforce. Making a batch that follows stops the batch that followed before.
-- The intake keeps the value in the definitions, apart from any batch, so a restart resumes. Removing the batch that follows ends Follow.
+- Making a batch that follows stops the batch that followed before, first, so at most one batch follows.
+- The intake keeps it in the definitions of the batch (`"follows"` in its `source.json`), so a restart resumes, and removing the batch that follows ends Follow, also for a batch made again with the label.
 - Whoever serves the pages owns the timer that calls `step`. The intake has no thread, no timer and no lock.
 - The workspace has one lock: every request of every page and each step take it, so the batches, the manager and the corrections change in one request at a time.
 

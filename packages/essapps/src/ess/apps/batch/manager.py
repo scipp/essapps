@@ -15,8 +15,8 @@ each batch. A batch is kept as these tables of the definitions
     header      title, description                      BatchManager
     settings    the template, with the fills as blanks  the Batch
     rows        the table                               the Batch
-    source      the source and the keys considered      Intake; only for a
-                                                        batch made from a source
+    source      the source, the keys considered, and    Intake; only for a
+                whether the batch follows               batch made from a source
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the specs that the workspace binds, and the specs that run staged.
@@ -209,9 +209,7 @@ class BatchManager:
                 n += 1
                 label = f'{stamp}-{n}'
         else:
-            _check_label(label)
-            if self._taken(label):
-                raise ValueError(f'{label}: the label has definitions or records')
+            self.check_label(label)
         header = Header(title, description)
         bound = self.spec_named(spec)
         if settings is None:
@@ -236,6 +234,16 @@ class BatchManager:
         self._batches[label] = batch
         self._version += 1
         return batch
+
+    def check_label(self, label: str) -> None:
+        """
+        Raise ``ValueError`` unless ``label`` can name a new batch: it is
+        letters, digits, ``_``, ``.`` and ``-``, starting with none of the
+        last two, and has no definitions or records.
+        """
+        _check_label(label)
+        if self._taken(label):
+            raise ValueError(f'{label}: the label has definitions or records')
 
     def spec_named(self, spec: str) -> WorkflowSpec[Any, Any]:
         """
@@ -337,8 +345,7 @@ class BatchManager:
         if no batch has the label and no table is kept of it.
 
         The header is deleted first, so a batch is never listed half removed.
-        ``following`` is not written: :attr:`.intake.Intake.following` counts
-        a label without a header as none.
+        Whether the batch follows is kept with the label, so it goes too.
         """
         if label not in self._headers and label not in self.definitions.labels():
             raise KeyError(label)
