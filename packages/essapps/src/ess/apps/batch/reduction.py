@@ -380,10 +380,11 @@ class Batch:
         whose cells at ``name`` are all empty, or that has no rows, keeps its
         setting.
 
-        The settings, if changed, are written before the table without the
-        column. If the definitions refuse the table, the batch keeps the
-        column with the setting changed, as a batch read again does: its rows
-        with an empty cell take the value chosen.
+        The settings, if changed, are written before the batch table without
+        the column, which is one :meth:`put`. If the definitions refuse the
+        batch table, the batch keeps the column with the setting changed, as a
+        batch read again does: its rows with an empty cell take the value
+        chosen.
 
         Raises ``ValueError`` if ``name`` is not a column, or one of
         :attr:`fills`, as :meth:`put` refuses a table without it; if the
@@ -404,11 +405,7 @@ class Batch:
             if cell is not None:
                 value = as_request(self.spec.params, {name: cell})[name]
                 self.settings = {**self._settings, name: value}
-        rows = typed(self._rows.drop(columns=name), self.spec.params)
-        if self._definitions is not None:
-            self._definitions.save(definition.rows_key(self.label), data_of(rows))
-        self._resolved.clear()
-        self._set(rows)
+        self.put(self.frame().drop(columns=name))
 
     def values(self, name: str) -> dict[str, Any]:
         """

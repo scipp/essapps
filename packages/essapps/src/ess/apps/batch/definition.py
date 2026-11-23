@@ -9,10 +9,8 @@ rows of a batch are written by its ``Batch``, which the manager makes:
 
     corrections   metadata of a file set by hand, by file     CorrectedFiles
     header        title, description                          BatchManager
-    settings      the template: spec, settings, fills         Batch.settings,
-                                                              Batch.make_setting
-    rows          the batch table                             Batch.put,
-                                                              Batch.make_setting
+    settings      the template: spec, settings, fills         Batch.settings
+    rows          the batch table                             Batch.put
     source        the row source a batch was made from, the  Intake
                   keys of it that the batch has considered,
                   and whether the batch follows
