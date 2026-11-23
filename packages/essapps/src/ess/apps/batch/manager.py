@@ -9,7 +9,7 @@ workspace" of ``packages/essapps/docs/batch.md``; the decisions are
 
 A batch is a label with a header. A :class:`~.reduction.Batch` is the object
 that holds its template and its batch table; the manager makes the one ``Batch`` of
-each batch. A batch is kept as these tables of the definitions
+each batch. A batch is kept as these entries of the definitions
 (:mod:`.definition`), each with one writer::
 
     header      title, description                      BatchManager
@@ -22,9 +22,9 @@ so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the specs that the workspace binds, and the specs that run staged.
 Making a batch makes its ``Batch``, which writes the settings and the rows;
 then the manager writes the header: a label without a header is not a batch.
-Removing a batch deletes the header first, then every other table of the
+Removing a batch deletes the header first, then every other entry of the
 label, whoever wrote it. So a ``create`` or a ``remove`` cut off at any
-write leaves a label with tables and no header, which
+write leaves a label with entries and no header, which
 :meth:`BatchManager.remove` removes. After a restart, the ``Batch`` of a
 label is made at the first call of :meth:`BatchManager.batch`.
 """
@@ -113,7 +113,7 @@ class BatchManager:
     Attributes
     ----------
     definitions:
-        Where the batches are kept, also the tables that
+        Where the batches are kept, also the entries that
         :class:`~.intake.Intake` writes.
     """
 
@@ -157,11 +157,11 @@ class BatchManager:
         Make a batch and keep it; its ``Batch``, whose ``label`` names it.
         Nothing is written if a check fails; :meth:`check` comes first. The
         header is written after the
-        other tables of the batch, so a label without a header is no batch.
+        other entries of the batch, so a label without a header is no batch.
 
-        If the definitions refuse a write, the tables written are deleted,
+        If the definitions refuse a write, the entries written are deleted,
         and what was kept before stays. If a delete is refused too, as when
-        the process stops, what is left is a label with tables and no header,
+        the process stops, what is left is a label with entries and no header,
         which :meth:`remove` removes.
 
         Parameters
@@ -340,13 +340,13 @@ class BatchManager:
 
     def remove(self, label: str) -> None:
         """
-        Forget the batch of ``label`` and remove every table of it
+        Forget the batch of ``label`` and remove every entry of it
         (:func:`~.definition.label_keys`); its records stay, and those running
         keep running. A ``Batch`` of the label handed out before must not be
         used after: it would write its definitions again. A label that keeps
-        tables but no header, as a ``create`` or ``remove`` cut off leaves
+        entries but no header, as a ``create`` or ``remove`` cut off leaves
         it, is removed too, and can then be made again. Raises ``KeyError``
-        if no batch has the label and no table is kept of it.
+        if no batch has the label and no entry is kept of it.
 
         The header is deleted first, so a batch is never listed half removed.
         Whether the batch follows is kept with the label, so it goes too.

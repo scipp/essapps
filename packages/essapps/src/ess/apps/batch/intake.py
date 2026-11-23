@@ -8,13 +8,13 @@ is the section "Follow" of ``packages/essapps/docs/batch.md``; the decision
 is ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
 
 ``Intake`` makes and reads the batches through its
-:class:`~.manager.BatchManager`, and writes one table of the definitions
+:class:`~.manager.BatchManager`, and writes one entry of the definitions
 (:mod:`.definition`) for each batch made from a source::
 
     source      the source, the keys considered, and whether the batch follows
 
 Whether a batch follows is kept with its label, so a removal through the
-manager, which deletes every table of the label, ends Follow, and a batch
+manager, which deletes every entry of the label, ends Follow, and a batch
 made again with the label does not follow unless made so.
 :meth:`Intake.create` makes the batch with the manager, which writes its
 settings, rows and header; with ``follow``, it then ends Follow on the batch

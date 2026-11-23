@@ -170,7 +170,7 @@ A table file is written and read by pandas (`to_csv`, `read_csv`, `to_excel`, `r
 `settings.json` has the form of a template file of the client.
 Its `blanks` are the parameters that the row source of the batch fills (`batch.fills`): a template gives a blank no value, and each row must fill it.
 Which parameters have a column is said by the batch table; they are the blanks of `batch.template()`.
-A `source.json` is refused when read unless its entries are `source`, `considered` and `follows`.
+A `source.json` is refused when read unless its fields are `source`, `considered` and `follows`.
 
 ## One example followed through
 
@@ -753,7 +753,7 @@ A cell may name a record that still runs. If that record failed or was cancelled
 
 `DefinitionStore` is a protocol: `load(key, read)`, `save(key, data)`, `delete(key)`, `labels()`.
 A key is a tuple, such as `('labels', label, 'rows')` or `('corrections',)`.
-`FolderDefinitions(folder)` keeps each table of the definitions as a JSON file under `definitions/`, written whole through a temporary file.
+`FolderDefinitions(folder)` keeps each entry of the definitions, by key, as a JSON file under `definitions/`, written whole through a temporary file.
 `rows.json` holds `data_of(table)`, and `frame_of(data)` reads it back equal, dtypes and floats included; both are in `ess.apps.batch.table`.
 A refused write raises `NotKept`.
 
