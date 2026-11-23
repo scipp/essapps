@@ -2516,7 +2516,7 @@ def test_a_misspelt_column_of_a_table_file_is_a_note_and_its_setting_is_asked_fo
     [
         ({'title': ''}, 'a batch has a title that is not empty'),
         ({'title': '  '}, 'a batch has a title that is not empty'),
-        ({'source': 'other'}, 'the source other is not registered'),
+        ({'source': 'other'}, 'the source other is not registered; registered: pairs'),
         ({'spec': 'other'}, 'the workspace binds no spec other'),
     ],
     ids=['title', 'blank', 'source', 'spec'],

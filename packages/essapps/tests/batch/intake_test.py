@@ -208,12 +208,17 @@ def test_a_batch_made_without_a_source_has_none(intake: Intake) -> None:
     assert intake.source('a') is None
 
 
+def _not_registered(name: str, registered: str) -> str:
+    """The pattern of the refusal of the source ``name``, which is not registered."""
+    return rf'^the source {name} is not registered; registered: {registered}$'
+
+
 def test_a_source_that_is_not_registered_is_refused(
     intake: Intake, definitions: FolderDefinitions
 ) -> None:
-    with pytest.raises(ValueError, match='the source runs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('runs', 'pairs')):
         intake.create('plain', title='Morning', source='runs')
-    with pytest.raises(ValueError, match='the source runs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('runs', 'pairs')):
         intake.rows_of('runs')
     assert definitions.labels() == []
 
@@ -371,7 +376,7 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     batch.put(pd.concat([batch.frame(), typed]))
     del sources['pairs']
 
-    with pytest.raises(ValueError, match='the source pairs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('pairs', 'none')):
         intake.step()
 
     # A key typed by hand is considered only by a step that reads the source.
@@ -637,7 +642,7 @@ def test_a_batch_whose_source_is_not_registered_cannot_follow(
 ) -> None:
     again = Intake(BatchManager(client, definitions=definitions), sources={})
 
-    with pytest.raises(ValueError, match='the source pairs is not registered'):
+    with pytest.raises(ValueError, match=_not_registered('pairs', 'none')):
         again.follow('b')
     assert again.following == 'a'
 

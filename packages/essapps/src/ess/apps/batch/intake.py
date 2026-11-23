@@ -231,9 +231,15 @@ class Intake:
             raise
 
     def _source(self, name: str) -> RowSource:
-        """The source registered as ``name``; ``ValueError`` if none is."""
+        """
+        The source registered as ``name``; ``ValueError`` if none is, naming
+        those that are.
+        """
         if name not in self.sources:
-            raise ValueError(f'the source {name} is not registered')
+            registered = ', '.join(self.sources) or 'none'
+            raise ValueError(
+                f'the source {name} is not registered; registered: {registered}'
+            )
         return self.sources[name]
 
     def rows_of(self, source: str) -> pd.DataFrame:

@@ -971,7 +971,9 @@ def test_a_row_source_that_is_not_registered_is_refused_as_the_intake_says(
 
     assert main([*command, *SOURCES, *arguments]) == 2
 
-    assert capsys.readouterr().err == 'the source p is not registered\n'
+    assert capsys.readouterr().err == (
+        'the source p is not registered; registered: pairs, broken\n'
+    )
     assert FolderDefinitions(folder).labels() == []
 
 
