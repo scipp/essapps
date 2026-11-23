@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib as mpl
+import pytest
 
 DOCS = Path(__file__).parents[2] / 'docs'
 
@@ -23,6 +24,7 @@ def run_notebook(name: str) -> dict[str, Any]:
     return namespace
 
 
+@pytest.mark.real_data
 def test_the_batch_notebook_reduces_and_exports_every_row() -> None:
     exported = run_notebook('loki-batch.ipynb')['exported']
 

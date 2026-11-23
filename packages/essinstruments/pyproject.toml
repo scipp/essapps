@@ -70,6 +70,9 @@ addopts = """
 -ra
 """
 testpaths = "tests"
+markers = [
+    "real_data: the test downloads esssans' tutorial data and runs real reductions; CI leaves it out",
+]
 faulthandler_timeout = 120
 xfail_strict = true
 filterwarnings = [
