@@ -1747,7 +1747,7 @@ def test_the_demo_makes_a_batch_of_its_samples_and_follow_adds_those_that_arrive
                 'title': 'Arriving',
                 'source': 'sample-runs',
                 'spec': demo.DEMO.name,
-                'columns': columns,
+                'parameter_columns': columns,
                 'follow': True,
             },
         ).json()
@@ -2089,7 +2089,7 @@ def new_batch(**given: Any) -> dict[str, Any]:
         'title': 'Afternoon',
         'source': 'pairs',
         'spec': STAGED.name,
-        'columns': ['sample', 'transmission'],
+        'parameter_columns': ['sample', 'transmission'],
     } | given
 
 
@@ -2137,7 +2137,8 @@ def test_a_batch_made_from_a_source_has_every_row_it_filled_and_the_columns_sent
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
     sent = new_batch(
-        description='Thicker cells', columns=['sample', 'transmission', 'thickness']
+        description='Thicker cells',
+        parameter_columns=['sample', 'transmission', 'thickness'],
     )
 
     made = http.post('/api/batches', json=sent).json()
@@ -2193,7 +2194,7 @@ def test_a_batch_without_a_source_is_made_with_the_columns_sent_and_no_rows(
     pages: Pages, manager: BatchManager, sample: Measure
 ) -> None:
     sample(1, 'water')
-    sent = new_batch(source=None, spec='find', columns=['sample'])
+    sent = new_batch(source=None, spec='find', parameter_columns=['sample'])
 
     made = TestClient(create_app(pages)).post('/api/batches', json=sent).json()
 
@@ -2319,7 +2320,7 @@ def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
         title='New',
         spec=STAGED.name,
         source='pairs',
-        columns=['sample', 'transmission', 'thickness'],
+        parameter_columns=['sample', 'transmission', 'thickness'],
         settings_from='old',
         follow=True,
     )
@@ -2386,7 +2387,7 @@ def test_a_setting_of_the_batch_at_a_column_of_the_new_one_is_its_empty_cells(
     columns = ['sample', 'transmission', 'thickness']
 
     made = http.post(
-        '/api/batches', json=new_batch(settings_from='scan', columns=columns)
+        '/api/batches', json=new_batch(settings_from='scan', parameter_columns=columns)
     ).json()
 
     batch = manager.batch(made['label'])
@@ -2405,7 +2406,9 @@ def test_a_row_that_arrives_in_a_new_batch_that_follows_takes_a_setting_ticked(
     http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
     http.post('/api/settings/apply')
     columns = ['sample', 'transmission', 'thickness']
-    sent = new_batch(settings_from='scan', columns=columns, later=True, follow=True)
+    sent = new_batch(
+        settings_from='scan', parameter_columns=columns, later=True, follow=True
+    )
 
     made = http.post('/api/batches', json=sent).json()
     sample(4, 'ethanol')
@@ -2424,7 +2427,9 @@ def test_a_column_that_the_rows_fill_keeps_its_cells_over_a_setting_of_its_name(
     manager.create(STAGED.name, title='X', settings={'sample': 'run:1'}, label='x')
 
     if way == 'source':
-        sent = new_batch(settings_from='x', columns=['sample', 'transmission'])
+        sent = new_batch(
+            settings_from='x', parameter_columns=['sample', 'transmission']
+        )
         made = http.post('/api/batches', json=sent).json()
         given = ['uuid:run-1', 'uuid:run-2']
     else:

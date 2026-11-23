@@ -109,15 +109,17 @@ class RowState:
 def problems(
     key: str,
     cells: Mapping[str, Any],
-    columns: Collection[str],
+    parameter_columns: Collection[str],
     status: Mapping[str, Status],
 ) -> tuple[FieldError, ...]:
     """
-    Why the row of ``key`` cannot be reduced: a column that ``cells`` leave
-    out, which is empty and has no value, or a reference to a record that
-    failed or was cancelled, per ``status`` by record ID.
+    Why the row of ``key`` cannot be reduced: one of ``parameter_columns``
+    that ``cells`` leave out, which is empty and has no value, or a reference
+    to a record that failed or was cancelled, per ``status`` by record ID.
     """
-    found = [FieldError(key, (c,), 'empty') for c in columns if c not in cells]
+    found = [
+        FieldError(key, (c,), 'empty') for c in parameter_columns if c not in cells
+    ]
     found += [
         FieldError(key, loc, f'the record it reads is {status[ref.record]}')
         for loc, ref in iter_refs(cells)
@@ -158,7 +160,7 @@ def differs(
 
 def row_states(
     cells: Mapping[str, Mapping[str, Any]],
-    columns: Collection[str],
+    parameter_columns: Collection[str],
     found: Mapping[str, Record],
     status: Mapping[str, Status],
     changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
@@ -186,7 +188,8 @@ def row_states(
             outdated: bool | None = True
         else:
             outdated = None if names is None else bool(names)
-        found_problems = problems(key, row, columns, status) + refused.get(key, ())
+        found_problems = problems(key, row, parameter_columns, status)
+        found_problems += refused.get(key, ())
         row_status = None if record is None else status[record.id]
         states[key] = RowState(
             key=key,

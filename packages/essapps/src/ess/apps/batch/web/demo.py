@@ -334,7 +334,7 @@ def build(
             DEMO.name,
             title='Samples',
             source='sample-runs',
-            columns=['thickness'],
+            parameter_columns=['thickness'],
         )
 
     def draw(shown: Sequence[Shown]) -> dict[str, object]:

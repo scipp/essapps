@@ -110,7 +110,10 @@ def test_columns_given_are_empty_and_a_column_of_the_table_keeps_its_cells(
     sample(1, 'water')
 
     batch = intake.create(
-        PLAIN.name, title='A', source='pairs', columns=['sample', 'thickness']
+        PLAIN.name,
+        title='A',
+        source='pairs',
+        parameter_columns=['sample', 'thickness'],
     )
 
     frame = batch.frame()

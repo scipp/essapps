@@ -802,7 +802,7 @@ async function makeBatch(event) {
           ...header,
           source: chosenSource().name,
           ...rangeChosen(),
-          columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
+          parameter_columns: [...form.querySelectorAll('[name=column]:checked')].map((box) => box.value),
           follow: way() === 'source' && elements.follow.checked,
         },
       ];

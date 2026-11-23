@@ -84,7 +84,8 @@ A source says which columns it fills (`RowSource.fills`, such as `sample` and `s
 
 ```python
 intake.create('loki-iofq', title='Afternoon', source='sample-runs',
-              choose=Range(first='60339'), columns=['thickness'], follow=True)
+              choose=Range(first='60339'), parameter_columns=['thickness'],
+              follow=True)
 
 # in create:
 given = rows_of(client, source)                  # one listing
@@ -94,7 +95,7 @@ considered = arrived.index                       # the rows taken and the rows l
 ```
 
 - A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is filled, if the batch follows.
-- A person picks a range of `arrived`: `Range(first, last, later)`, a value that `create` calls as `choose` and reads, each end open if not given, or no row now with `later`. `columns` adds an empty column for each parameter named, such as the thickness.
+- A person picks a range of `arrived`: `Range(first, last, later)`, a value that `create` calls as `choose` and reads, each end open if not given, or no row now with `later`. `parameter_columns` adds an empty column for each parameter named, such as the thickness.
 - In code, `choose` may be any function that gives rows of `arrived`, with any columns, such as `lambda given: given[given.run >= 60339]`; `create` refuses a key that `arrived` lacks. Without `choose`, every filled row is taken as the source gives it.
 - A batch made from a source takes no `rows`: its rows come from the one listing, so no file listed in between is considered without being seen.
 

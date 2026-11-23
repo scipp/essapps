@@ -270,7 +270,7 @@ class Intake:
         source: str,
         choose: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
         follow: bool = False,
-        columns: Collection[str] = (),
+        parameter_columns: Collection[str] = (),
         description: str = '',
         settings: Mapping[str, Any] | None = None,
         label: str | None = None,
@@ -308,7 +308,7 @@ class Intake:
 
         Parameters
         ----------
-        spec, title, columns, description, settings, label:
+        spec, title, parameter_columns, description, settings, label:
             As :meth:`~.manager.BatchManager.create` takes them.
         source:
             The name of a registered source to take the rows from. The batch
@@ -362,7 +362,7 @@ class Intake:
             title=title,
             rows=rows,
             fills=found.fills,
-            columns=columns,
+            parameter_columns=parameter_columns,
             description=description,
             settings=settings,
             label=label,

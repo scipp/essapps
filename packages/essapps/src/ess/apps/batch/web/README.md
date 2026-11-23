@@ -178,11 +178,11 @@ In code:
 settings = manager.batch(other).settings                        # thickness among them
 batch = intake.create(spec, title=title, source=source,
                       choose=Range(first, last, later),
-                      columns=['thickness'],                    # ticked: an empty column
+                      parameter_columns=['thickness'],          # ticked: an empty column
                       settings=settings,                        # less those at the fills of the row source
                       follow=follow)                            # Follow ticked
 batch = manager.create(spec, title=title, rows=table,           # from a table file, or rows=None
-                       columns=['thickness'], settings=settings)
+                       parameter_columns=['thickness'], settings=settings)
 ```
 
 The batch is made in one call: a call that is refused leaves no batch, and a batch that follows replaces the one before only if it is made. A process that stops while a batch that follows is made may leave the batch made and no batch that follows ([What is kept on disk](../../../../../docs/batch.md#what-is-kept-on-disk)).

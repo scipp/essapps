@@ -267,4 +267,7 @@ def from_pairs(intake: Intake, spec: str, **options: Any) -> str:
     with an empty column ``thickness``, so that its columns are
     :data:`COLUMNS`; its label.
     """
-    return intake.create(spec, source='pairs', columns=['thickness'], **options).label
+    made = intake.create(
+        spec, source='pairs', parameter_columns=['thickness'], **options
+    )
+    return made.label

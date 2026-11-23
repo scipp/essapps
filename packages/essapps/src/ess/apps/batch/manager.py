@@ -148,7 +148,7 @@ class BatchManager:
         title: str,
         rows: pd.DataFrame | None = None,
         fills: Collection[str] = (),
-        columns: Collection[str] = (),
+        parameter_columns: Collection[str] = (),
         description: str = '',
         settings: Mapping[str, Any] | None = None,
         label: str | None = None,
@@ -181,7 +181,7 @@ class BatchManager:
             settings: each is a column of ``rows``, an empty cell there means
             that the row waits for its file, and the settings given are left
             out there (:meth:`.reduction.Batch.settable`).
-        columns:
+        parameter_columns:
             Parameters that are parameter columns of the batch, of empty
             cells, besides those of ``rows``; a column of ``rows`` keeps its
             cells.
@@ -216,7 +216,7 @@ class BatchManager:
         if settings is None:
             settings = self._settings.get(spec, {})
         table = pd.DataFrame() if rows is None else rows
-        empty = [c for c in columns if c not in table.columns]
+        empty = [c for c in parameter_columns if c not in table.columns]
         # Refused here, before anything is written.
         table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
         batch = self._kept(label, bound, {}, None, fills)

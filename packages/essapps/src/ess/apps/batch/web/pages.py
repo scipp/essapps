@@ -586,7 +586,7 @@ class Pages:
                     description=new.description,
                     source=new.source,
                     choose=Range(new.first, new.last, new.later),
-                    columns=new.columns,
+                    parameter_columns=new.parameter_columns,
                     settings=settings,
                     follow=new.follow,
                 )
@@ -598,7 +598,7 @@ class Pages:
                 title=new.title,
                 description=new.description,
                 rows=rows,
-                columns=new.columns,
+                parameter_columns=new.parameter_columns,
                 settings=settings,
             )
         return Made(label=batch.label)

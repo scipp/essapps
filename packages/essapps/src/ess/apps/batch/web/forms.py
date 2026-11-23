@@ -51,32 +51,36 @@ from .models import Edit, Editor, Node, Way
 
 
 def held(
-    fields: Fields, columns: Collection[str] = ()
+    fields: Fields, parameter_columns: Collection[str] = ()
 ) -> tuple[dict[str, Any], list[FieldError]]:
     """
     What ``fields``, a form of settings, hold, and what is missing
-    (:meth:`~ess.apps.Fields.held`), but a field of ``columns`` left unset as
-    a whole is not missing: it is left out, as the setting of a column that
-    has none.
+    (:meth:`~ess.apps.Fields.held`), but a field of ``parameter_columns``
+    left unset as a whole is not missing: it is left out, as the setting of a
+    column that has none.
     """
     given, missing = fields.held()
-    return given, [e for e in missing if not (len(e.loc) == 1 and e.loc[0] in columns)]
+    return given, [
+        e for e in missing if not (len(e.loc) == 1 and e.loc[0] in parameter_columns)
+    ]
 
 
 def tree(
-    fields: Fields, refused: Iterable[FieldError] = (), columns: Collection[str] = ()
+    fields: Fields,
+    refused: Iterable[FieldError] = (),
+    parameter_columns: Collection[str] = (),
 ) -> list[Node]:
     """
     The nodes of ``fields``, each with what is missing or ``refused`` there;
-    the node of a field of ``columns`` is marked as a column, and misses
-    nothing if left unset (:func:`held`).
+    the node of a field of ``parameter_columns`` is marked as a column, and
+    misses nothing if left unset (:func:`held`).
     """
-    _, missing = held(fields, columns)
+    _, missing = held(fields, parameter_columns)
     said = {e.loc: message(e.msg) for e in (*missing, *refused) if e.loc}
     problems = {loc: m[:1].upper() + m[1:] for loc, m in said.items()}
     return [
         _node(field, (name,), fields.titles[name], problems).model_copy(
-            update={'column': name in columns}
+            update={'column': name in parameter_columns}
         )
         for name, field in fields.fields.items()
     ]

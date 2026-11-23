@@ -508,7 +508,7 @@ manager.change(label, title='Water, second try')
 manager.remove(label)      # every file of the label goes; the records stay
 ```
 
-`columns=` names parameters that are parameter columns of empty cells, besides those of `rows`.
+`parameter_columns=` names parameters that are parameter columns of empty cells, besides those of `rows`.
 
 - `create` refuses an empty title, a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses. `manager.check(spec, title=..., label=...)` refuses the first three without rows, and `create` calls it first.
 - `fills=` names the parameters that a row source fills (`batch.fills`). `create` keeps them as the `blanks` of `settings.json`, refuses a table without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too. `Intake.create` gives them; code that makes a batch from a table leaves them out.
@@ -523,7 +523,7 @@ An `Intake` holds the manager and the row sources, by name, and brings rows of a
 ```python
 intake = Intake(manager, sources={'sample-runs': SAMPLE_RUNS})
 batch = intake.create('loki-iofq', title='Afternoon', source='sample-runs',
-                      choose=Range(first='60339'), columns=['thickness'])
+                      choose=Range(first='60339'), parameter_columns=['thickness'])
 intake.rows_of('sample-runs')            # what the source makes now
 intake.marked('sample-runs', Range(first='60339'))
                                          # rows_of, with columns waits and taken
@@ -770,7 +770,7 @@ Each action of the page is one call of the batch layer:
 | an edit of cells, **+ Add row**, **Remove selected**, **Load table** | `batch.put(table)` |
 | **Apply** | `batch.settings = settings` |
 | **Reduce** and its ways | `batch.reduce(keys)` |
-| **+ New batch** | from a source `intake.create(..., choose=Range(first, last, later), columns=...)`; from a table file or without rows `manager.create(rows=..., columns=...)` |
+| **+ New batch** | from a source `intake.create(..., choose=Range(first, last, later), parameter_columns=...)`; from a table file or without rows `manager.create(rows=..., parameter_columns=...)` |
 | the range's marks | `intake.marked(source, choose)` |
 | **+ Add rows from the runs** | `intake.offered(label)`, then `intake.take(label, keys)` |
 | "Make this a column" | `batch.make_column(name)` |
