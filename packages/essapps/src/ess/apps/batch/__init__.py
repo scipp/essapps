@@ -12,7 +12,7 @@ from .corrections import CorrectedFiles
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
 from .manager import BatchManager
 from .reduction import Batch
-from .source import FileInfo, Range, RowSource, Source, rows_of
+from .source import FileInfo, Range, RowFunction, RowSource, rows_of
 from .state import (
     RowState,
     earlier_settings,
@@ -32,9 +32,9 @@ __all__ = [
     'Header',
     'NotKept',
     'Range',
+    'RowFunction',
     'RowSource',
     'RowState',
-    'Source',
     'earlier_settings',
     'left_to_reduce',
     'not_reduced',

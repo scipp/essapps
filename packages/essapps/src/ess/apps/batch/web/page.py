@@ -393,11 +393,11 @@ class Page:
         then shows the batch's settings.
         """
         batch = self.batch
-        if batch.columns == self._columns:
+        if batch.parameter_columns == self._columns:
             return
-        self._columns = batch.columns
+        self._columns = batch.parameter_columns
         self._cells = Fields(
-            batch.spec.params, self.pages.listing, fields=batch.columns
+            batch.spec.params, self.pages.listing, fields=batch.parameter_columns
         )
         self.settings = self._form()
         self._show_settings()
@@ -455,7 +455,7 @@ class Page:
         What the form holds; a column left unset has no setting
         (:func:`.forms.held`).
         """
-        return forms.held(self.settings, self.batch.columns)
+        return forms.held(self.settings, self.batch.parameter_columns)
 
     def _show_settings(self) -> None:
         """Show the batch's settings in the form, which then holds no change."""
@@ -521,7 +521,7 @@ class Page:
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
         batch = self.batch
-        columns = batch.columns
+        columns = batch.parameter_columns
         states, unusable = self._states()
         unsubmitted = self.pages.unsubmitted(self.label, states)
         failures = self._failures(states)
@@ -705,7 +705,7 @@ class Page:
                     text=self._text(given.get(c, UNSET)),
                     problem=problems.get(c),
                 )
-                for c in self.batch.columns
+                for c in self.batch.parameter_columns
             },
         )
 
@@ -748,7 +748,7 @@ class Page:
             return False
         if error.entry is None:
             return str(error.loc[0]) in self.settings.fields
-        return error.entry in keys and str(error.loc[0]) in self.batch.columns
+        return error.entry in keys and str(error.loc[0]) in self.batch.parameter_columns
 
     def _refused(self, error: FieldError, named: Mapping[str, str]) -> Refused:
         if error.entry is None:
@@ -921,7 +921,7 @@ class Page:
         except SubmitError as error:
             self.refused = [e for e in error.errors if self._placed(e, frame.index)]
             unplaced = [e for e in error.errors if e not in self.refused]
-            named = names(frame, self.batch.columns)
+            named = names(frame, self.batch.parameter_columns)
             raise _Refusal(
                 [self._refused(e, named).text for e in unplaced], len(self.refused)
             ) from None
@@ -1010,7 +1010,7 @@ class Page:
         where its cell is empty, the value that the row took.
         """
         frame = self._frame([key])
-        name = names(frame, self.batch.columns)[key]
+        name = names(frame, self.batch.parameter_columns)[key]
         row = self._states([key])[0][key]
         if row.record is None:
             raise Problem(f'{name} has no result.')
@@ -1020,7 +1020,11 @@ class Page:
                 'whose settings this one does not take.'
             )
         batch = self.batch
-        given = frame.loc[[key], list(batch.columns)].notna().to_dict('index')[key]
+        given = (
+            frame.loc[[key], list(batch.parameter_columns)]
+            .notna()
+            .to_dict('index')[key]
+        )
         own = {c for c, filled in given.items() if filled}
         kept = {n: v for n, v in batch.settings.items() if n in own}
         took = {n: v for n, v in row.record.request.params.items() if n not in own}
@@ -1102,7 +1106,7 @@ class Page:
         if not chosen or draw is None:
             return Plot(figure=None, note=note)
         colors = plots.colors([order[s.key] for s in chosen])
-        named = names(frame, self.batch.columns)
+        named = names(frame, self.batch.parameter_columns)
         shown = [
             Shown(s.key, named[s.key], s.record, s.text == 'outdated', c)
             for s, c in zip(chosen, colors, strict=True)

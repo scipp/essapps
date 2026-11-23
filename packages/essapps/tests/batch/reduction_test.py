@@ -128,7 +128,7 @@ def test_the_table_put_is_the_table_and_its_parameter_columns_the_blanks(
     assert list(frame.index) == ['1']
     assert list(frame.columns) == ['run', 'name', *COLUMNS, 'note']
     assert (frame.loc['1', 'name'], frame.loc['1', 'sample']) == ('water', 'uuid:run-1')
-    assert batch.columns == batch.template().blanks == COLUMNS
+    assert batch.parameter_columns == batch.template().blanks == COLUMNS
     assert batch.settings_fields == ('binning', 'offset')
 
 
@@ -168,11 +168,14 @@ def test_a_put_keeps_the_settings_at_a_column_added_and_at_a_column_dropped(
     batch.settings = settings
 
     batch.put(batch.frame().assign(offset=None))
-    as_column = (batch.settings, batch.columns, batch.template().params)
+    as_column = (batch.settings, batch.parameter_columns, batch.template().params)
     batch.put(batch.frame().drop(columns=['offset', 'thickness']))
 
     assert as_column == (settings, (*COLUMNS, 'offset'), SETTINGS)
-    assert (batch.settings, batch.columns) == (settings, ('sample', 'transmission'))
+    assert (batch.settings, batch.parameter_columns) == (
+        settings,
+        ('sample', 'transmission'),
+    )
     assert batch.template().params == settings
     kept = definitions.load(settings_key('s'), template_of)
     assert kept == Template(PLAIN, params=settings)
@@ -551,7 +554,7 @@ def test_make_setting_gives_the_setting_the_value_that_the_row_takes(
 
     measured.make_setting('thickness', key)
 
-    assert 'thickness' not in measured.columns
+    assert 'thickness' not in measured.parameter_columns
     assert measured.settings == {**SETTINGS, 'thickness': setting}
 
 
@@ -573,7 +576,7 @@ def test_make_setting_refuses_rows_that_take_different_values_without_a_row(
     assert measured.values('thickness') == {'1': 3.0, '2': 2.0}
     with pytest.raises(ValueError, match='the rows differ at thickness'):
         measured.make_setting('thickness')
-    assert 'thickness' in measured.columns
+    assert 'thickness' in measured.parameter_columns
 
 
 def test_make_setting_of_a_batch_without_rows_keeps_the_setting(
@@ -629,7 +632,7 @@ def test_a_batch_from_a_source_refuses_a_setting_at_and_a_table_without_a_column
     from_source.settings = from_source.settable(given)
 
     assert from_source.settings == {'thickness': 2.0}
-    assert set(FILLS) <= set(from_source.columns)
+    assert set(FILLS) <= set(from_source.parameter_columns)
 
 
 def test_a_batch_is_not_made_on_a_table_without_a_column_of_its_fills(

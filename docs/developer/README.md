@@ -302,7 +302,7 @@ def transmission_runs(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=['key', 'run']).set_index('key')
 
 manager = BatchManager(client, definitions=FolderDefinitions(folder),
-                       sources={'transmission-runs': Source(transmission_runs, fills=('run',))})
+                       sources={'transmission-runs': RowSource(transmission_runs, fills=('run',))})
 manager.create('transmission', title='Transmissions', source='transmission-runs',
                follow=True)
 manager.step()        # called by a timer of the application

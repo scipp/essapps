@@ -72,7 +72,7 @@ What removes a bad run from the later rows is a correction of the run, which the
 
 ### A row waits until the source has filled it
 
-A source says which columns it fills (`Source.fills`, such as `sample` and `sample_transmission`). A row is added once it has a value in each of these that is a column of the batch. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
+A source says which columns it fills (`RowSource.fills`, such as `sample` and `sample_transmission`). A row is added once it has a value in each of these that is a column of the batch. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
 
 - A sample run measured before its transmission run is added when the transmission run is listed.
 - A row is added whatever its other columns hold. A column that the source does not fill is empty in a new row, and the row is incomplete if the template needs it.
@@ -175,7 +175,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 
 ## Consequences
 
-- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `Source.fills` stays, with a second use: it says when a row is filled.
+- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `RowSource.fills` stays, with a second use: it says when a row is filled.
 - The rule of a step is "ready and without a record". `RowState.changed_by_hand`, the columns `at` of `Automatic`, and the exception for cells set by hand go.
 - A row that only waits is not in the table. The page says how many rows wait, and a person can add them.
 - A transmission run measured again reaches no earlier row, and a correction of a run changes no row that the table has.

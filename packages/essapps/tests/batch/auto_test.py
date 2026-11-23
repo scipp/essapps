@@ -22,8 +22,8 @@ from ess.apps.batch import (
     FileInfo,
     FolderDefinitions,
     NotKept,
+    RowFunction,
     RowSource,
-    Source,
     rows_of,
 )
 from ess.apps.batch.auto import Step, added, step
@@ -62,7 +62,7 @@ class Stepping:
     """
 
     def __init__(
-        self, batch: Batch, source: Source, considered: Iterable[str] = ()
+        self, batch: Batch, source: RowSource, considered: Iterable[str] = ()
     ) -> None:
         self.batch, self.source = batch, source
         self.considered = frozenset(considered)
@@ -82,13 +82,13 @@ def loop(batch: Batch) -> Stepping:
     return Stepping(batch, PAIRS)
 
 
-def _loop(client: Any, make: RowSource = pair) -> Stepping:
+def _loop(client: Any, make: RowFunction = pair) -> Stepping:
     """A loop on ``client``, which may be a fake that wraps a client."""
     batch = Batch(client, PLAIN, label='scan', rows=rows(client))
     return Stepping(batch, replace(PAIRS, rows=make))
 
 
-def _changed(make: RowSource, **cells: Any) -> RowSource:
+def _changed(make: RowFunction, **cells: Any) -> RowFunction:
     """``make``, with ``cells`` set in each row that it makes, by key."""
 
     def changed(files: Sequence[FileInfo]) -> pd.DataFrame:
@@ -126,7 +126,7 @@ def test_a_source_that_makes_a_key_twice_is_refused(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    twice = Source(lambda files: pd.concat([pair(files)] * 2), fills=PAIRS.fills)
+    twice = RowSource(lambda files: pd.concat([pair(files)] * 2), fills=PAIRS.fills)
 
     with pytest.raises(ValueError, match="the key '1' is given twice"):
         rows_of(client, twice)
@@ -182,7 +182,7 @@ def _per_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
 
 
 def _repeated(client: Client) -> Stepping:
-    source = Source(_per_sample, fills=('sample_runs', 'trans_runs'))
+    source = RowSource(_per_sample, fills=('sample_runs', 'trans_runs'))
     table = rows_of(client, source)
     batch = Batch(client, REPEATED, label='repeated', rows=table, fills=source.fills)
     return Stepping(batch, source)
@@ -486,7 +486,7 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
         offsets = {k: {'offset': cell_of(r.ref('offset'))} for k, r in found.items()}
         return _changed(pair, **offsets)(files)
 
-    source = Source(with_offset, fills=(*PAIRS.fills, 'offset'))
+    source = RowSource(with_offset, fills=(*PAIRS.fills, 'offset'))
     table = rows_of(client, source)
     reduce = Batch(client, PLAIN, label='reduce', rows=table, fills=source.fills)
     loops = [Stepping(find, SAMPLES), Stepping(reduce, source)]
@@ -689,7 +689,7 @@ def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
 def test_a_cell_of_the_source_that_the_batch_refuses_is_named_with_the_source(
     client: Client, definitions: FolderDefinitions, sample: Measure
 ) -> None:
-    thick = Source(_changed(pair, **{'1': {'thickness': 'thick'}}), PAIRS.fills)
+    thick = RowSource(_changed(pair, **{'1': {'thickness': 'thick'}}), PAIRS.fills)
     manager = BatchManager(client, sources={'pairs': thick}, definitions=definitions)
     from_pairs(manager, PLAIN.name, title='A', label='a', follow=True)
     sample(1, 'water')

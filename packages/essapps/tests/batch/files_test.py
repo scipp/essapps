@@ -58,7 +58,7 @@ def test_a_template_may_leave_out_the_blanks_and_the_params(tmp_path: Path) -> N
 
 MODULE = '''
 import pandas as pd
-from ess.apps.batch import Source
+from ess.apps.batch import RowSource
 from ess.apps.testing import StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
 from pydantic import BaseModel
@@ -127,8 +127,8 @@ def pair(files):
     return pd.DataFrame.from_records(rows, columns=columns).set_index('key')
 
 
-PAIRS = Source(pair, fills=('sample',))
-BROKEN = Source(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
+PAIRS = RowSource(pair, fills=('sample',))
+BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
 SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
 '''
 
@@ -835,10 +835,10 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
 @pytest.mark.parametrize(
     ('arguments', 'said'),
     [
-        (['rows', 'cli_toys_batch_files:pair'], 'is a function, not a Source'),
+        (['rows', 'cli_toys_batch_files:pair'], 'is a function, not a row source'),
         (
             ['reduce', '-s', 'cli_toys_batch_files:pair', '-l', 'x'],
-            'is a function, not a mapping of names to Sources',
+            'is a function, not a mapping of names to row sources',
         ),
         (
             ['reduce', *SOURCES, '--source', 'p', '-l', 'x'],

@@ -19,7 +19,7 @@ from ess.apps.batch import (
     DefinitionStore,
     FileInfo,
     NotKept,
-    Source,
+    RowSource,
     rows_of,
 )
 from ess.apps.batch.definition import Key
@@ -236,8 +236,8 @@ def samples(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=[KEY, 'sample']).set_index(KEY)
 
 
-PAIRS = Source(pair, fills=('sample', 'transmission'))
-SAMPLES = Source(samples, fills=('sample',))
+PAIRS = RowSource(pair, fills=('sample', 'transmission'))
+SAMPLES = RowSource(samples, fills=('sample',))
 SOURCES = {'pairs': PAIRS}
 STAGED_NAMES = frozenset({STAGED.name})
 """The specs whose batches run through a stage."""

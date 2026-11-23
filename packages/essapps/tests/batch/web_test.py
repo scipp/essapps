@@ -29,7 +29,7 @@ from ess.apps.batch import (
     DefinitionStore,
     FolderDefinitions,
     Header,
-    Source,
+    RowSource,
 )
 from ess.apps.batch.definition import Key, NotKept, rows_key, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
@@ -818,7 +818,7 @@ def test_a_table_loaded_replaces_the_rows_the_columns_and_so_the_forms(
     shown = loaded.json()
     assert [(r['key'], r['name']) for r in shown['rows']] == [('a', 'first')]
     assert [c['name'] for c in shown['columns']] == ['sample', 'transmission']
-    assert batch.columns == ('sample', 'transmission')
+    assert batch.parameter_columns == ('sample', 'transmission')
     assert 'thickness' in [n['path'][0] for n in shown['settings']]
     assert thickness(http, ['a'], 3) == {'message': 'There is no column thickness.'}
 
@@ -1426,7 +1426,7 @@ def test_a_column_whose_rows_agree_is_made_a_setting_of_their_value(
     made = make_setting(http).json()
 
     assert made['notice'] == 'Thickness is a setting: one value for every row.'
-    assert batch.columns == ('sample', 'transmission')
+    assert batch.parameter_columns == ('sample', 'transmission')
     assert batch.settings['thickness'] == 2.0
     assert [c['name'] for c in made['columns']] == ['sample', 'transmission']
     (shown,) = [n for n in made['settings'] if n['path'] == ['thickness']]
@@ -1455,7 +1455,7 @@ def test_a_column_made_a_setting_whose_table_is_refused_keeps_its_cells(
 
     assert answer.status_code == 422
     batch = started(client, definitions).manager.batch('scan')
-    assert batch.columns == ('sample', 'transmission', 'thickness')
+    assert batch.parameter_columns == ('sample', 'transmission', 'thickness')
     assert batch.frame()['thickness'].tolist() == [2.5, 2.5, 2.5]
 
 
@@ -1488,7 +1488,7 @@ def test_a_setting_made_a_column_is_shown_in_the_form_and_in_each_empty_cell(
     assert made['notice'] == (
         'Thickness is a column: a row takes the setting until its cell is set.'
     )
-    assert batch.columns == ('sample', 'transmission', 'thickness')
+    assert batch.parameter_columns == ('sample', 'transmission', 'thickness')
     assert batch.frame()['thickness'].isna().all()
     assert batch.settings['thickness'] == 2.5
     assert [r['cells']['thickness']['text'] for r in made['rows']] == [''] * 3
@@ -1519,7 +1519,7 @@ def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
 
     assert [c['name'] for c in column['columns']][-1] == 'binning'
     assert cells == [None] * 3
-    assert 'binning' not in batch.columns
+    assert 'binning' not in batch.parameter_columns
     assert form_bins(setting) == 5
 
 
@@ -1540,7 +1540,7 @@ def test_columns_do_not_change_while_the_form_holds_a_change(
     assert answer.json()['message'] == (
         'Nothing was changed: apply or discard the settings first.'
     )
-    assert batch.columns == ('sample', 'transmission', 'thickness')
+    assert batch.parameter_columns == ('sample', 'transmission', 'thickness')
     assert list(batch.frame().index) == ['1', '2', '3']
     assert form_bins(state(http)) == 9
 
@@ -2091,7 +2091,7 @@ def test_the_sources_offer_the_specs_that_fit_and_the_parameters_a_cell_edits(
 def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
     client: Client, definitions: DefinitionStore
 ) -> None:
-    odd = Source(pair, fills=('sample', 'background'))
+    odd = RowSource(pair, fills=('sample', 'background'))
     manager = BatchManager(client, sources={'odd': odd}, definitions=definitions)
 
     pages = Pages(manager)
@@ -2171,7 +2171,7 @@ def test_a_batch_without_a_source_is_made_with_the_columns_sent_and_no_rows(
     made = TestClient(create_app(pages)).post('/api/batches', json=sent).json()
 
     batch = manager.batch(made['label'])
-    assert (batch.spec.name, batch.columns, len(batch.frame())) == (
+    assert (batch.spec.name, batch.parameter_columns, len(batch.frame())) == (
         'find',
         ('sample',),
         0,
@@ -2358,7 +2358,7 @@ def test_a_setting_of_the_batch_at_a_column_of_the_new_one_is_its_empty_cells(
     ).json()
 
     batch = manager.batch(made['label'])
-    assert batch.columns == tuple(columns)
+    assert batch.parameter_columns == tuple(columns)
     assert batch.frame()['thickness'].isna().tolist() == [True, True]
     assert [c['thickness'] for c in batch.cells().values()] == [2.5, 2.5]
 
@@ -2422,7 +2422,7 @@ def test_a_batch_made_from_a_table_file_has_its_rows_and_columns_and_no_source(
     made = from_table(http, text, settings_from='scan').json()
 
     batch = manager.batch(made['label'])
-    assert batch.columns == ('sample', 'transmission')
+    assert batch.parameter_columns == ('sample', 'transmission')
     assert list(batch.frame().index) == ['a', 'b']
     assert manager.source(made['label']) is None
     assert manager.headers()[made['label']].title == 'From a file'

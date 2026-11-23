@@ -80,7 +80,7 @@ from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
 from .export import export_table
 from .manager import BatchManager
-from .source import Source, rows_of
+from .source import RowSource, rows_of
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template
 
@@ -91,26 +91,26 @@ def _named(name: str) -> Any:
     return getattr(import_module(module), attribute)
 
 
-def _source(parser: argparse.ArgumentParser, name: str) -> Source:
-    """The :class:`~.source.Source` that ``name`` names; exits if it is none."""
+def _source(parser: argparse.ArgumentParser, name: str) -> RowSource:
+    """The :class:`~.source.RowSource` that ``name`` names; exits if it is none."""
     source = _named(name)
-    if not isinstance(source, Source):
+    if not isinstance(source, RowSource):
         parser.error(
-            f'{name} is a {type(source).__name__}, not a Source '
-            '(ess.apps.batch.Source), such as package.module:SAMPLE_RUNS'
+            f'{name} is a {type(source).__name__}, not a row source '
+            '(ess.apps.batch.RowSource), such as package.module:SAMPLE_RUNS'
         )
     return source
 
 
-def _sources(parser: argparse.ArgumentParser, name: str) -> Mapping[str, Source]:
+def _sources(parser: argparse.ArgumentParser, name: str) -> Mapping[str, RowSource]:
     """The sources by name that ``name`` names; exits if it names other things."""
     sources = _named(name)
     if not isinstance(sources, Mapping) or not all(
-        isinstance(source, Source) for source in sources.values()
+        isinstance(source, RowSource) for source in sources.values()
     ):
         parser.error(
             f'{name} is a {type(sources).__name__}, not a mapping of names to '
-            'Sources (ess.apps.batch.Source), such as package.module:SOURCES'
+            'row sources (ess.apps.batch.RowSource), such as package.module:SOURCES'
         )
     return sources
 
@@ -198,7 +198,7 @@ def _parser() -> argparse.ArgumentParser:
     rows = commands.add_parser(
         'rows', parents=[output], help='make a table from the files'
     )
-    rows.add_argument('source', help='a Source, as package.module:NAME')
+    rows.add_argument('source', help='a RowSource, as package.module:NAME')
     return parser
 
 

@@ -180,7 +180,7 @@ app = App(client)` },
         runs.setdefault(f.metadata['sample'], []).append(str(f.ref))
     return pd.DataFrame({'runs': runs.values()}, index=list(runs))
 
-source = Source(angles, fills=('runs',), selector=Selector(role='sample'))
+source = RowSource(angles, fills=('runs',), selector=Selector(role='sample'))
 manager = BatchManager(client, sources={'angles': source},
                        definitions=FolderDefinitions(folder))
 manager.create('stitch', title='reflectivity', source='angles', follow=True,

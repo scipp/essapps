@@ -26,7 +26,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 
-from ess.apps.batch import FileInfo, Source
+from ess.apps.batch import FileInfo, RowSource
 from ess.apps.batch.table import KEY, cell_of
 
 from .specs import IOFQ
@@ -81,7 +81,7 @@ def _measured(f: FileInfo) -> tuple[int, str]:
     return (sys.maxsize, f.ref.file) if run is None else (run, '')
 
 
-SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'))
+SAMPLE_RUNS = RowSource(pair_by_sample, fills=('sample', 'sample_transmission'))
 """A row per sample run, paired by :func:`pair_by_sample`."""
 SOURCES = {'sample-runs': SAMPLE_RUNS}
 """The sources of LoKI's batches, by name."""

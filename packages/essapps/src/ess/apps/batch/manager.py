@@ -79,11 +79,11 @@ from .definition import (
     template_of,
 )
 from .reduction import Batch
-from .source import Range, Source, filled, rows_of
+from .source import Range, RowSource, filled, rows_of
 from .table import frame_of, typed
 
 
-def fits(spec: WorkflowSpec[Any, Any], source: Source | None) -> bool:
+def fits(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> bool:
     """
     Whether a batch of ``spec`` can be made with ``source``: whether each
     parameter that the source fills is a parameter of the spec. With no
@@ -169,7 +169,7 @@ class BatchManager:
         self,
         client: Client,
         *,
-        sources: Mapping[str, Source],
+        sources: Mapping[str, RowSource],
         definitions: DefinitionStore,
         settings: Mapping[str, Mapping[str, Any]] | None = None,
         staged: Collection[str] = (),
@@ -221,7 +221,7 @@ class BatchManager:
         """
         return rows_of(self.client, self._source(source))
 
-    def _given(self, source: Source, fills: Collection[str]) -> pd.DataFrame:
+    def _given(self, source: RowSource, fills: Collection[str]) -> pd.DataFrame:
         """
         What ``source`` makes now, with a column ``waits``: whether a cell of
         ``fills`` is empty (:func:`~.source.filled`). A column of the source
@@ -412,7 +412,7 @@ class BatchManager:
         self._version += 1
         return label
 
-    def _source(self, name: str) -> Source:
+    def _source(self, name: str) -> RowSource:
         """The source registered as ``name``; ``ValueError`` if none is."""
         if name not in self.sources:
             raise ValueError(f'the source {name} is not registered')

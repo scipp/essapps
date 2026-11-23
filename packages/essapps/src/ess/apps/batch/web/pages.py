@@ -70,7 +70,7 @@ from ...listing import Listing
 from ..auto import Step
 from ..corrections import CorrectedFiles
 from ..manager import BatchManager, fits
-from ..source import Range, Source
+from ..source import Range, RowSource
 from ..state import RowState, not_reduced
 from ..table import read_table
 from . import forms
@@ -497,7 +497,7 @@ class Pages:
             specs = [client.spec_named(name) for name in names]
             listing = self._listing
 
-            def choice(name: str | None, source: Source | None) -> SourceChoice:
+            def choice(name: str | None, source: RowSource | None) -> SourceChoice:
                 fills = () if source is None else source.fills
                 return SourceChoice(
                     name=name,

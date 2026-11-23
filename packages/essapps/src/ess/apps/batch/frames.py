@@ -189,7 +189,7 @@ def reduce_batch(
     ValueError
         If a blank is named as one of :data:`RESULT`.
     """
-    if taken := sorted(set(batch.columns) & set(RESULT)):
+    if taken := sorted(set(batch.parameter_columns) & set(RESULT)):
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
     client = batch.client
     which: list[Which] = ['remaining'] if remaining else ['all']

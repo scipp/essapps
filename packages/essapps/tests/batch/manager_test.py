@@ -84,7 +84,7 @@ def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
     again = _again(client, definitions).batch(label)
 
     assert again.spec == STAGED
-    assert again.columns == COLUMNS
+    assert again.parameter_columns == COLUMNS
     assert again.settings == batch.settings
     assert again.cells() == batch.cells()
     pd.testing.assert_frame_equal(again.frame(), batch.frame())
@@ -97,8 +97,12 @@ def test_the_columns_of_a_batch_are_the_parameter_columns_of_its_rows(
     chosen = manager.create('plain', title='Evening', rows=given)
     empty = manager.create('plain', title='Morning')
 
-    assert manager.batch(chosen).columns == ('thickness', 'transmission', 'sample')
-    assert manager.batch(empty).columns == ()
+    assert manager.batch(chosen).parameter_columns == (
+        'thickness',
+        'transmission',
+        'sample',
+    )
+    assert manager.batch(empty).parameter_columns == ()
 
 
 @pytest.mark.parametrize(

@@ -25,7 +25,7 @@ flowchart TD
             table["batch table"]
         end
         step["step: auto.step"]
-        source["source: Source"]
+        source["source: RowSource"]
     end
     definitions["definitions"]
     client["Client: files, records"]
@@ -49,7 +49,7 @@ Nothing in the batch layer imports the page or the command.
 | Component | Code | Owns |
 |---|---|---|
 | table | `table.py` | the form of a batch table: dtypes, cells, cell to request value and back, `rows.json`, table files |
-| source | `source.py`: `Source`, `rows_of` | the code of the application that makes rows from the files |
+| row source | `source.py`: `RowSource`, `rows_of` | the code of the application that makes rows from the files |
 | batch | `reduction.py`: `Batch` | the settings and the batch table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the batch table, the settings or a record changes; the only part that submits to the client |
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
@@ -71,8 +71,8 @@ Nothing in the batch layer imports the page or the command.
 | state of a row | its result, the status of the result, its problems, and where its request differs from that of its result |
 | outdated | a result whose request differs from the row's request now, or that is of another spec |
 | earlier | a completed result whose request differs from the row's only at settings: at parameters that have no column, or where the row's cell is empty |
-| source | code of the application that makes rows from the files (a `Source`) |
-| filled, waits | a row of the source is filled once it has a value in each of `Source.fills`; until then it waits |
+| row source | code of the application that makes rows from the files (a `RowSource`) |
+| filled, waits | a row of the source is filled once it has a value in each of `RowSource.fills`; until then it waits |
 | considered | the keys of the source that a batch made from it has taken or left out |
 | Follow | a step every few seconds on one batch: add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result; chosen when the batch is made, until it is stopped |
 
@@ -88,7 +88,7 @@ The batch table of the example below, as `batch.frame()` gives it:
 | Part | What it is |
 |---|---|
 | the index, `key` | text that names the row, unique in the batch table; the member of the row's records |
-| a parameter column | a column named as a parameter of the spec (`sample`, `sample_transmission`, `thickness`), with the dtype of that parameter: there a row may give its own value. `batch.columns` names them |
+| a parameter column | a column named as a parameter of the spec (`sample`, `sample_transmission`, `thickness`), with the dtype of that parameter: there a row may give its own value. `batch.parameter_columns` names them |
 | a note column | any other column (`run`, `name`); shown, never part of a request |
 | a cell | plain data, such as `'run:60339'`, `2.0`, `['run:1', 'run:2']`, or empty |
 
@@ -155,7 +155,7 @@ A table file is written and read by pandas (`to_csv`, `read_csv`, `to_excel`, `r
 
 An afternoon at LoKI.
 The spec `loki-iofq` has, among others, the parameters `sample` and `sample_transmission` (files) and `thickness: float = 1.0`.
-The source `sample-runs` (`SAMPLE_RUNS` in "Writing a source") makes one row per sample run and fills `sample` and `sample_transmission`.
+The source `sample-runs` (`SAMPLE_RUNS` in "Writing a row source") makes one row per sample run and fills `sample` and `sample_transmission`.
 
 **1. A batch is made from the source.** Runs 60337 to 60340 are listed, each with its transmission run.
 
@@ -249,12 +249,12 @@ A batch that follows has no last row: the rows filled between a last row and the
 For a batch of only the rows that arrive from now on, `choose` takes none: `choose=Range(later=True)`.
 Every row filled now is then considered, and none is reduced again.
 
-## Writing a source
+## Writing a row source
 
-A source is a function from files to a table, and the columns that it fills:
+A row source is a function from files to a table, and the columns that it fills:
 
 ```python
-from ess.apps.batch import FileInfo, Source
+from ess.apps.batch import FileInfo, RowSource
 
 def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     samples = [f for f in files if f.metadata.get('role') == 'sample']
@@ -267,7 +267,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     columns = ['key', 'run', 'name', 'sample', 'sample_transmission']
     return pd.DataFrame.from_records(records, columns=columns).set_index('key')
 
-SAMPLE_RUNS = Source(pair_by_sample, fills=('sample', 'sample_transmission'))
+SAMPLE_RUNS = RowSource(pair_by_sample, fills=('sample', 'sample_transmission'))
 ```
 
 - The index is the key, as text. A number as key is refused: write `str(run)`.
@@ -439,7 +439,7 @@ stateDiagram-v2
     result --> incomplete: a problem
 ```
 
-A problem is any of `RowState.problems`: a value missing, such as an empty cell of a column that the source fills, a cell that the workspace refuses, or a referenced record that failed.
+A problem is any of `RowState.problems`: a value missing, such as an empty cell of a column that the row source fills, a cell that the workspace refuses, or a referenced record that failed.
 The workspace refuses a cell that names a file that the file source does not know, or cannot read now: it raised `OSError`, as when a mount is gone or a catalogue timed out.
 Only the rows that name that file have the problem, and the reason names the file.
 A refusal is not kept, so the next state resolves the cell again, and the problem goes once the file is known and can be read.
@@ -508,7 +508,7 @@ manager.create(..., choose=Range(later=True), follow=True)
 `columns` are parameters that are columns of empty cells, besides those of the table.
 
 - `create` refuses a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses.
-- With `source=`, `create` keeps `Source.fills` with the batch in `source.json` (`batch.fills`), refuses a table from `choose` without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too.
+- With `source=`, `create` keeps `RowSource.fills` with the batch in `source.json` (`batch.fills`), refuses a table from `choose` without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too.
 - It refuses `rows=` with `source=`, `choose=` or `follow=True` without `source=`, and a key from `choose` that is not in `arrived`.
 - `manager.batch(label)` reads `settings.json`, `rows.json` and the fills in `source.json`, binds the spec by name, and passes the definitions, so the `Batch` writes each change.
 - Ask for the batch each time: one handed out before `remove` must not be used after.
@@ -558,7 +558,7 @@ sequenceDiagram
     participant timer as timer: Pages.tick
     participant manager as manager: BatchManager
     participant step as step: auto.step
-    participant source as source: Source
+    participant source as source: RowSource
     participant batch as Batch
     participant definitions
     timer->>manager: step()

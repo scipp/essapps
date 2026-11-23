@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from ess.apps import Client, Record
-from ess.apps.batch import Batch, FileInfo, Source, rows_of
+from ess.apps.batch import Batch, FileInfo, RowSource, rows_of
 from ess.apps.batch.auto import step
 from ess.apps.testing import FakeFiles
 
@@ -27,7 +27,7 @@ def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:
     )
 
 
-PER_RUN = Source(per_run, fills=('sample',))
+PER_RUN = RowSource(per_run, fills=('sample',))
 
 
 def iofq_batch(client: Client) -> Batch:
@@ -68,7 +68,7 @@ def test_e1_series_grows_reduction_follows(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
-    source = Source(angles, fills=('runs',))
+    source = RowSource(angles, fills=('runs',))
     batch = Batch(
         client,
         toys.STITCH,

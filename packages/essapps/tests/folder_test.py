@@ -11,7 +11,7 @@ import pytest
 import scipp as sc
 
 from ess.apps import Client, Selector, file
-from ess.apps.batch import Batch, FileInfo, Source, rows_of
+from ess.apps.batch import Batch, FileInfo, RowSource, rows_of
 from ess.apps.batch.auto import step
 from ess.apps.batch.frames import with_results
 from ess.apps.batch.table import KEY
@@ -165,7 +165,7 @@ def _runs(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame({'sample': [str(f.ref) for f in files]}, index=keys)
 
 
-RUNS = Source(_runs, fills=('sample',))
+RUNS = RowSource(_runs, fills=('sample',))
 """A row per run."""
 
 

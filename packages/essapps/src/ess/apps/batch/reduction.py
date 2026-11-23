@@ -164,14 +164,14 @@ class Batch:
         without them keeps nothing.
     fills:
         The parameters that the source of the batch fills, if it was made
-        from one (:attr:`~.source.Source.fills`), as the manager keeps them
+        from one (:attr:`~.source.RowSource.fills`), as the manager keeps them
         with the batch. Each is a column, and an empty cell there means that
         the row waits for its file: the row is incomplete, whatever the
         settings hold and whatever the default of the parameter is.
 
     Attributes
     ----------
-    columns:
+    parameter_columns:
         The parameter columns of the table, in its order: the blanks of the
         template.
     settings_fields:
@@ -254,13 +254,13 @@ class Batch:
         return self._version
 
     @property
-    def columns(self) -> tuple[str, ...]:
+    def parameter_columns(self) -> tuple[str, ...]:
         return self._template.blanks
 
     @property
     def settings_fields(self) -> tuple[str, ...]:
         fields = self.spec.params.model_fields
-        return tuple(n for n in fields if n not in self.columns)
+        return tuple(n for n in fields if n not in self.parameter_columns)
 
     def settable(self, settings: Mapping[str, Any]) -> dict[str, Any]:
         """
@@ -353,7 +353,9 @@ class Batch:
         settings = copy.deepcopy(dict(settings))
         self._save(settings)
         self._settings = settings
-        self._template = Template(self.spec, params=settings, blanks=self.columns)
+        self._template = Template(
+            self.spec, params=settings, blanks=self.parameter_columns
+        )
         self._version += 1
 
     def make_column(self, name: str) -> None:
@@ -388,7 +390,7 @@ class Batch:
         take different values; :class:`~.definition.NotKept` if the
         definitions refuse a write.
         """
-        self._keeps_fills([c for c in self.columns if c != name])
+        self._keeps_fills([c for c in self.parameter_columns if c != name])
         if key is None:
             values = self.values(name)
             if len(values) > 1:
@@ -415,7 +417,7 @@ class Batch:
         (:meth:`empty`, :func:`~.table.cell_of`), or ``None`` if it gives
         nothing. Raises ``ValueError`` if ``name`` is not a column.
         """
-        if name not in self.columns:
+        if name not in self.parameter_columns:
             raise ValueError(f'{name} is not a column of the batch')
         cells = {k: row[name] for k, row in self._rows[[name]].to_dict('index').items()}
         if name in (empty := self.empty()):
@@ -451,7 +453,7 @@ class Batch:
         """
         fields = self.spec.params.model_fields
         empty = {}
-        for c in self.columns:
+        for c in self.parameter_columns:
             if c in self.fills:
                 continue
             if c in self._settings:
@@ -469,7 +471,7 @@ class Batch:
         :meth:`empty` gives it, and left out where it gives nothing, a problem
         of the row. Raises ``KeyError`` for a key that the table lacks.
         """
-        rows = self._rows[list(self.columns)]
+        rows = self._rows[list(self.parameter_columns)]
         if keys is not None:
             rows = rows.loc[list(keys)]
         empty = self.empty()
@@ -572,14 +574,14 @@ class Batch:
     ) -> dict[str, RowState]:
         upstream = self._known(sorted(state.references(cells.values())))
         status = self._status([*found.values(), *upstream])
-        given = self._rows.loc[list(cells), list(self.columns)].notna()
+        given = self._rows.loc[list(cells), list(self.parameter_columns)].notna()
         own = {
             key: frozenset(c for c, filled in row.items() if filled)
             for key, row in given.to_dict('index').items()
         }
         return state.row_states(
             cells,
-            self.columns,
+            self.parameter_columns,
             found,
             status,
             changed,
@@ -647,14 +649,15 @@ class Batch:
             raise resolved
         asked = {}
         for key, given in cells.items():
-            if len(given) < len(self.columns):
+            if len(given) < len(self.parameter_columns):
                 continue  # an empty cell is a problem, and nothing to resolve
             if (record := found.get(key)) is None:
                 asked[key] = dict(given)
             else:
                 was = record.request.params
                 asked[key] = {
-                    c: given[c] for c in state.differs(given, was, self.columns)
+                    c: given[c]
+                    for c in state.differs(given, was, self.parameter_columns)
                 }
         cells_now, refused = self._resolve_cells(asked)
         changed = {}
@@ -761,7 +764,9 @@ class Batch:
     def _once(self, errors: tuple[FieldError, ...]) -> list[FieldError]:
         """Each reason that names no column once, without a row's key."""
         placed = [
-            e if e.loc and e.loc[0] in self.columns else replace(e, entry=None)
+            e
+            if e.loc and e.loc[0] in self.parameter_columns
+            else replace(e, entry=None)
             for e in errors
         ]
         return list(dict.fromkeys(placed))

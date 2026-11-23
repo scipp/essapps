@@ -1505,7 +1505,11 @@ def test_a_person_makes_a_batch_and_lands_on_its_page(
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Afternoon')
     assert page.url.endswith(f'/batches/{label}/')
     page.wait_for_selector('.chip.st-all .n:text-is("3")')
-    assert manager.batch(label).columns == ('sample', 'transmission', 'thickness')
+    assert manager.batch(label).parameter_columns == (
+        'sample',
+        'transmission',
+        'thickness',
+    )
     assert manager.following is None  # Follow is off unless ticked
     assert page.is_hidden('#stop-follow')
 

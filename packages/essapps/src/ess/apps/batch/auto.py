@@ -58,7 +58,7 @@ import pandas as pd
 from ..errors import SubmitError
 from ..records import Record
 from .reduction import Batch
-from .source import Source, filled, rows_of
+from .source import RowSource, filled, rows_of
 from .state import not_reduced
 
 
@@ -119,7 +119,7 @@ class Step:
     records: Mapping[str, Record]
 
 
-def step(batch: Batch, source: Source, considered: Collection[str]) -> Step:
+def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     """
     Add the rows of ``source`` that are new and filled to ``batch``, and
     reduce the rows that :func:`~.state.not_reduced` gives, with the batch's

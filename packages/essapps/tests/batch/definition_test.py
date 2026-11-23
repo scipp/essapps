@@ -20,7 +20,7 @@ from ess.apps.batch import (
     FolderDefinitions,
     Header,
     NotKept,
-    Source,
+    RowSource,
 )
 from ess.apps.batch.definition import (
     CORRECTIONS,
@@ -63,7 +63,7 @@ def first_transmission(files: Sequence[FileInfo]) -> pd.DataFrame:
     ).set_index(KEY)
 
 
-FIRST_TRANSMISSION = Source(first_transmission, fills=('sample', 'transmission'))
+FIRST_TRANSMISSION = RowSource(first_transmission, fills=('sample', 'transmission'))
 
 type Opened = Callable[[], AbstractContextManager[tuple[BatchManager, CorrectedFiles]]]
 
