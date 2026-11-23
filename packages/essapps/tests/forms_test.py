@@ -616,7 +616,8 @@ def test_a_value_given_inline_at_a_file_field_is_refused(
     (error,) = raised.value.errors
     assert error.loc == ('sample',)
     assert error.msg == (
-        f'{inline!r} is not a file; a file field is written as file(...)'
+        f'{inline!r} is not a file; a file field is written as file(...), '
+        'whose JSON form is {"@ref": "file", "file": NAME}'
     )
 
 
@@ -755,8 +756,7 @@ def test_a_field_typed_referenced_is_filled_by_reference_only(
         with pytest.raises(
             SubmitError,
             match=r'^transmission: is not a reference to an output, as the field is '
-            r'typed Referenced\[\.\.\.\]; write one as \{"@ref": "output", '
-            r'"record": ID, "output": NAME\}$',
+            r'typed Referenced\[\.\.\.\]$',
         ):
             client.submit(ADD, params={'transmission': inline})
 

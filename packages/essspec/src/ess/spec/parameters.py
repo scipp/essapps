@@ -158,12 +158,13 @@ def not_its_source(value: Any, file: bool) -> PydanticCustomError:
     """
     if file:
         return PydanticCustomError(
-            'file_ref', f'{value!r} is not a file; a file field is written as file(...)'
+            'file_ref',
+            f'{value!r} is not a file; a file field is written as file(...), '
+            'whose JSON form is {"@ref": "file", "file": NAME}',
         )
     return PydanticCustomError(
         'output_ref',
-        'is not a reference to an output, as the field is typed Referenced[...]; '
-        'write one as {"@ref": "output", "record": ID, "output": NAME}',
+        'is not a reference to an output, as the field is typed Referenced[...]',
     )
 
 

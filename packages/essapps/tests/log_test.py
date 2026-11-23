@@ -588,7 +588,7 @@ def test_a_log_file_without_a_header_is_refused(tmp_path: Path) -> None:
 
 def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
     path = tmp_path / 'log'
-    with Log(path), pytest.raises(RuntimeError, match='held by another log'):
+    with Log(path), pytest.raises(RuntimeError, match='held by another process'):
         Log(path)
     Log(path).close()  # free once the first has let go
 

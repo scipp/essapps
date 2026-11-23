@@ -18,25 +18,25 @@ A file that is written before the records it reads exist names them by label
 
     masks: {'@latest': masks, output: masks}
 
-:func:`template_text` writes each file and reference in its JSON form, which
+:func:`settings_text` writes the settings of a batch, those at its columns
+included, as a template, with each file and reference in its JSON form, which
 reads back as the same, the form of ``settings.json`` of a batch
 (:mod:`.definition`). :func:`checked_settings` reads settings from a
-template, which must be of the spec and its version, and
-``template_text(Template(batch.spec, params=batch.settings))`` writes the
-settings of a batch, those at its columns included.
+template, which must be of the spec and its version.
 
 :func:`template_to_fill` writes a template of a spec for a person to fill
 in: every parameter, with a comment that says what it takes, read from its
 type with :mod:`ess.spec.field_types` as the fields of a form read it
-(:mod:`ess.apps.fields`). A required parameter is commented out, so that the
-template as written is refused naming each of them::
+(:mod:`ess.apps.fields`). Every parameter is commented out, so that the
+template as written is refused naming each required parameter, and a
+parameter left commented takes the spec's default, not a copy of it::
 
     # q (required): a group of the fields below. Bin edges in Q.
     #   start (required): a number. First bin edge.
     #   scale (default linear): one of linear, log. Spacing of the edges.
     #q:
     # corrections (default {gravity: true}): a group of the fields below.
-    corrections: {gravity: true}
+    #corrections: {gravity: true}
 """
 
 from __future__ import annotations
@@ -57,8 +57,9 @@ from ess.spec import File, WorkflowSpec, field_types
 from ..client import Client
 from ..records import SpecId, Template
 from .definition import template_data, template_of
+from .reduction import Batch
 from .source import RowSource
-from .table import as_request
+from .table import as_request, not_outputs
 
 
 def with_latest(client: Client, value: Any) -> Any:
@@ -126,11 +127,27 @@ def checked_settings(
             'mean something else in another, so check them, and set the '
             f'version in the template to {ours.version}'
         )
-    return with_latest(client, as_request(spec.params, template.params))
+    values = as_request(spec.params, template.params)
+    if names := not_outputs(spec.params, values):
+        raise ValueError(
+            '; '.join(f'{n}: {values[n]!r} {_NOT_AN_OUTPUT}' for n in names)
+        )
+    return with_latest(client, values)
 
 
-def template_text(template: Template) -> str:
-    """``template`` as the YAML that :func:`load_template` reads back."""
+_NOT_AN_OUTPUT = (
+    "names no output: a template names one as {'@latest': LABEL, output: NAME} "
+    'or RECORD.OUTPUT'
+)
+"""What a message says of text that names no output where one is taken."""
+
+
+def settings_text(batch: Batch) -> str:
+    """
+    The settings of ``batch``, those at its columns included, as the YAML of
+    a template that :func:`load_template` reads back.
+    """
+    template = Template(batch.spec, params=batch.settings)
     return yaml.safe_dump(template_data(template), sort_keys=False)
 
 
@@ -138,19 +155,22 @@ _WIDTH = 88
 """The width of the lines of :func:`template_to_fill`."""
 
 _HOW = """\
-Give each parameter marked "required" a value: remove the "#" before its name
-and write the value after the colon. Leave a parameter out if the table gives
-it for each row: a column of the table, or a parameter that the row source
-fills. A parameter that has a default holds it below.
+To set a parameter, remove the "#" before its name and write the value after
+the colon. A parameter left commented takes its default, or, if it is marked
+"required", is missing: give it a value, unless the table gives it for each
+row, as a column of the table or a parameter that the row source fills.
 
 How to write a value:
   a run         70003, or run:70003
   a file        path:raw/70003.nxs, its path in files.csv
+  a file in a group, or in a list of groups:
+                {'@ref': file, file: run:70003}, {'@ref': file, file: path:...}
   an output     {'@latest': LABEL, output: NAME}: the output NAME of the newest
                 record under the label LABEL; add member: KEY for the row KEY
                 of a batch
-                {'@ref': output, record: ID, output: NAME}: the output NAME of
-                the record ID, as the column record of "show" gives it
+                RECORD.OUTPUT: the output OUTPUT of the record RECORD, as the
+                column record of "show" gives it; in a group, write
+                {'@ref': output, record: RECORD, output: OUTPUT}
   a group       {start: 0.01, stop: 0.3, num_bins: 100}, or a field per line
   a list        [a, b]
   none          null"""
@@ -167,7 +187,7 @@ def template_to_fill(
     whether it is required or its default, what it takes, and its
     description; a parameter that takes an output names the outputs of
     ``bound`` that fit it, and one that a row of ``sources`` fills says so.
-    A parameter with a default holds it; a required one is commented out.
+    Every parameter is commented out, one with a default showing it.
     """
     filled: dict[str, list[str]] = {}
     for name, source in (sources or {}).items():
@@ -183,10 +203,8 @@ def template_to_fill(
         if name in filled:
             note = f' The row source {" and ".join(filled[name])} gives it per row.'
         lines += [f'  {line}' for line in _described(name, info, bound, 0, note)]
-        if info.is_required():
-            lines.append(f'  #{name}:')
-        else:
-            lines.append(f'  {name}: {_flow(_default(info))}')
+        default = '' if info.is_required() else f' {_flow(_default(info))}'
+        lines.append(f'  #{name}:{default}')
     return '\n'.join(lines) + '\n'
 
 
@@ -231,7 +249,8 @@ def _described(
     and ``note``; then those of the fields of each group it takes, deeper.
     """
     given = 'required' if info.is_required() else f'default {_flow(_default(info))}'
-    takes, groups = _takes(info.annotation, field_types.field_metadata(info), bound)
+    metadata = field_types.field_metadata(info)
+    takes, groups = _takes(info.annotation, metadata, bound, top=depth == 0)
     text = f'{name} ({given}): {takes}.'
     if info.description:
         text += f' {info.description}'
@@ -255,19 +274,25 @@ it among the alternatives of a union, ``None`` for a single group.
 
 
 def _takes(
-    annotation: Any, metadata: tuple[Any, ...], bound: Sequence[WorkflowSpec[Any, Any]]
+    annotation: Any,
+    metadata: tuple[Any, ...],
+    bound: Sequence[WorkflowSpec[Any, Any]],
+    *,
+    top: bool,
 ) -> tuple[str, _Groups]:
     """
     What a field of type ``annotation`` with ``metadata`` takes, in words, and
-    the groups whose fields it takes. The type is read as the fields of a form
-    read it (:mod:`ess.apps.fields`).
+    the groups whose fields it takes; ``top`` for a parameter, whose file a
+    template names as a cell does (:func:`~.table.as_request`), not for a
+    field of a group, whose file is written in its JSON form. The type is read
+    as the fields of a form read it (:mod:`ess.apps.fields`).
     """
     tp, none, metadata = field_types.unwrapped(annotation, metadata)
     ways: list[str] = []
     groups: _Groups = []
     if get_origin(tp) is list:
         (element,) = get_args(tp)
-        each, groups = _takes(element, (), bound)
+        each, groups = _takes(element, (), bound, top=top)
         ways.append(f'a list, each {each}')
     else:
         inline, inline_metadata, referenced = field_types.split(tp, *metadata)
@@ -278,7 +303,7 @@ def _takes(
             ways.append(f'a group of one of the kinds below, chosen by its field {tag}')
             groups = [((tag, value), g) for value, g in alternatives.items()]
         elif marker is not None:
-            ways.append(_file(marker))
+            ways.append(_file(marker, top=top))
         elif field_types.is_group(inline):
             ways.append('a group of the fields below')
             groups = [(None, inline)]
@@ -291,13 +316,26 @@ def _takes(
     return ', or '.join(ways), groups
 
 
-def _file(marker: File) -> str:
-    """What a file field of ``marker`` takes: a run, or a file of a kind."""
+def _file(marker: File, *, top: bool) -> str:
+    """
+    What a file field of ``marker`` takes: a run, such as one of the role
+    that a picker offers, which a run need not have; or a file of the
+    metadata of the marker, which a file of another kind must have. And how
+    a field of a group writes it, unless ``top``.
+    """
     metadata = marker.metadata
     kind = metadata.pop('kind')
-    said = 'a run' if kind == 'raw' else f'a file of kind {kind}'
+    if kind == 'raw':
+        said = 'a run'
+        if role := metadata.pop('role', None):
+            said += f', such as one of role {role} in files.csv'
+    else:
+        said = f'a file of kind {kind}'
     if metadata:
-        said += f' ({", ".join(f"{k} {v}" for k, v in metadata.items())})'
+        said += f', with {", ".join(f"{k} {v}" for k, v in metadata.items())}'
+        said += ' in files.csv'
+    if not top:
+        said += ", written {'@ref': file, file: ...}"
     return said
 
 

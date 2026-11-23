@@ -68,11 +68,13 @@ def test_a_template_whose_params_are_all_commented_out_has_none(
 # The command
 
 MODULE = '''
+from typing import Annotated
+
 import pandas as pd
 from ess.apps.batch import RowSource
 from ess.apps.testing import StagedFunction, read_file
 from ess.spec import RunFile, WorkflowSpec, function_binding
-from pydantic import BaseModel
+from pydantic import AfterValidator, BaseModel
 from ess.spec import Referenced
 
 
@@ -120,7 +122,50 @@ def _find(params: FindParams) -> FindOutputs:
     return FindOutputs(offset=Offset(value=read_file(params.sample)))
 
 
-BINDINGS = [function_binding(SPEC, _reduce), function_binding(FIND, _find)]
+class Pair(BaseModel):
+    sample: RunFile
+
+
+class PairParams(BaseModel):
+    pair: Pair
+
+
+PAIR = WorkflowSpec(
+    name='cli-pair', version=1, title='Pair', description='A file in a group.',
+    params=PairParams, outputs=Outputs,
+)
+
+
+def _pair(params: PairParams) -> Outputs:
+    return Outputs(total=read_file(params.pair.sample))
+
+
+LOCKED = []  # folders that validating cli-lock makes read-only
+
+
+def _lock(value: str) -> str:
+    for path in LOCKED:
+        path.chmod(0o500)
+    raise ValueError('locked')
+
+
+class LockParams(BaseModel):
+    sample: RunFile
+    lock: Annotated[str, AfterValidator(_lock)]
+
+
+LOCK = WorkflowSpec(
+    name='cli-lock', version=1, title='Lock', description='Refuses its settings.',
+    params=LockParams, outputs=Outputs,
+)
+
+
+BINDINGS = [
+    function_binding(SPEC, _reduce),
+    function_binding(FIND, _find),
+    function_binding(PAIR, _pair),
+    function_binding(LOCK, _reduce),
+]
 UPGRADED = [
     function_binding(SPEC.model_copy(update={'version': 2}), _reduce),
     function_binding(FIND, _find),
@@ -138,7 +183,7 @@ def pair(files):
     return pd.DataFrame.from_records(rows, columns=columns).set_index('key')
 
 
-PAIRS = RowSource(pair, fills=('sample',))
+PAIRS = RowSource(pair, fills=('sample',), description='A row per sample run.')
 BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
 SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
 '''
@@ -686,7 +731,7 @@ def test_reduce_on_a_folder_that_another_process_holds_says_so(
         code = main([*command, 'reduce', str(cli_template), str(runs), '-l', 'x'])
 
     assert code == 1
-    assert 'is held by another log' in capsys.readouterr().err
+    assert 'is held by another process' in capsys.readouterr().err
 
 
 def test_a_template_refused_on_a_new_label_leaves_no_batch(
@@ -858,6 +903,12 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
         (['-b', 'cli_toys_batch_files:NOPE', 'specs'], 'has no NOPE'),
         (['files', 'cli_toys_batch_files:SPEC'], 'is a WorkflowSpec, not a function'),
         (['files', 'nope:read'], 'cannot import nope'),
+        (['reduce', 'nope.yaml', '-l', 'x'], 'nope.yaml: no such file'),
+        (['export', 'nope.csv', 'out'], 'nope.csv: no such file'),
+        (
+            ['-b', 'cli_toys_batch_files:BINDINGS', '-w', 'nope', 'specs'],
+            'no files.csv',
+        ),
         ([*SOURCES, 'rows', 'p'], 'p is not a name in --sources: pairs, broken'),
         (
             [*SOURCES, 'reduce', '--source', 'p', '-l', 'x'],
@@ -1152,8 +1203,10 @@ def test_specs_lists_each_spec_that_the_bindings_bind(
 
     assert capsys.readouterr().out.splitlines() == [
         'name,version,title,outputs',
-        'cli-toy,1,Toy,"[""total""]"',
-        'cli-find,1,Find,"[""offset""]"',
+        'cli-toy,1,Toy,total',
+        'cli-find,1,Find,offset',
+        'cli-pair,1,Pair,total',
+        'cli-lock,1,Lock,total',
     ]
 
 
@@ -1163,13 +1216,13 @@ def test_sources_lists_each_row_source_with_the_parameters_that_it_fills(
     assert main(['-w', str(folder), *SOURCES, 'sources']) == 0
 
     assert capsys.readouterr().out.splitlines() == [
-        'name,fills',
-        'pairs,"[""sample""]"',
-        'broken,"[""sample""]"',
+        'name,fills,description',
+        'pairs,sample,A row per sample run.',
+        'broken,sample,',
     ]
 
 
-def test_batches_lists_each_batch_with_its_rows_done_and_source(
+def test_batches_lists_each_batch_with_its_rows_reduced_and_source(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
     with intake_on(folder) as intake:
@@ -1186,7 +1239,7 @@ def test_batches_lists_each_batch_with_its_rows_done_and_source(
         'title',
         'spec',
         'rows',
-        'done',
+        'reduced',
         'source',
         'follows',
     ]
@@ -1195,7 +1248,7 @@ def test_batches_lists_each_batch_with_its_rows_done_and_source(
             'title': 'Later',
             'spec': 'cli-toy',
             'rows': '2',
-            'done': '0',
+            'reduced': '0',
             'source': 'pairs',
             'follows': 'True',
         },
@@ -1203,7 +1256,7 @@ def test_batches_lists_each_batch_with_its_rows_done_and_source(
             'title': 'x',
             'spec': 'cli-toy',
             'rows': '2',
-            'done': '1',
+            'reduced': '1',
             'source': '',
             'follows': 'False',
         },
@@ -1246,7 +1299,7 @@ def test_json_writes_a_list_of_objects_one_per_row_with_the_key_as_a_field(
         ('row-0', 'run:1', 'done'),
         ('row-1', 'run:2', 'done'),
     ]
-    assert rows[0]['failure'] == ''
+    assert (rows[0]['failure'], rows[0]['record'] is None) == (None, False)
 
 
 @pytest.fixture
@@ -1270,7 +1323,7 @@ def test_the_template_of_a_spec_says_what_each_parameter_takes(
         'type Offset,',
         '  #     such as offset of cli-find, or null for none.',
         '  #   value (default 0.0): a number.',
-        '  offset: null',
+        '  #offset: null',
     ]
 
 
@@ -1278,7 +1331,7 @@ def test_the_template_of_a_spec_is_refused_naming_each_required_parameter(
     command: list[str], toy_template: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert load_template(toy_template) == Template(
-        import_module('cli_toys_batch_files').SPEC, params={'offset': None}
+        import_module('cli_toys_batch_files').SPEC
     )
 
     assert main([*command, 'reduce', str(toy_template), '-l', 'x']) == 2
@@ -1319,3 +1372,85 @@ def test_a_reduce_that_makes_a_batch_and_is_refused_leaves_none(
     assert FolderDefinitions(folder).labels() == []
     template.write_text('spec: {name: cli-toy, version: 1}\n')
     assert main([*reduce, '-l', 'a']) == 0
+
+
+def test_a_reduce_whose_new_batch_cannot_be_removed_says_why_it_was_refused(
+    command: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    template = folder / 'lock.yaml'
+    template.write_text('spec: {name: cli-lock, version: 1}\nparams: {lock: x}\n')
+    labels = folder / 'definitions' / 'labels'
+    import_module('cli_toys_batch_files').LOCKED.append(labels / 'a')
+    reduce = [*SOURCES, 'reduce', str(template), '--source', 'pairs', '-l', 'a']
+    try:
+        code = main([*command, *reduce])
+    finally:
+        (labels / 'a').chmod(0o700)
+
+    err = capsys.readouterr().err
+    assert code == 2
+    assert 'locked' in err
+    assert 'not kept' not in err
+    assert (labels / 'a' / 'header.json').exists()  # the removal was refused
+
+
+def test_a_file_in_a_group_is_written_as_the_template_says(
+    command: list[str], folder: Path
+) -> None:
+    path = folder / 'pair.yaml'
+    assert main([*command, 'template', 'cli-pair', '-o', str(path)]) == 0
+    said = "  #   sample (required): a run, written {'@ref': file, file: ...}."
+    filled = "  pair: {sample: {'@ref': file, file: run:1}}"
+
+    lines = path.read_text().splitlines()
+    path.write_text(path.read_text().replace('  #pair:', filled))
+
+    assert said in lines
+    assert main([*command, 'reduce', str(path), '-l', 'x']) == 0
+
+
+@pytest.mark.parametrize(
+    ('given', 'said'),
+    [
+        (
+            'spec: {name: cli-toy, version: 1}\nparams: {sample: 1, offset: nope}\n',
+            "offset: 'nope' names no output: a template names one as "
+            "{'@latest': LABEL, output: NAME} or RECORD.OUTPUT",
+        ),
+        (
+            'key,sample,offset\nrow-0,run:1,nope\n',
+            "row 'row-0', column 'offset': 'nope' names no output: a cell names "
+            'one as RECORD.OUTPUT, such as r17.centre',
+        ),
+    ],
+    ids=['template', 'table'],
+)
+def test_text_that_names_no_output_is_refused_saying_how_to_name_one(
+    command: list[str],
+    cli_template: Path,
+    folder: Path,
+    given: str,
+    said: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = folder / ('given.csv' if given.startswith('key') else 'given.yaml')
+    path.write_text(given)
+    files = [str(path)] if path.suffix == '.yaml' else [str(cli_template), str(path)]
+
+    assert main([*command, 'reduce', *files, '-l', 'x']) == 2
+
+    assert said in capsys.readouterr().err
+    assert FolderDefinitions(folder).labels() == []
+
+
+def test_export_of_a_label_writes_the_outputs_of_its_rows_as_they_stand(
+    command: list[str], reduced_once: Path
+) -> None:
+    out = reduced_once / 'exported.csv'
+
+    code = main(
+        [*command, 'export', '-l', 'x', str(reduced_once / 'out'), '-o', str(out)]
+    )
+
+    assert code == 0
+    assert [Path(p).is_file() for p in read_text(out)['total']] == [True, True]
