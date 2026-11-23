@@ -8,7 +8,7 @@ working on the page.
 ``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
 :mod:`ess.apps.folder`), a new temporary folder if not given. The first start
 writes the fake runs and ``files.csv`` there. A later start reuses them, with
-the results of earlier starts, and the batches with their tables and
+the results of earlier starts, and the batches with their batch tables and
 settings, the corrections, and the batch that follows kept in
 ``definitions/`` (:mod:`..definition`). Each start makes a batch of the
 samples there are if no batch is listed; it does not follow, and a person

@@ -3,9 +3,9 @@
 """
 Reduce many runs as batches, on a workspace folder.
 
-A batch is a table and a template, kept in the folder under a label. Each row of
-the table is one reduction, such as of one sample run; the template holds the
-settings that the rows share.
+A batch is a table, its batch table, and a template, kept in the folder under
+a label. Each row of the batch table is one reduction, such as of one sample
+run; the template holds the settings that the rows share.
 
 The options before the command name the folder, the bindings (the reductions
 that the folder runs) and the row sources (which make rows from the files):
@@ -27,7 +27,7 @@ A first session, in this order; each command has its own --help:
                                   # reduce them; --later: none now; it does not follow
     $B reduce t.yaml runs.csv -l water   # or of a table file of your own
     $B batches                    # the batches, with how many rows are reduced
-    $B show -l water              # the table of water, with the status of each row
+    $B show -l water              # the batch table of water, with each row's status
     $B reduce -l water --remaining       # reduce the rows that are not done
     $B template -l water -o now.yaml     # the settings of water, as a template
     $B export -l water results    # write the outputs of the rows of water
@@ -39,7 +39,8 @@ A first session, in this order; each command has its own --help:
     $B remove -l water            # remove the batch; its records stay
 
 A template is YAML: the spec, and a value for each parameter that the rows
-share. A parameter that the table gives for each row is left out:
+share. A parameter that the batch table gives for each row, a parameter column,
+is left out:
 
     spec: {name: loki-masks, version: 1}
     params:
@@ -53,9 +54,9 @@ writes says how to write each kind of value.
 
 reduce on a label without a batch makes the batch: of the rows of --source, of
 a table file, or else of one row keyed by the label; on a label with a batch, a
-template replaces its settings and a table its table. It reduces every row that
-can be, or with --remaining the rows not done. A refused reduce makes no batch,
-but a batch keeps the template and table given to it.
+template replaces its settings and a table file its batch table. It reduces
+every row that can be, or with --remaining the rows not done. A refused reduce
+makes no batch, but a batch keeps the template and table file given to it.
 
 The status of a row:
     ready       no result yet; it can be reduced, unless the settings are refused
@@ -73,7 +74,7 @@ The status of a row:
 follow -l water: water follows its row source, with a step every --interval
 seconds (5). A step adds the rows of the source that are filled and not
 considered (not one that a person removed or left out), and reduces each row
-that is ready and has no result. It never changes a row of the table: a row
+that is ready and has no result. It never changes a row of the batch table: a row
 added with the transmission run that was newest then keeps it when a newer one
 arrives (compare rows SOURCE with show). It reduces no failed row again (reduce
 --remaining does). A step that did something writes a line, or with --json an
@@ -97,7 +98,7 @@ show too, runs the reductions not started and waits for them.
 Exit status:
     0  done; after reduce or follow, every row of the batch is done
     1  an error, such as a folder that another process holds
-    2  refused, so that nothing ran: a wrong command line, template or table,
+    2  refused, so that nothing ran: a wrong command line, template or table file,
        or a row that cannot be reduced
     3  reduce or follow left a row not done, such as one that failed
     130  follow ended at once by a second SIGINT (143: SIGTERM, 129: SIGHUP)
@@ -108,8 +109,9 @@ another process holds, such as a page or a follow. Messages go to stderr.
 
 # The commands are thin: the rules are those of BatchManager, Intake and Batch,
 # as the page applies them, so a label is one batch whoever works on it. Only
-# reduce and take change a table. A command is a function of _Given and an
-# entry of _COMMANDS. The guide is packages/essapps/docs/batch.md, section
+# reduce, take and the steps of follow change a batch table. A command is a
+# function of _Given and an entry of _COMMANDS. The guide is
+# packages/essapps/docs/batch.md, section
 # "Table files and the command".
 
 from __future__ import annotations
@@ -263,7 +265,7 @@ status of a command that said what it did as it ran.
 
 
 def _files(given: _Given) -> pd.DataFrame:
-    """The table of the files of the folder (``files.csv``)."""
+    """The files table of the folder (``files.csv``)."""
     args = given.args
     read = _named(args.read)
     if not callable(read):
@@ -315,7 +317,7 @@ def _row_sources(given: _Given) -> pd.DataFrame:
 
 
 def _rows(given: _Given) -> pd.DataFrame:
-    """The table that the row source of the name given makes now."""
+    """The rows that the row source of the name given makes now."""
     return rows_of(given.client, given.sources[given.args.source])
 
 
@@ -366,35 +368,37 @@ def _table(client: Client, batch: Batch, keys: list[str] | None = None) -> pd.Da
 
 
 def _show(given: _Given) -> pd.DataFrame:
-    """The table of the batch of the label, with what came of each row."""
+    """The batch table of the label, with what came of each row."""
     return _table(given.client, given.batch(given.args.label))
 
 
 def _reduce(given: _Given) -> pd.DataFrame:
     """
-    Reduce the batch of the label, and return its table with what came of
-    each row (:func:`.frames.reduce_batch`).
+    Reduce the batch of the label, and return its batch table with what came
+    of each row (:func:`.frames.reduce_batch`).
 
     For a label without a batch, the manager makes the batch
     (:meth:`~.manager.BatchManager.create`) of the template's spec, with the
-    label as title. Its table is the table given (:func:`.table.read_table`),
-    or the rows that the source ``--source`` has filled now, those that
-    ``--first``, ``--last`` and ``--later`` pick (:class:`~.source.Range`,
-    :meth:`~.intake.Intake.create`), not both; without either, one row keyed
-    by the label. With ``--source``, the batch keeps its source, so that
-    ``offered`` and its page offer the rows of the source that its table
-    lacks; it follows only after ``follow``. ``create`` refuses a label that
+    label as title; with ``--source``, the intake makes it
+    (:meth:`~.intake.Intake.create`). Its batch table is the table file given
+    (:func:`.table.read_table`), or the rows that the source ``--source`` has
+    filled now, those that ``--first``, ``--last`` and ``--later`` pick
+    (:class:`~.source.Range`), not both; without either, one row keyed by the
+    label. With ``--source``, the batch keeps its source, so that ``offered``
+    and its page offer the rows of the source that its batch table lacks; it
+    follows only after ``follow``. ``create`` refuses a label that
     has definitions or records. If the reduction is then refused, the batch
     is removed again: nothing was submitted, and the same command line works
     once the template is right.
 
     For a label with a batch, the template becomes its settings and the table
-    replaces its table (:meth:`.reduction.Batch.put`); ``--source`` is refused.
+    file replaces its batch table (:meth:`.reduction.Batch.put`); ``--source``
+    is refused.
 
     A template must be of the batch's spec and its version, as the page's
     "Load settings" checks it (:func:`.templates.checked_settings`), and is
     checked before anything is written. Its blanks are not read. A value at a
-    column of the table is the setting that each row with an empty cell takes,
+    parameter column is the setting that each row with an empty cell takes,
     but at a column that the batch's source fills, where it is left out
     (:meth:`.reduction.Batch.settable`). With ``--remaining`` it reduces the
     rows that the page's "Reduce" does (:func:`.state.left_to_reduce`);
@@ -492,7 +496,7 @@ def _export(given: _Given) -> pd.DataFrame:
 
 
 def _offered(given: _Given) -> pd.DataFrame:
-    """The rows of the source of a batch that its table lacks, with ``waits``."""
+    """The rows of the source of a batch that its batch table lacks, with ``waits``."""
     intake = given.intake()
     return intake.offered(_known(intake.manager, given.args.label))
 
@@ -1186,7 +1190,7 @@ def _opened(given: _Given, command: _Command) -> _Result:
     bind = _bindings(args.bind)
     if not (args.workspace / 'files.csv').is_file():
         raise _Wrong(f'{args.workspace}: no files.csv; the command files writes it')
-    try:  # as read once, so that a table of files in error is refused
+    try:  # as read once, so that a files table in error is refused
         folder_files(args.workspace)
     except FileNotFoundError as error:
         raise ValueError(f'files.csv lists {error}, which does not exist') from None

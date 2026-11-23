@@ -6,7 +6,7 @@ and h5py.
 
 The folder holds what a workspace needs to go on after its process ended::
 
-    files.csv     the table of FolderFiles: file, run, pid, kind, role, ...
+    files.csv     the files table of FolderFiles: file, run, pid, kind, role, ...
                   (written by hand, or started with scan_folder)
     log.jsonl     history: a header naming the format of the log and of
                   the store, then one event per line (see ess.apps.log)

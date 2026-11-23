@@ -7,7 +7,7 @@ This module does not depend on HTTP: it imports neither ``fastapi`` nor
 ``starlette``.
 
 A page reads :class:`State` and sends the requests at the end. A form is a
-list of :class:`Node`; a cell of the table of a batch is a :class:`Cell`, and
+list of :class:`Node`; a cell of the batch table is a :class:`Cell`, and
 one of a run a :class:`RunCell`.
 """
 
@@ -209,9 +209,9 @@ class State(BaseModel):
     application. ``start`` changes when
     the server starts again, ``version`` with each change, and ``runs`` with
     each change of the runs. ``batches`` lists the batches of the workspace,
-    as :class:`Batches` has them. ``notes`` are the columns of the table that
-    are not parameters, but ``name``, and ``columns`` the parameter columns;
-    both change when the table does. ``settings`` is the form
+    as :class:`Batches` has them. ``notes`` are the note columns of the batch
+    table, but ``name``, and ``columns`` the parameter columns; both change
+    when the batch table does. ``settings`` is the form
     of the settings. ``settings_changed`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
@@ -334,7 +334,7 @@ class SourceChoice(BaseModel):
 
 class SourceRow(BaseModel):
     """
-    A row of the table that a source makes: its key, its ``name`` (as
+    One of the rows of a source: its key, its ``name`` (as
     :class:`Row` has it), the text of each note, and its ``mark``:
     ``waits`` if a cell that the source fills is empty; for a range of a new
     batch, ``taken`` or ``left out``; else empty.

@@ -8,24 +8,24 @@ another view of a batch can call the same actions and render the same
 
 A :class:`Page` holds what a person changes on it: the form of the
 settings and the refusals. It asks :class:`~.pages.Pages` for the rest: the
-:class:`~ess.apps.batch.Batch` of its label with its table and settings, kept
+:class:`~ess.apps.batch.Batch` of its label with its batch table and settings, kept
 by the manager, the corrections of runs, and Follow. The batch and the
 corrections keep their part in their definitions, if given them
 (:mod:`..definition`); a change that the definitions cannot keep is not made,
 and answers a :class:`~.refusals.Problem`.
 
-The page shows the table of the batch as it is kept, without its source and
+The page shows the batch table as it is kept, without its source and
 without the files: a cell that names a file that is not found, or that the
 file source cannot read, is a problem of its row. Each action that changes
 rows builds a frame with one change and gives it to
 :meth:`~ess.apps.batch.Batch.put`: an edit of cells, a row added or removed,
-a table file loaded, which replaces the table. A cell is plain
+a table file loaded, which replaces the batch table. A cell is plain
 data (:mod:`..table`): a value that a picker gives is kept as
 :func:`~..table.cell_of` makes it, and shown as the listing names it. A row is
 named by its note ``name`` if the table has one, else by its key, and "Add
 row" takes its key. "List runs again" lists the files again, for the pickers
 and the Runs view, and changes no row. If the file source raises, the page
-shows the table, the results and the plots all the same: the pickers offer
+shows the batch table, the results and the plots all the same: the pickers offer
 no file, the Runs view is empty, and the state says why
 (:attr:`~.models.State.files_problem`).
 
@@ -42,9 +42,10 @@ unset (:func:`.forms.held`). Settings that the form cannot
 show, such as those kept for another version of the spec, are named in the
 state's ``settings_problem`` and kept until Apply. A ``Page`` writes the
 batch's settings only at Apply and at "Make this a setting": the form does
-not show an assignment by code while the server runs. The columns of the
-table are the blanks of the template, so a table loaded with other columns,
-or a column made a setting or back, changes the parameters of the cells and
+not show an assignment by code while the server runs. The parameter columns of
+the batch table are the blanks of the template, so a table file loaded with
+other columns, or a column made a setting or back, changes the parameters of
+the cells and
 of the form: the page builds both again when the columns of the batch
 change, and the form then shows the batch's settings. So "Make this a
 column", "Make this a setting" and "Load table" are refused while the form
@@ -223,7 +224,7 @@ def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
 
 def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
     """
-    The rows of ``given``, a table that a source makes with a column
+    The rows of ``given``, the rows of a source with a column
     ``waits``, and maybe a column ``taken``, as a dialog lists them: each
     named as :func:`names` names it, with the text of each note, the columns
     but ``fills``, and its mark.
@@ -502,7 +503,10 @@ class Page:
         return self.state()
 
     def _frame(self, keys: Iterable[str] = ()) -> pd.DataFrame:
-        """The table, a copy; a ``Problem`` unless it has a row of each of ``keys``."""
+        """
+        The batch table, a copy; a ``Problem`` unless it has a row of each of
+        ``keys``.
+        """
         frame = self.batch.frame()
         for key in keys:
             if key not in frame.index:
@@ -510,7 +514,7 @@ class Page:
         return frame
 
     def _put(self, frame: pd.DataFrame) -> None:
-        """Make ``frame`` the table; what the batch refuses is a ``Problem``."""
+        """Make ``frame`` the batch table; what the batch refuses is a ``Problem``."""
         try:
             self.batch.put(frame)
         except ValueError as error:
@@ -821,7 +825,7 @@ class Page:
     @_locked
     def offered(self) -> SourceRows:
         """
-        The rows of the source that the table lacks, those that wait marked
+        The rows of the source that the batch table lacks, those that wait marked
         (:meth:`~ess.apps.batch.Intake.offered`), for :meth:`take`;
         what the source refuses is a :class:`~.refusals.Problem`
         (:func:`~.refusals.refused`).
@@ -1128,7 +1132,7 @@ class Page:
 
     @_locked
     def table_file(self, suffix: str) -> bytes:
-        """The table with what came of each row, as a ``.csv`` or ``.xlsx`` file."""
+        """The batch table with what came of each row, as ``.csv`` or ``.xlsx``."""
         batch = self.batch
         table = frames.with_results(batch.client, self._states()[0], batch.frame())
         with named_file(f'rows{suffix}') as path:
@@ -1138,7 +1142,7 @@ class Page:
     @_action
     def load_table(self, name: str, content: bytes) -> str:
         """
-        Make the table of a table file the table of the batch. Its columns may
+        Make the rows of a table file the batch table. Its columns may
         differ, so it is refused while the form holds a change (:meth:`_settled`).
         """
         self._settled()

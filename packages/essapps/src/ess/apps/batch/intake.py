@@ -28,8 +28,8 @@ follows::
 
     made = source_of(label)                                  # source.json
     done = step(batch(label), sources[made.source], made.considered)  # put, reduce
-    source.json = replace(made, considered=done.considered)  # after the table;
-    # if the step raised: made.considered | the keys of the table
+    source.json = replace(made, considered=done.considered)  # after rows.json;
+    # if the step raised: made.considered | the keys of the batch table
 
 Whoever serves owns the timer that calls it, and the lock. ``Intake`` has
 neither.
@@ -84,7 +84,7 @@ def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
 class Intake:
     """
     Brings the rows of row sources into the batches of ``manager``: makes a
-    batch from a source, offers and takes the rows that its table lacks, and
+    batch from a source, offers and takes the rows that its batch table lacks, and
     keeps which batch follows. See ``packages/essapps/docs/batch.md``.
 
     Refusals are as those of :class:`~.manager.BatchManager`: ``ValueError``
@@ -222,7 +222,7 @@ class Intake:
 
     def rows_of(self, source: str) -> pd.DataFrame:
         """
-        The table that the source registered as ``source`` makes from the
+        The rows that the source registered as ``source`` makes from the
         files now (:func:`~.source.rows_of`). Raises ``ValueError`` if no
         source is registered so.
         """
@@ -243,7 +243,7 @@ class Intake:
         choose: Callable[[pd.DataFrame], pd.DataFrame] | None = None,
     ) -> pd.DataFrame:
         """
-        The table that the source registered as ``source`` makes now, with a
+        The rows that the source registered as ``source`` makes now, with a
         column ``waits``, whether the row waits, and a column ``taken``,
         whether :meth:`create` takes it with ``choose``, such as
         ``Range(first='60339')`` (:class:`~.source.Range`); every row that
@@ -279,12 +279,12 @@ class Intake:
 
             given = rows_of(client, source)
             arrived = given[filled]          # a value in each of source.fills
-            table = arrived if choose is None else choose(arrived)
+            rows = arrived if choose is None else choose(arrived)
             considered = arrived.index       # the rows taken and those left out
 
         A row that waits is neither taken nor considered: Follow adds it once
         it is filled, if the batch follows. The batch keeps ``source.fills``
-        (:attr:`.reduction.Batch.fills`): its table keeps a column for each,
+        (:attr:`.reduction.Batch.fills`): its batch table keeps a column for each,
         an empty cell there means that the row waits for its file, and the
         settings given are left out there.
 
@@ -305,9 +305,9 @@ class Intake:
             As :meth:`~.manager.BatchManager.create` takes them.
         source:
             The name of a registered source to take the rows from. The batch
-            keeps it, to offer the rows that its table lacks and to follow.
+            keeps it, to offer the rows that its batch table lacks and to follow.
         choose:
-            Makes the table of the batch from the rows of the source that are
+            Makes the batch table from the rows of the source that are
             filled: some of its rows, with any columns, such as
             ``lambda given: given[given.run >= 60339].assign(thickness=pd.NA)``,
             or a range of them as a person picks it, such as
@@ -406,7 +406,7 @@ class Intake:
         which rows wait.
 
         If the step raises, such as when a submission is cut off after the
-        rows were added, the keys of the table are kept as considered:
+        rows were added, the keys of the batch table are kept as considered:
         otherwise a row that it added and a person removes would come back.
 
         Raises ``ValueError`` if the source of the batch is not registered,
@@ -435,7 +435,7 @@ class Intake:
     def offered(self, label: str) -> pd.DataFrame:
         """
         The rows that the source of the batch of ``label`` makes now and its
-        table lacks, with the columns of the source and a column ``waits``:
+        batch table lacks, with the columns of the source and a column ``waits``:
         whether a cell of the batch's :attr:`~.reduction.Batch.fills` is
         empty, so that Follow adds the row once it is filled, unless it is
         considered.
@@ -462,12 +462,12 @@ class Intake:
     def take(self, label: str, keys: Iterable[str]) -> None:
         """
         Add the rows of ``keys`` to the batch of ``label``, as its source
-        makes them now, with the columns of its table; then consider them, so
+        makes them now, with the columns of its batch table; then consider them, so
         that Follow does not add them again once removed.
 
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if it
         was not made from a source, if its source is not registered or makes
-        no row of a key, or if its table has a row of a key.
+        no row of a key, or if its batch table has a row of a key.
         """
         made = self._made(label)
         given = self.rows_of(made.source)

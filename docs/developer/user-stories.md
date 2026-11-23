@@ -659,7 +659,7 @@ def iofq_batch(client):
 
 Actor: reflectometry user during a beamtime. Goal: after each angle, the newest row of a sample is its curve with all angles so far.
 
-The source gives one row per sample: its runs so far, under a key that names the sample and its runs. A list that grows is a new row, which Follow adds and reduces as any row ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "A step never changes a row that the table has"). The earlier rows stay with their results. The key names the whole list, so runs listed out of order give a new row too.
+The row source gives one row per sample: its runs so far, under a key that names the sample and its runs. A list that grows is a new row, which Follow adds and reduces as any row ([ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md), "A step never changes a row that the table has"). The earlier rows stay with their results. The key names the whole list, so runs listed out of order give a new row too.
 
 ```python
 reference = measure(1, [1.0, 1.0], role='reference')
@@ -732,7 +732,7 @@ files.add_published(scicat.entries[pid])
 assert step(batch, PER_RUN, first.considered).records == {}
 ```
 
-A published entry is a file of kind `'derived'`, and a batch's source is given only raw files unless its selector names another kind.
+A published entry is a file of kind `'derived'`, and a batch's row source is given only raw files unless its selector names another kind.
 
 ### E4. Template improved during a beamtime
 

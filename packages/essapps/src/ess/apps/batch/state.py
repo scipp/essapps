@@ -29,9 +29,9 @@ whose request differs from the row's only at settings so counted is reduced
 with *earlier settings* (:attr:`RowState.earlier`): it reads ``earlier``, and
 :func:`left_to_reduce` leaves it until a person reduces it again. A row whose
 own cell changed reads ``outdated``. Which cells are empty is read from the
-table now, so a cell emptied after the row was reduced counts as a setting.
+batch table now, so a cell emptied after the row was reduced counts as a setting.
 
-Automatic reduction reduces the rows of :func:`not_reduced`: ready, and
+A step of Follow reduces the rows of :func:`not_reduced`: ready, and
 without a result. A row with a result is left to a person, whether it is
 outdated, failed or cancelled.
 """
@@ -83,7 +83,7 @@ class RowState:
     @property
     def text(self) -> str:
         """
-        The status of the row, as the page, a table written and the command
+        The status of the row, as the page, a table file written and the command
         say it: ``running``, ``incomplete``, ``ready`` (no result),
         ``failed``, ``cancelled``, ``done``, ``earlier`` or ``outdated``. A
         failed or cancelled result reads as its status whether or not the
@@ -259,7 +259,7 @@ def to_reduce(states: Mapping[str, RowState], which: Which) -> list[str]:
 
 def not_reduced(states: Mapping[str, RowState]) -> list[str]:
     """
-    The ready rows with no result: the rule of automatic reduction. A row with
+    The ready rows with no result: the rule of Follow. A row with
     a result is left to a person, also one that is outdated, failed or was
     cancelled. ``changed`` is not read, so ``states`` may be compared or not.
     """

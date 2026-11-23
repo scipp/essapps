@@ -14,14 +14,14 @@ the counts (:meth:`Pages.counts`), which read the state of every batch.
 
 The pages share one listing of what the client lists (:attr:`Pages.listing`):
 the files, with their metadata, and the records. A page asks to list again
-(:meth:`Pages.list_again`) when the records or its table changed, at a step
+(:meth:`Pages.list_again`) when the records or its batch table changed, at a step
 of Follow, at "List runs again", and as it is made; :class:`Pages` counts
 the changes of the files and of why they cannot be listed
 (:attr:`Pages.files_version`), which every page compares at its poll.
 The runs are the files, the same on every page (:meth:`Pages.runs`), and a
 person corrects them on any page, with or without a batch
 (:meth:`Pages.correct`). A correction changes no row of a batch: a
-table names files, and the page shows each with its metadata now. The Runs
+batch table names files, and the page shows each with its metadata now. The Runs
 view names the batches of each run from the files that each batch names,
 which come with the counts (:meth:`Pages.counts`), since Follow adds rows
 without a change of the runs.
@@ -32,7 +32,8 @@ that :meth:`Pages.sources` offers, in one of three ways
 now (:meth:`Pages.rows_of`); from a table file; or without rows. Made from
 the page of a batch, it may start with the settings of that batch. A batch
 made from a source may follow it from then on, in place of the batch that
-followed before; no other action makes a batch follow. The manager and the
+followed before; no other action of the page makes a batch follow
+(:meth:`~ess.apps.batch.Intake.follow` does, for the command). The manager and the
 intake decide what can be made. With no batch at all, the page is served
 without one: it shows the list of batches and the runs. So is the page of a
 batch that cannot be made (:meth:`Pages.page`), with the reason, and that of
@@ -206,7 +207,7 @@ class Pages:
         :class:`~.refusals.Missing` if no batch has the label
         (:meth:`check`), and :class:`~.refusals.Problem` if its batch cannot
         be made, such as when the workspace binds no spec of its name, or its
-        table cannot be read (:meth:`~ess.apps.batch.BatchManager.batch`).
+        batch table cannot be read (:meth:`~ess.apps.batch.BatchManager.batch`).
         """
         with self.lock:
             self.check(label)
@@ -523,7 +524,7 @@ class Pages:
         later: bool = False,
     ) -> SourceRows:
         """
-        The table that the source registered as ``source`` makes now, each
+        The rows that the source registered as ``source`` makes now, each
         row marked as taken, left out, or waiting, for a new batch of the
         :class:`~ess.apps.batch.Range` of ``first``, ``last`` and ``later``
         (:meth:`~ess.apps.batch.Intake.marked`). Raises
@@ -545,8 +546,8 @@ class Pages:
         :class:`~ess.apps.batch.Range` of ``new.first``, ``new.last`` and
         ``new.later`` of those that the source has filled now, with an empty
         column for each other of ``new.columns``; with a table ``file``, its
-        name and content, of its table
-        (:func:`~ess.apps.batch.table.read_table`); else of a table of
+        name and content, of its rows
+        (:func:`~ess.apps.batch.table.read_table`); else of a batch table of
         ``new.columns`` without rows. With ``new.follow``, the batch follows
         from then on, in place of the batch that followed before, and the
         timer steps it. The batch layer decides which ranges it takes.
@@ -629,7 +630,7 @@ class Pages:
         The state of each batch is read as its page reads it, without asking
         its source, and not compared while its settings are refused
         (:meth:`~ess.apps.batch.Batch.shown`). A batch that
-        cannot be made, such as one whose table cannot be read, has its
+        cannot be made, such as one whose batch table cannot be read, has its
         reason in ``failed``, and names no files.
         """
         with self.lock:

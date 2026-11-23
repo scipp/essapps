@@ -13,8 +13,8 @@ These are used here:
 - A *batch* is one spec reduced for the rows of a table, with settings shared by all rows. ADR 0012 says what it holds.
 - The *label* of a batch names it and its results: a row's result is the newest record under the label with the row's key.
 - The *header* of a batch is its title and its description.
-- The *definitions* are what a workspace keeps besides files and records: per label, the header, the settings and the table of a batch.
-- A *source* is code of the application that makes rows from the files.
+- The *definitions* are what a workspace keeps besides files and records: per label, the header, the settings and the table of a batch, and the `source.json` of a batch made from a row source.
+- A *row source* (`RowSource`), the *source* for short, is code of the application that makes rows from the files.
 - *Follow* reduces a batch as its runs arrive, by a *step* every few seconds. ADR 0013 says what a step does.
 
 One batch per workspace leaves three things a person cannot do:
@@ -58,13 +58,13 @@ What the application gives once, and what a person chooses for each batch:
 | Part | Given by |
 |---|---|
 | spec | a person, from the specs that the workspace binds (`client.specs()`); the name is kept, the version is the one bound, the highest if several are ([ADR 0009](0009-a-record-of-another-spec-stays-readable.md)) |
-| source | a person, from the sources that the application registers by name (`Intake(sources=...)`), or none |
+| row source | a person, from the row sources that the application registers by name (`Intake(sources=...)`), or none |
 | title, description | a person |
 | label | the manager |
 | first settings, `staged` | the application, for each spec (`BatchManager(settings=..., staged=...)`) |
 | `draw`, `files`, `marks`, `interval`, `title` | the application, for all batches (`Pages`) |
 
-A source is written for the parameter names of a spec.
+A row source is written for the parameter names of a spec.
 So a batch is made with a source only if each column that the source fills is a parameter of the spec (`fits`): `sample-runs` fills `sample` and `sample_transmission`, and fits `loki-iofq`.
 
 ### A label is made by the manager and used once
@@ -97,12 +97,13 @@ Nothing checks that the batches cover every row or that they do not overlap.
 intake.create(..., source='sample-runs', follow=True)    # this batch follows, and no other
 intake.following                                         # its label, or None
 intake.stop()                                            # none follows
+intake.follow(label)                                     # this batch follows again, and no other
 intake.step()                                            # one step of Follow on it (ADR 0013)
 ```
 
-- Making a batch that follows stops the batch that followed before, first, so at most one batch follows.
+- Making a batch that follows, or `intake.follow(label)`, stops the batch that followed before, first, so at most one batch follows.
 - `Intake` keeps it in the definitions of the batch (`"follows"` in its `source.json`), so a restart resumes, and removing the batch that follows ends Follow, also for a batch made again with the label.
-- Whoever serves the pages owns the timer that calls `step`. `Intake` has no thread, no timer and no lock.
+- Whoever serves the pages owns the timer that calls `step`; without a page, the command `essapps-batch follow` does. `Intake` has no thread, no timer and no lock.
 - The workspace has one lock: every request of every page and each step take it, so the batches, the manager and the corrections change in one request at a time.
 
 ### A page shows one batch, named in its URL
@@ -162,7 +163,7 @@ If it is built, the labels and the URL change: a label per workflow, such as `20
 - A person ends a series by making the next batch. The settings of the batch before stay as they are, so its rows do not read `earlier` when the next series gets other settings.
 - A person looks at one batch while another runs. All batches share the workspace's queue, so a long reduction still delays the batch that follows (see Open).
 - Problem 3 stays as it is for batches made in code, and is not available for batches that a person makes.
-- Follow belongs to the application that serves all batches. The application owns the timer, and steps the batch that follows under the lock of the pages.
+- Follow belongs to the application that serves all batches, or to the command `essapps-batch follow` while no application holds the folder. The application owns the timer, and steps the batch that follows under the lock of the pages.
 - Only the batch that follows lists its source at each step, so the cost of a step does not grow with the number of batches. A cache of the metadata of each file belongs in the file source, below the batches.
 - A batch that holds one series has tens to hundreds of rows, so the cost per row of [#223](https://github.com/scipp/essapps/issues/223) does not arise. The cost per file stays.
 - The preparatory reductions of LoKI (detector, masks) are batches without a source, with one row.

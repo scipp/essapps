@@ -21,7 +21,7 @@ gets the form again.
 A picker's value travels as the label of its option, so a page never holds a
 file reference: the server maps a label back to its value.
 
-A cell of a batch's table is edited with the field of its column
+A cell of a batch table is edited with the field of its column
 (:func:`editor`, :func:`read`), so a cell takes what the form would.
 """
 

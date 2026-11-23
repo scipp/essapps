@@ -4,7 +4,7 @@
 Templates as a person writes them: YAML files (see :func:`load_template`).
 
 At a parameter that takes a file, or a list of them, a file is named as in a
-cell of a table (:func:`~.table.as_request`)::
+cell of a batch table (:func:`~.table.as_request`)::
 
     sample: run:60339           the file of that name
     sample: 60339               the run 60339
@@ -18,8 +18,8 @@ A file that is written before the records it reads exist names them by label
 
     masks: {'@latest': masks, output: masks}
 
-:func:`settings_text` writes the settings of a batch, those at its columns
-included, as a template, with each file and reference in its JSON form, which
+:func:`settings_text` writes the settings of a batch, those at its parameter
+columns included, as a template, with each file and reference in its JSON form, which
 reads back as the same, the form of ``settings.json`` of a batch
 (:mod:`.definition`). :func:`checked_settings` reads settings from a
 template, which must be of the spec and its version.
@@ -110,7 +110,7 @@ def checked_settings(
     The settings of ``spec`` that ``template`` holds: the value of each
     parameter, with files named as in a cell (:func:`~.table.as_request`) and
     ``@latest`` read (:func:`with_latest`) on ``client``. Its blanks are not
-    read: the columns of a batch are its blanks, and a value at a column is
+    read: the parameter columns of a batch are its blanks, and a value at one is
     the setting that each row with an empty cell takes
     (:attr:`~.reduction.Batch.settings`).
 
@@ -144,7 +144,7 @@ _NOT_AN_OUTPUT = (
 
 def settings_text(batch: Batch) -> str:
     """
-    The settings of ``batch``, those at its columns included, as the YAML of
+    The settings of ``batch``, those at its parameter columns included, as the YAML of
     a template that :func:`load_template` reads back.
     """
     template = Template(batch.spec, params=batch.settings)
@@ -186,7 +186,8 @@ def template_to_fill(
     :func:`load_template` reads: each parameter with a comment that says
     whether it is required or its default, what it takes, and its
     description; a parameter that takes an output names the outputs of
-    ``bound`` that fit it, and one that a row of ``sources`` fills says so.
+    ``bound`` that fit it, and one that a row source of ``sources`` fills says
+    so.
     Every parameter is commented out, one with a default showing it.
     """
     filled: dict[str, list[str]] = {}

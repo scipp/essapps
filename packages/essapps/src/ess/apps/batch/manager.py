@@ -8,13 +8,13 @@ workspace" of ``packages/essapps/docs/batch.md``; the decisions are
 ``docs/developer/adr/0011``, ``0012`` and ``0013``.
 
 A batch is a label with a header. A :class:`~.reduction.Batch` is the object
-that holds its template and its table; the manager makes the one ``Batch`` of
+that holds its template and its batch table; the manager makes the one ``Batch`` of
 each batch. A batch is kept as these tables of the definitions
 (:mod:`.definition`), each with one writer::
 
     header      title, description                      BatchManager
     settings    the template, with the fills as blanks  the Batch
-    rows        the table                               the Batch
+    rows        the batch table                         the Batch
     source      the source, the keys considered, and    Intake; only for a
                 whether the batch follows               batch made from a source
 
@@ -172,8 +172,8 @@ class BatchManager:
         title:
             What the batch is called.
         rows:
-            The first table, as :meth:`~.reduction.Batch.put` takes it; its
-            parameter columns are the blanks of the template. A table without
+            The first batch table, as :meth:`~.reduction.Batch.put` takes it;
+            its parameter columns are the blanks of the template. One without
             rows or columns if not given.
         fills:
             The parameters that a row source fills
@@ -182,8 +182,9 @@ class BatchManager:
             that the row waits for its file, and the settings given are left
             out there (:meth:`.reduction.Batch.settable`).
         columns:
-            Parameters that are columns of the batch, of empty cells, besides
-            those of ``rows``; a column of ``rows`` keeps its cells.
+            Parameters that are parameter columns of the batch, of empty
+            cells, besides those of ``rows``; a column of ``rows`` keeps its
+            cells.
         description:
             What a person says of the batch.
         settings:
@@ -201,7 +202,7 @@ class BatchManager:
             digits, ``_``, ``.`` and ``-``, starting with none of the last
             two, or has definitions or records; if the workspace binds no
             spec ``spec``; or if the rows are refused, as ``put`` refuses
-            them, also for a table without a column of ``fills``.
+            them, also for a batch table without a column of ``fills``.
         """
         self.check(spec, title=title, label=label)
         if label is None:
@@ -277,8 +278,8 @@ class BatchManager:
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if the
         workspace binds no spec of the name of its settings, or if its
         settings or rows cannot be read. A version of the spec that takes
-        another kind of value at a column of the table, or that has a
-        parameter of the name of a note, refuses the cells of the table, and
+        another kind of value at a column of the batch table, or that has a
+        parameter of the name of a note, refuses the cells of the batch table, and
         the batch cannot be shown either.
 
         The blanks of the settings kept are the parameters that the source of

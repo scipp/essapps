@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A batch run as a command: reduce its rows, wait, and return its table with
-what came of each row. It needs pandas.
+A batch run as a command: reduce its rows, wait, and return its batch table
+with what came of each row. It needs pandas.
 
-The table is the frame of a batch (:mod:`.table`): the key of each row as
+The batch table is the frame of a batch (:mod:`.table`): the key of each row as
 index, a column per blank, and notes. :func:`reduce_table` reduces a table
 with a template, keeping nothing; :func:`reduce_batch` reduces the rows of a
 batch, such as one of a manager. Both return the table with the columns of
@@ -14,7 +14,7 @@ batch, such as one of a manager. Both return the table with the columns of
     60339  run:60339  water   done    3f2a...
     60340  run:60340  sds     failed  81c0...   refused: ...
 
-:func:`described` gives the table of files of a folder what a person's run
+:func:`described` gives the files table of a folder what a person's run
 table says of each file.
 """
 
@@ -50,7 +50,7 @@ def _text(cell: Any) -> str:
 
 def described(files: pd.DataFrame, run_table: pd.DataFrame) -> pd.DataFrame:
     """
-    The table of files (see :func:`..folder.scan_folder`) with what a person's
+    The files table (see :func:`..folder.scan_folder`) with what a person's
     table says of each: its role, its sample, or any other column.
 
     A row of ``run_table`` describes the file of its ``run``, or, if that cell

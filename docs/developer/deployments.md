@@ -89,7 +89,7 @@ The process holds a workspace for each proposal that has new files.
 It runs with no page open, and users find its results through SciCat, not by connecting to it.
 For the first release, the same process may run on a VISA machine ([requirements](../requirements/users.md)).
 A scientist who needs a variant of the automatic reduction runs a batch.
-Of this deployment, only Follow exists (`ess.apps.batch.auto`, [automatic-reduction.md](automatic-reduction.md)).
+Of this deployment, only Follow exists ([automatic-reduction.md](automatic-reduction.md)): `Intake` keeps which batch follows and the keys it has considered, its `step` calls `ess.apps.batch.auto.step` on that batch, and the timer of the batch page or the command `essapps-batch follow` calls `Intake.step` every few seconds.
 
 ## One proposal, several histories
 
