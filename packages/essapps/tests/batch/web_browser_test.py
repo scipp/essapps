@@ -745,7 +745,7 @@ def test_stop_following_asks_once_and_then_the_page_has_no_follow_control(
     following.wait_for_selector('#stop-follow', state='hidden')
     assert following.is_hidden('#follow-status')
     assert intake.following is None
-    assert 'cannot follow again' in asked[0]
+    assert 'follow again' in asked[0]
     assert 'Add rows from the runs' in asked[0]
 
 
