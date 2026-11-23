@@ -71,7 +71,7 @@ from ...files import Selector
 from ...listing import Listing
 from ..auto import Step
 from ..corrections import CorrectedFiles
-from ..intake import Intake, fits
+from ..intake import Intake, fits, step_failure
 from ..source import Range, RowSource
 from ..state import RowState, not_reduced
 from ..table import read_table
@@ -265,7 +265,7 @@ class Pages:
                 self._last = (label, done)
                 self._failure = None
             except Exception as error:  # the next step tries again
-                self._failure = f'Follow could not step: {said(error)}'
+                self._failure = step_failure(error)
             self.page(label).stepped()
 
     @property

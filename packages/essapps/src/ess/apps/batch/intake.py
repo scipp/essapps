@@ -46,6 +46,7 @@ import pandas as pd
 
 from ess.spec import WorkflowSpec
 
+from ..errors import said
 from . import auto
 from .auto import SourceError, Step
 from .definition import (
@@ -74,6 +75,15 @@ def _lacked(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> list[str]
     """The parameters that ``source`` fills and ``spec`` lacks."""
     fills = () if source is None else source.fills
     return [f for f in fills if f not in spec.params.model_fields]
+
+
+def step_failure(error: Exception) -> str:
+    """
+    What a person reads of a step of Follow (:meth:`Intake.step`) that raised
+    ``error``: ``Follow could not step: `` and what
+    :func:`~ess.apps.errors.said` says of it.
+    """
+    return f'Follow could not step: {said(error)}'
 
 
 def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:

@@ -152,7 +152,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
 from .export import export_table
-from .intake import Intake
+from .intake import Intake, step_failure
 from .manager import BatchManager
 from .reduction import Batch
 from .source import Range, RowSource
@@ -646,8 +646,8 @@ def follow(
     ``say`` is given the reductions that ended in it.
 
     A step may raise anything, as the code of the source may
-    (:meth:`.intake.Intake.step`). It is said on stderr
-    (:func:`~ess.apps.errors.said`), once while the message stays the same,
+    (:meth:`.intake.Intake.step`). It is said on stderr as the page says it
+    (:func:`.intake.step_failure`), once while the message stays the same,
     and the next step tries again, as on the page; but a workspace that
     stopped (:class:`~ess.apps.errors.Stopped`) is raised, since no step can
     work on it.
@@ -684,16 +684,17 @@ def follow(
             break
         done += 1
         before = set(batch.frame().index)
-        error = None
+        error = None  # why the step raised, for the line
+        told = ''  # what stderr says of it
         try:
             # None only if no batch follows, which this process alone changes.
             stepped = intake.step()
         except Stopped:
             raise
         except Exception as raised:  # code of the application, as on the page
-            stepped, error = None, said(raised)
+            stepped, error, told = None, said(raised), step_failure(raised)
         if fresh := error is not None and error != failed:
-            sys.stderr.write(f'Follow could not step: {error}\n')
+            sys.stderr.write(f'{told}\n')
         failed = error
         if stepped is None:
             added: list[str] = []
