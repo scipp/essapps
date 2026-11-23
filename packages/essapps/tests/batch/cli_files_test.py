@@ -9,7 +9,10 @@ import pytest
 
 from ess.apps.batch.cli import main
 
-from .conftest import SOURCES
+from .conftest import (
+    SOURCES,
+    write_rows,
+)
 
 
 @pytest.fixture
@@ -122,3 +125,20 @@ def test_a_table_of_files_in_error_is_refused_before_a_command_runs(
     assert main([*command, *SOURCES, 'rows', 'pairs']) == 2
 
     assert said in capsys.readouterr().err
+
+
+def test_main_writes_the_table_of_files_that_a_later_command_opens_the_folder_with(
+    folder: Path, command: list[str], cli_template: Path
+) -> None:
+    reader = 'def read(path):\n'
+    reader += "    if path.suffix == '.json':\n"
+    reader += "        return {'run': path.stem.removeprefix('run-')}\n"
+    (folder / 'cli_toys_read_files.py').write_text(reader)
+    (folder / 'files.csv').unlink()
+    table = write_rows(folder, ['1', '2'])
+
+    out = str(folder / 'files.csv')
+    scanned = main(['-w', str(folder), 'files', 'cli_toys_read_files:read', '-o', out])
+    reduced = main([*command, 'reduce', str(cli_template), str(table), '-l', 'scan'])
+
+    assert (scanned, reduced) == (0, 0)

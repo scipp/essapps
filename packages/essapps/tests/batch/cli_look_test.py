@@ -231,3 +231,54 @@ def test_export_of_a_label_writes_the_outputs_of_its_rows_as_they_stand(
 
     assert code == 0
     assert [Path(p).is_file() for p in read_text(out)['total']] == [True, True]
+
+
+def test_the_rows_that_main_makes_from_the_files_are_a_table_to_reduce(
+    command: list[str], cli_template: Path, folder: Path
+) -> None:
+    runs = folder / 'runs.csv'
+    out = folder / 'results.csv'
+
+    assert main([*command, *SOURCES, 'rows', 'pairs', '-o', str(runs)]) == 0
+    code = main(
+        [*command, 'reduce', str(cli_template), str(runs), '-l', 'x', '-o', str(out)]
+    )
+
+    result = read_text(out)
+    assert code == 0
+    assert list(result['key']) == ['1', '2', '3']
+    assert list(result['status']) == ['done'] * 3
+
+
+def test_the_template_of_a_spec_is_refused_naming_each_required_parameter(
+    command: list[str], toy_template: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert load_template(toy_template) == Template(
+        import_module('cli_toys_batch_files').SPEC
+    )
+
+    assert main([*command, 'reduce', str(toy_template), '-l', 'x']) == 2
+    assert 'sample: a required parameter, not given' in capsys.readouterr().err
+
+
+def test_the_template_of_a_spec_filled_in_reduces(
+    command: list[str], toy_template: Path
+) -> None:
+    toy_template.write_text(toy_template.read_text().replace('#sample:', 'sample: 1'))
+
+    assert main([*command, 'reduce', str(toy_template), '-l', 'x']) == 0
+
+
+def test_a_file_in_a_group_is_written_as_the_template_says(
+    command: list[str], folder: Path
+) -> None:
+    path = folder / 'pair.yaml'
+    assert main([*command, 'template', 'cli-pair', '-o', str(path)]) == 0
+    said = "  #   sample (required): a run, written {'@ref': file, file: ...}."
+    filled = "  pair: {sample: {'@ref': file, file: run:1}}"
+
+    lines = path.read_text().splitlines()
+    path.write_text(path.read_text().replace('  #pair:', filled))
+
+    assert said in lines
+    assert main([*command, 'reduce', str(path), '-l', 'x']) == 0
