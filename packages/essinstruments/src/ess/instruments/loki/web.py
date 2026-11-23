@@ -50,7 +50,8 @@ reduces it, until a person clicks "Stop following" or makes another batch
 that follows. A step never changes a row that the table has: a newer
 transmission run of its sample does not replace the one in its cell. A row
 with a result waits for the person's "Reduce". The batch that follows is
-kept, so a restart resumes.
+kept, so a restart resumes. Without a page, ``essapps-batch -s
+ess.instruments.loki.batch:SOURCES ... follow -l LABEL`` runs the steps.
 """
 
 from __future__ import annotations
