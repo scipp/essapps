@@ -486,7 +486,7 @@ class Intake:
         try:
             given = self._given(source, batch.fills)
         except ValueError as error:  # as step says it
-            raise ValueError(f'the source {made.source}: {error}') from error
+            raise ValueError(f'the source {made.source}: {said(error)}') from error
         return given[~given.index.isin(batch.frame().index)]
 
     def take(self, label: str, keys: Iterable[str]) -> None:

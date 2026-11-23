@@ -197,6 +197,17 @@ def pair(files):
 PAIRS = RowSource(pair, fills=('sample',), description='A row per sample run.')
 BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
 SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
+
+
+class Metadata(BaseModel):
+    run: int
+
+
+REFUSING = {
+    'refusing': RowSource(
+        lambda files: Metadata.model_validate({'run': 'water'}), fills=('sample',)
+    )
+}
 '''
 
 
@@ -977,6 +988,17 @@ def test_a_row_source_that_is_not_registered_is_refused_as_the_intake_says(
     assert FolderDefinitions(folder).labels() == []
 
 
+def test_main_says_metadata_that_a_row_source_refuses_at_its_fields(
+    command: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = main([*command, '-s', 'cli_toys_batch_files:REFUSING', 'rows', 'refusing'])
+
+    assert code == 2
+    assert capsys.readouterr().err == (
+        'run must be a valid integer, unable to parse string as an integer\n'
+    )
+
+
 def test_main_refuses_reduce_without_a_label(
     command: list[str], cli_template: Path
 ) -> None:
@@ -1710,8 +1732,9 @@ def following(intake: Intake, sample: toys.Measure) -> Batch:
     [
         (ValueError('no'), 'the source pairs: no'),
         (RuntimeError('boom'), 'RuntimeError: boom'),
+        (toys.refused_metadata(), f'the source pairs: {toys.REFUSED_METADATA}'),
     ],
-    ids=['refusal', 'defect'],
+    ids=['refusal', 'defect', 'metadata refused'],
 )
 def test_a_step_that_raises_is_said_while_it_changes_and_the_steps_go_on(
     manager: BatchManager,

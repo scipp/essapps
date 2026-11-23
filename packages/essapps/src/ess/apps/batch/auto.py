@@ -55,7 +55,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from ..errors import SubmitError
+from ..errors import SubmitError, said
 from ..records import Record
 from .reduction import Batch
 from .source import RowSource, filled, rows_of
@@ -150,7 +150,7 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
         if len(new):
             batch.put(pd.concat([table, new]))
     except ValueError as error:
-        raise SourceError(str(error)) from error
+        raise SourceError(said(error)) from error
     now = frozenset(considered) | set(new.index) | (set(given.index) & set(table.index))
     # Only the rows without a result are compared: a step reduces no other.
     candidates = not_reduced(batch.state(compare=False))

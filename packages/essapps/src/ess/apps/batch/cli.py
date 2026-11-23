@@ -1247,7 +1247,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f'{error}\n')
         return 1
     except (SubmitError, ValueError) as error:  # also definitions of another format
-        sys.stderr.write(f'{error}\n')
+        sys.stderr.write(f'{said(error)}\n')  # a ValidationError of the source too
         return 2
     if isinstance(result, int):
         return result

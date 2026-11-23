@@ -674,6 +674,21 @@ def test_a_tick_after_follow_moved_steps_the_batch_that_follows_now(
     assert [(r.label, r.member) for r in client.records()] == [(other, '1')]
 
 
+def test_metadata_that_the_source_refuses_at_a_step_is_said_at_its_fields(
+    page: Page, pages: Pages, fake: FakeFiles
+) -> None:
+    error = toys.refused_metadata()
+    fake.list = lambda selector: (_ for _ in ()).throw(error)
+
+    pages.tick()
+
+    following = page.state().follow
+    assert following is not None
+    assert following.failure == (
+        f'Follow could not step: the source pairs: {toys.REFUSED_METADATA}'
+    )
+
+
 def test_the_failure_of_a_step_shows_on_the_page_of_the_batch_that_follows_only(
     page: Page, pages: Pages, intake: Intake, fake: FakeFiles
 ) -> None:
