@@ -28,7 +28,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from ess.apps import Client
-from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Header
+from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Header, Intake
 from ess.apps.batch.definition import rows_key
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
@@ -78,10 +78,10 @@ def batch(manager: BatchManager, label: str) -> Batch:
 
 
 @pytest.fixture
-def pages(manager: BatchManager, files: CorrectedFiles) -> Pages:
+def pages(intake: Intake, files: CorrectedFiles) -> Pages:
     """The pages, with a step of Follow every 0.2 s while a batch follows."""
     return Pages(
-        manager,
+        intake,
         interval=0.2,
         draw={STAGED.name: draw},
         files=files,
@@ -702,9 +702,9 @@ def test_a_click_on_a_row_mostly_shown_at_the_bottom_does_not_scroll(
 
 
 @pytest.fixture
-def following(browser: Any, pages: Pages, manager: BatchManager) -> Iterator[Any]:
+def following(browser: Any, pages: Pages, intake: Intake) -> Iterator[Any]:
     """The page of the batch ``scan`` with no rows yet, made to follow."""
-    toys.from_pairs(manager, STAGED.name, title='Scan', label='scan', follow=True)
+    toys.from_pairs(intake, STAGED.name, title='Scan', label='scan', follow=True)
     with serve(create_app(pages)) as url:
         page = browser.new_page(viewport={'width': 1440, 'height': 900})
         errors: list[str] = []
@@ -728,7 +728,7 @@ def test_while_a_batch_follows_rows_appear_and_are_reduced_without_a_click(
 
 
 def test_stop_following_asks_once_and_then_the_page_has_no_follow_control(
-    following: Any, manager: BatchManager
+    following: Any, intake: Intake
 ) -> None:
     asked: list[str] = []
 
@@ -738,21 +738,21 @@ def test_stop_following_asks_once_and_then_the_page_has_no_follow_control(
 
     following.on('dialog', answer)
     following.click('#stop-follow')
-    assert manager.following == 'scan'
+    assert intake.following == 'scan'
 
     following.click('#stop-follow')
 
     following.wait_for_selector('#stop-follow', state='hidden')
     assert following.is_hidden('#follow-status')
-    assert manager.following is None
+    assert intake.following is None
     assert 'cannot follow again' in asked[0]
     assert 'Add rows from the runs' in asked[0]
 
 
 def test_a_batch_that_does_not_follow_has_no_follow_control(
-    page: Any, manager: BatchManager
+    page: Any, intake: Intake
 ) -> None:
-    toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
+    toys.from_pairs(intake, STAGED.name, title='Other', follow=True)
 
     page.click('[data-view=batches]')
 
@@ -987,12 +987,12 @@ def asked(page: Any, part: str, seconds: float) -> int:
     return len(urls)
 
 
-def make_second(manager: BatchManager, *, follow: bool = False) -> str:
+def make_second(intake: Intake, *, follow: bool = False) -> str:
     """
     A second batch, ``other``, of the row ``2`` of the source, sds, with a
     thickness of 5; the batch ``scan`` has the same row, with no thickness.
     """
-    return manager.create(
+    return intake.create(
         STAGED.name,
         title='Other',
         description='The second series',
@@ -1000,13 +1000,13 @@ def make_second(manager: BatchManager, *, follow: bool = False) -> str:
         choose=lambda given: given.loc[['2']].assign(thickness=5.0),
         label='other',
         follow=follow,
-    )
+    ).label
 
 
 @pytest.fixture
-def second(manager: BatchManager, url: str) -> str:
+def second(intake: Intake, url: str) -> str:
     """The batch of :func:`make_second`, made after the page is served."""
-    return make_second(manager)
+    return make_second(intake)
 
 
 KEEP = 'window.kept = true'
@@ -1028,9 +1028,9 @@ def shows(page: Any, title: str) -> None:
 
 
 def test_a_click_on_a_title_shows_its_batch_in_place_in_the_rows_view(
-    page: Any, manager: BatchManager
+    page: Any, intake: Intake
 ) -> None:
-    second = make_second(manager, follow=True)
+    second = make_second(intake, follow=True)
     page.evaluate(KEEP)
     page.click('[data-tab=settings]')
     page.click('[data-view=batches]')
@@ -1491,7 +1491,7 @@ def fill_new_batch(page: Any, title: str) -> None:
 
 
 def test_a_person_makes_a_batch_and_lands_on_its_page(
-    page: Any, manager: BatchManager
+    page: Any, manager: BatchManager, intake: Intake
 ) -> None:
     page.click('[data-view=batches]')
     page.click('#new-batch-open')
@@ -1510,7 +1510,7 @@ def test_a_person_makes_a_batch_and_lands_on_its_page(
         'transmission',
         'thickness',
     )
-    assert manager.following is None  # Follow is off unless ticked
+    assert intake.following is None  # Follow is off unless ticked
     assert page.is_hidden('#stop-follow')
 
 
@@ -1535,9 +1535,9 @@ def test_a_batch_made_after_apply_starts_with_the_settings_applied(
 
 
 def test_a_batch_made_with_follow_follows_in_place_of_the_one_named_at_the_box(
-    page: Any, manager: BatchManager
+    page: Any, manager: BatchManager, intake: Intake
 ) -> None:
-    toys.from_pairs(manager, STAGED.name, title='Other', follow=True)
+    toys.from_pairs(intake, STAGED.name, title='Other', follow=True)
     page.click('[data-view=batches]')
     page.click('#new-batch-open')
     page.wait_for_selector('#new-follow-other:text-is("Other follows.")')
@@ -1557,7 +1557,7 @@ def test_a_batch_made_with_follow_follows_in_place_of_the_one_named_at_the_box(
     page.wait_for_selector('#title:has-text("Evening")')
     page.wait_for_selector('#stop-follow:not([hidden])')
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Evening')
-    assert manager.following == label
+    assert intake.following == label
 
 
 def test_follow_opens_the_end_of_the_range(page: Any, manager: BatchManager) -> None:
@@ -1580,7 +1580,7 @@ def test_follow_opens_the_end_of_the_range(page: Any, manager: BatchManager) -> 
 
 
 def test_a_batch_of_the_rows_that_arrive_later_is_made_without_rows_and_follows(
-    page: Any, manager: BatchManager
+    page: Any, manager: BatchManager, intake: Intake
 ) -> None:
     page.click('[data-view=batches]')
     page.click('#new-batch-open')
@@ -1600,7 +1600,7 @@ def test_a_batch_of_the_rows_that_arrive_later_is_made_without_rows_and_follows(
     page.wait_for_selector('#title:has-text("Later")')
     page.wait_for_selector('#stop-follow:not([hidden])')
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Later')
-    assert manager.following == label
+    assert intake.following == label
     assert manager.batch(label).frame().empty
     said = 'No rows yet. Follow adds the rows of the runs that arrive.'
     page.wait_for_selector(f'#rows .empty:text-is("{said}")')
@@ -1791,12 +1791,12 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
     sample: Measure,
 ) -> None:
     sample(1, 'water')
-    first = BatchManager(client, sources=SOURCES, definitions=refusing)
+    first = BatchManager(client, definitions=refusing)
     first.create(STAGED.name, title='Good', rows=toys.rows(client), label='good')
     first.create(STAGED.name, title='Broken', label='broken')
     refusing.save(rows_key('broken'), {'nonsense': 1})
-    manager = BatchManager(client, sources=SOURCES, definitions=refusing)
-    pages = Pages(manager, files=files, marks=Marks)
+    manager = BatchManager(client, definitions=refusing)
+    pages = Pages(Intake(manager, sources=SOURCES), files=files, marks=Marks)
     with serve(create_app(pages)) as url:
         page = watched(browser)
         page.goto(f'{url}batches/broken/')
@@ -1847,9 +1847,9 @@ def test_a_refused_header_shows_at_the_form_and_changes_nothing(
 
 
 def test_remove_goes_to_another_batch_then_to_the_root_without_one(
-    page: Any, manager: BatchManager
+    page: Any, manager: BatchManager, intake: Intake
 ) -> None:
-    manager.create(STAGED.name, title='Other', source='pairs', label='other')
+    intake.create(STAGED.name, title='Other', source='pairs', label='other')
     page.on('dialog', lambda dialog: dialog.accept())
     page.click('[data-tab=batch]')
 
@@ -1869,9 +1869,9 @@ def test_remove_goes_to_another_batch_then_to_the_root_without_one(
 
 
 def test_another_page_of_a_removed_batch_shows_why_and_the_list(
-    page: Any, pages: Pages, manager: BatchManager
+    page: Any, pages: Pages, intake: Intake
 ) -> None:
-    manager.create(STAGED.name, title='Other', source='pairs', label='other')
+    intake.create(STAGED.name, title='Other', source='pairs', label='other')
 
     pages.remove('scan')
 

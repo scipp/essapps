@@ -19,6 +19,7 @@ from ess.apps.batch import (
     FileInfo,
     FolderDefinitions,
     Header,
+    Intake,
     NotKept,
     RowSource,
 )
@@ -65,20 +66,23 @@ def first_transmission(files: Sequence[FileInfo]) -> pd.DataFrame:
 
 FIRST_TRANSMISSION = RowSource(first_transmission, fills=('sample', 'transmission'))
 
-type Opened = Callable[[], AbstractContextManager[tuple[BatchManager, CorrectedFiles]]]
+type Opened = Callable[[], AbstractContextManager[tuple[Intake, CorrectedFiles]]]
 
 
 @pytest.fixture
 def opened(folder: Path, folder_bindings: list[Binding]) -> Opened:
-    """Opens the folder: a manager of its batches, and the file source."""
+    """Opens the folder: an intake of its batches, and the file source."""
 
     @contextmanager
-    def opened() -> Iterator[tuple[BatchManager, CorrectedFiles]]:
+    def opened() -> Iterator[tuple[Intake, CorrectedFiles]]:
         store = FolderDefinitions(folder)
         files = CorrectedFiles(folder_files(folder), definitions=store)
         with open_folder(folder, folder_bindings, files=files) as client:
             sources = {'first': FIRST_TRANSMISSION}
-            yield BatchManager(client, sources=sources, definitions=store), files
+            yield (
+                Intake(BatchManager(client, definitions=store), sources=sources),
+                files,
+            )
 
     return opened
 
@@ -86,17 +90,17 @@ def opened(folder: Path, folder_bindings: list[Binding]) -> Opened:
 @pytest.fixture
 def made(opened: Opened) -> str:
     """A batch ``b`` of PLAIN of the rows of samples 1, 2 and 3, kept in the folder."""
-    with opened() as (manager, _):
-        return manager.create(
-            PLAIN.name, title='B', rows=manager.rows_of('first'), label='b'
-        )
+    with opened() as (intake, _):
+        return intake.manager.create(
+            PLAIN.name, title='B', rows=intake.rows_of('first'), label='b'
+        ).label
 
 
 def test_a_batch_opened_again_has_the_table_and_the_settings_it_had(
     opened: Opened, made: str
 ) -> None:
-    with opened() as (manager, _):
-        batch = manager.batch(made)
+    with opened() as (intake, _):
+        batch = intake.manager.batch(made)
         batch.settings = {'binning': {'bins': 3}}
         frame = batch.frame().drop('3').assign(thickness=[0.1 + 0.2, None])
         frame.loc['mine', 'sample'] = 'run:2'
@@ -104,8 +108,8 @@ def test_a_batch_opened_again_has_the_table_and_the_settings_it_had(
         batch.put(frame)
         before = batch.frame()
 
-    with opened() as (manager, _):
-        batch = manager.batch(made)
+    with opened() as (intake, _):
+        batch = intake.manager.batch(made)
 
         pd.testing.assert_frame_equal(batch.frame(), before)
         assert batch.settings == {'binning': {'bins': 3}}
@@ -114,14 +118,14 @@ def test_a_batch_opened_again_has_the_table_and_the_settings_it_had(
 def test_a_table_kept_stays_when_its_files_go(
     opened: Opened, made: str, folder: Path
 ) -> None:
-    with opened() as (manager, _):
-        before = manager.batch(made).frame()
+    with opened() as (intake, _):
+        before = intake.manager.batch(made).frame()
     files = folder / 'files.csv'
     files.write_text(files.read_text().replace('run-1001.json,1001,transmission', ''))
 
-    with opened() as (manager, _):
-        pd.testing.assert_frame_equal(manager.batch(made).frame(), before)
-        assert manager.batch(made).state()['1'].problems != ()
+    with opened() as (intake, _):
+        pd.testing.assert_frame_equal(intake.manager.batch(made).frame(), before)
+        assert intake.manager.batch(made).state()['1'].problems != ()
 
 
 def test_the_corrections_of_the_files_are_there_after_a_restart(
@@ -131,25 +135,25 @@ def test_the_corrections_of_the_files_are_there_after_a_restart(
         (bad,) = files.list(Selector(role='bad'))
         files.correct(bad, role='sample')
 
-    with opened() as (manager, files):
+    with opened() as (intake, files):
         assert files.corrections(bad) == {'role': 'sample'}
-        assert '4' in manager.rows_of('first').index
+        assert '4' in intake.rows_of('first').index
 
 
 def test_the_settings_kept_are_a_template_of_all_settings_that_the_command_reads(
     opened: Opened, made: str, folder: Path
 ) -> None:
     settings = {'binning': {'bins': 3}, 'thickness': 2.0}  # thickness: a column
-    with opened() as (manager, _):
-        batch = manager.batch(made)
+    with opened() as (intake, _):
+        batch = intake.manager.batch(made)
         batch.settings = settings
         batch.make_column('thickness')
 
     path = FolderDefinitions(folder).path(settings_key(made))
 
     assert load_template(path) == Template(batch.spec, params=settings)
-    with opened() as (manager, _):
-        assert manager.batch(made).settings == settings
+    with opened() as (intake, _):
+        assert intake.manager.batch(made).settings == settings
 
 
 @pytest.mark.parametrize(
@@ -171,9 +175,9 @@ def test_rows_that_cannot_be_read_are_refused_naming_the_file_and_the_entry(
 ) -> None:
     FolderDefinitions(folder).save(rows_key(made), data)
 
-    with opened() as (manager, _):
+    with opened() as (intake, _):
         with pytest.raises(ValueError, match=rf'b/rows\.json: {re.escape(entry)}'):
-            manager.batch(made)
+            intake.manager.batch(made)
 
 
 def test_a_file_that_is_not_json_is_refused_naming_it(
@@ -203,8 +207,8 @@ def test_settings_of_another_version_are_taken_as_they_are(
     kept = {'spec': {'name': 'plain', 'version': 9}, 'params': {'gone': 1}}
     FolderDefinitions(folder).save(settings_key(made), kept)
 
-    with opened() as (manager, _):
-        batch = manager.batch(made)
+    with opened() as (intake, _):
+        batch = intake.manager.batch(made)
         assert batch.settings == {'gone': 1}
         with pytest.raises(SubmitError, match='gone'):
             batch.state()
@@ -246,9 +250,9 @@ def test_a_label_that_looks_like_a_path_keeps_its_rows_inside_the_definitions(
 def test_a_label_too_long_to_name_a_file_is_refused_when_the_batch_is_made(
     opened: Opened, folder: Path
 ) -> None:
-    with opened() as (manager, _):
+    with opened() as (intake, _):
         with pytest.raises(ValueError, match='too long to name a file'):
-            manager.create(PLAIN.name, title='B', label='Å' * 120)
+            intake.manager.create(PLAIN.name, title='B', label='Å' * 120)
 
     assert FolderDefinitions(folder).labels() == []
 
@@ -256,15 +260,15 @@ def test_a_label_too_long_to_name_a_file_is_refused_when_the_batch_is_made(
 def test_a_file_left_by_a_write_cut_off_is_not_read_and_not_removed(
     opened: Opened, made: str, folder: Path
 ) -> None:
-    with opened() as (manager, _):
-        edit(manager.batch(made), '1', thickness=2.0)
+    with opened() as (intake, _):
+        edit(intake.manager.batch(made), '1', thickness=2.0)
     path = FolderDefinitions(folder).path(rows_key(made))
     # A reader cannot tell it from the file of a write of another process.
     left = path.parent / f'.{path.name}.x1y2z3'
     left.write_text('{"half')
 
-    with opened() as (manager, _):
-        assert manager.batch(made).frame().loc['1', 'thickness'] == 2.0
+    with opened() as (intake, _):
+        assert intake.manager.batch(made).frame().loc['1', 'thickness'] == 2.0
 
     assert left.exists()
 
@@ -369,14 +373,14 @@ def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
 
 def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    made = FromSource('pairs', frozenset({'60340', '0342', '60339'}), ('sample',))
+    made = FromSource('pairs', frozenset({'60340', '0342', '60339'}))
     key = source_key('a')
 
     store.save(key, source_data(made))
 
     assert source_data(made)['considered'] == ['0342', '60339', '60340']
     assert store.load(key, source_of) == made
-    store.save(key, {'source': 'pairs', 'considered': '60339', 'fills': []})
+    store.save(key, {'source': 'pairs', 'considered': '60339'})
     with pytest.raises(ValueError, match=r'source\.json: considered: '):
         store.load(key, source_of)
 

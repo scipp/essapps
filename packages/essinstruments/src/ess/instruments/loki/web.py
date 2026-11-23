@@ -64,7 +64,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from ess.apps import Client
-from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions
+from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
 from ess.apps.batch.web import Pages, Shown, create_app, plots
 from ess.apps.batch.web.api import STATIC
 from ess.apps.folder import ArrivingFiles, open_folder
@@ -130,17 +130,17 @@ def build(
     """
     manager = BatchManager(
         client,
-        sources=SOURCES,
         definitions=definitions,
         settings={IOFQ.name: settings or {}},
         staged=STAGED,
     )
+    intake = Intake(manager, sources=SOURCES)
     if not manager.headers():
-        manager.create(
+        intake.create(
             IOFQ.name, title='Sample runs', source='sample-runs', follow=follow
         )
     pages = Pages(
-        manager,
+        intake,
         interval=interval,
         title='LoKI I(Q)',
         draw={IOFQ.name: _draw(client)},

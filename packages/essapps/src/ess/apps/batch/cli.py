@@ -16,9 +16,10 @@ and :func:`.export.export_table`. The workspace is kept in a folder (see
 command, by its ID or by its label (see :func:`.templates.with_latest`).
 
 The command makes and reads its batch with a :class:`~.manager.BatchManager`,
-as a page does, so a label is one batch whoever works on it:
+and an :class:`~.intake.Intake` for the row sources, as a page does, so a
+label is one batch whoever works on it:
 
-- ``reduce`` reduces the batch of its label, with the sources of the
+- ``reduce`` reduces the batch of its label, with the row sources of the
   application that ``-s/--sources`` names::
 
       essapps-batch -b my.package:BINDINGS reduce -s my.package:SOURCES -l LABEL
@@ -27,10 +28,11 @@ as a page does, so a label is one batch whoever works on it:
   the batch (:meth:`~.manager.BatchManager.create`) of the template's spec,
   with the label as title. Its table is the table given
   (:func:`.table.read_table`), or the rows that the source ``--source NAME``
-  has filled now, not both; without either, one row keyed by the label.
-  With ``--source``, the batch keeps its source, so that its page offers the
-  rows of the source that its table lacks; it does not follow. ``create``
-  refuses a label that has definitions or records.
+  has filled now (:meth:`~.intake.Intake.create`), not both; without either,
+  one row keyed by the label. With ``--source``, the batch keeps its
+  source, so that its page offers the rows of the source that its table
+  lacks; it does not follow. ``create`` refuses a label that has
+  definitions or records.
 
   For a label with a batch, the template becomes its settings and the table
   replaces its table (:meth:`.reduction.Batch.put`); ``--source`` is refused.
@@ -79,6 +81,7 @@ from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
 from .export import export_table
+from .intake import Intake
 from .manager import BatchManager
 from .source import RowSource, rows_of
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
@@ -213,7 +216,6 @@ def _reduce(
     template = None if args.template is None else load_template(args.template)
     manager = BatchManager(
         client,
-        sources=args.sources,
         definitions=definitions,
         staged={bound.name for bound in client.specs()} if args.staged else (),
     )
@@ -236,7 +238,7 @@ def _reduce(
     elif args.source is None:
         rows = pd.DataFrame(index=pd.Index([label], name=KEY))
     else:
-        rows = None  # create takes them from the source
+        rows = None  # the intake takes them from the source
     settings = None
     if template is not None:
         # Checked before anything is written.
@@ -248,16 +250,15 @@ def _reduce(
         batch.put(rows)
         if settings is not None:
             batch.settings = batch.settable(settings)
-    else:
-        manager.create(
-            spec.name,
-            title=label,
-            rows=rows,
-            source=args.source,
-            settings=settings,
-            label=label,
+    elif args.source is not None:
+        intake = Intake(manager, sources=args.sources)
+        batch = intake.create(
+            spec.name, title=label, source=args.source, settings=settings, label=label
         )
-        batch = manager.batch(label)
+    else:
+        batch = manager.create(
+            spec.name, title=label, rows=rows, settings=settings, label=label
+        )
     return frames.reduce_batch(
         batch, remaining=args.remaining, earlier_settings=args.earlier_settings
     )

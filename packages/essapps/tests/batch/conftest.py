@@ -14,6 +14,7 @@ from ess.apps.batch import (
     BatchManager,
     CorrectedFiles,
     FolderDefinitions,
+    Intake,
 )
 from ess.apps.batch.table import KEY
 from ess.apps.folder import open_folder
@@ -136,19 +137,23 @@ def refusing(definitions: FolderDefinitions) -> toys.Refusing:
 @pytest.fixture
 def manager(client: Client, refusing: toys.Refusing) -> BatchManager:
     """A manager on ``definitions``, through ``refusing``, which refuses nothing."""
-    return BatchManager(
-        client, sources=toys.SOURCES, definitions=refusing, staged=toys.STAGED_NAMES
-    )
+    return BatchManager(client, definitions=refusing, staged=toys.STAGED_NAMES)
 
 
 @pytest.fixture
-def label(manager: BatchManager) -> str:
+def intake(manager: BatchManager) -> Intake:
+    """The intake of ``manager``, with the sources of ``toys``."""
+    return Intake(manager, sources=toys.SOURCES)
+
+
+@pytest.fixture
+def label(intake: Intake) -> str:
     """
-    A batch of ``manager`` with the spec, columns and label of ``batch``, made
-    from the source ``pairs`` before a file is measured: it has no rows, and
-    Follow or ``manager.take`` adds those measured since.
+    A batch of ``intake.manager`` with the spec, columns and label of
+    ``batch``, made from the source ``pairs`` before a file is measured: it
+    has no rows, and Follow or ``intake.take`` adds those measured since.
     """
-    return toys.from_pairs(manager, toys.STAGED.name, title='Scan', label='scan')
+    return toys.from_pairs(intake, toys.STAGED.name, title='Scan', label='scan')
 
 
 # A workspace kept in a folder of toy files, for batches from tables

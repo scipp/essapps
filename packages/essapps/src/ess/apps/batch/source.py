@@ -4,8 +4,8 @@
 What an application gives a batch: a :class:`RowSource` makes a table from the
 files.
 
-A row source is code of the application, registered by name with a
-:class:`~.manager.BatchManager`. Its :data:`RowFunction` takes the files with
+A row source is code of the application, registered by name with an
+:class:`~.intake.Intake`. Its :data:`RowFunction` takes the files with
 their metadata and returns a frame, the form that ``Batch.put`` takes::
 
     key     run    name         sample      sample_transmission
@@ -122,8 +122,8 @@ class Range:
     """
     Which rows a new batch takes of those that its source has filled now, as
     a person picks them, given as ``choose`` to
-    :meth:`~.manager.BatchManager.create` and
-    :meth:`~.manager.BatchManager.marked`: called on the filled rows, it gives
+    :meth:`~.intake.Intake.create` and
+    :meth:`~.intake.Intake.marked`: called on the filled rows, it gives
     the rows from the row of key ``first`` to the row of key ``last``, both
     included, in their order; an end not given is open. With ``later``, it
     gives none, so that the batch gets only the rows added later, by Follow

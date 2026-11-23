@@ -33,18 +33,17 @@ def test_the_first_batch_follows_only_if_asked(tmp_path: Path) -> None:
     register(tmp_path, (1, 'sample', 'a'), (2, 'transmission', 'a'))
     client, files, definitions = open_loki(tmp_path)
     with client:
-        manager = build(client, files, definitions).state.pages.manager
-        assert manager.following is None
-        (label,) = manager.headers()
-        manager.remove(label)
-        manager = build(client, files, definitions, follow=True).state.pages.manager
-        assert manager.following == next(iter(manager.headers()))
+        intake = build(client, files, definitions).state.pages.intake
+        assert intake.following is None
+        (label,) = intake.manager.headers()
+        intake.manager.remove(label)
+        intake = build(client, files, definitions, follow=True).state.pages.intake
+        assert intake.following == next(iter(intake.manager.headers()))
 
 
 def test_a_run_registered_while_the_page_runs_is_added_by_a_step_of_follow(
     tmp_path: Path,
 ) -> None:
-
     def names(state: dict[str, Any]) -> list[str]:
         return [row['name'] for row in state['rows']]
 

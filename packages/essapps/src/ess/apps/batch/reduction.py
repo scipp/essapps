@@ -159,15 +159,16 @@ class Batch:
     definitions:
         Where the settings and the rows of the label are written at each
         change (:mod:`~.definition`). Nothing is read from them: the manager
-        reads them and gives them as ``settings`` and ``rows``
+        reads them and gives them as ``settings``, ``rows`` and ``fills``
         (:meth:`.manager.BatchManager.batch`). A ``Batch`` made in code
         without them keeps nothing.
     fills:
         The parameters that the source of the batch fills, if it was made
-        from one (:attr:`~.source.RowSource.fills`), as the manager keeps them
-        with the batch. Each is a column, and an empty cell there means that
-        the row waits for its file: the row is incomplete, whatever the
-        settings hold and whatever the default of the parameter is.
+        from a row source (:attr:`~.source.RowSource.fills`); they are kept
+        as the blanks of its settings. Each is a column, and an empty cell
+        there means that the row waits for its file: the row is incomplete,
+        whatever the settings hold and whatever the default of the parameter
+        is.
 
     Attributes
     ----------
@@ -429,10 +430,14 @@ class Batch:
         return {key: cells[key] for key in first.values()}
 
     def _save(self, settings: Mapping[str, Any]) -> None:
-        """Write ``settings`` as the settings of the label, if kept."""
+        """
+        Write ``settings`` as the settings of the label, if kept, with
+        :attr:`fills` as the blanks of the template.
+        """
         if self._definitions is not None:
             key = definition.settings_key(self.label)
-            data = definition.template_data(Template(self.spec, params=settings))
+            kept = Template(self.spec, params=settings, blanks=sorted(self.fills))
+            data = definition.template_data(kept)
             self._definitions.save(key, data)
 
     def template(self) -> Template:

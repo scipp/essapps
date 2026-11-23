@@ -56,7 +56,14 @@ from ess.spec import (
     WorkflowSpec,
 )
 
-from .. import BatchManager, CorrectedFiles, FileInfo, FolderDefinitions, RowSource
+from .. import (
+    BatchManager,
+    CorrectedFiles,
+    FileInfo,
+    FolderDefinitions,
+    Intake,
+    RowSource,
+)
 from ..table import KEY, cell_of
 from . import Pages, create_app, plots
 from .api import STATIC, every
@@ -319,11 +326,11 @@ def build(
     a batch of the samples there are is made, with a column of thickness, so
     also at a start after a person removed the last one.
     """
-    manager = BatchManager(
-        client, sources=SOURCES, definitions=definitions, staged=STAGED
+    intake = Intake(
+        BatchManager(client, definitions=definitions, staged=STAGED), sources=SOURCES
     )
-    if not manager.headers():
-        manager.create(
+    if not intake.manager.headers():
+        intake.create(
             DEMO.name,
             title='Samples',
             source='sample-runs',
@@ -338,7 +345,7 @@ def build(
         return plots.figure(curves, quantity='I(Q)')
 
     pages = Pages(
-        manager,
+        intake,
         interval=interval,
         title=DEMO.title,
         draw={DEMO.name: draw},

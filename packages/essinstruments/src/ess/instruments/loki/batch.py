@@ -10,9 +10,9 @@ sample, and pairs the run with the transmission run of the same sample::
     {'file': 'run-1.nxs', 'run': 1, 'role': 'sample', 'sample': 'water'}
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
 
-:data:`SOURCES` and :data:`STAGED` give a
-:class:`~ess.apps.batch.BatchManager` the batches of I(Q). A batch without a
-manager keeps nothing::
+:data:`SOURCES` gives an :class:`~ess.apps.batch.Intake`, and :data:`STAGED`
+a :class:`~ess.apps.batch.BatchManager`, the batches of I(Q). A batch without
+a manager keeps nothing::
 
     Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS), staged=True)
 

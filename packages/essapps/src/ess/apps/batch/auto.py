@@ -7,8 +7,8 @@ arrive. The guide is the section "Follow" of
 ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
 
 :func:`step` is one step on one batch. Follow is a step on the batch that the
-manager keeps as the one that follows, every few seconds
-(:meth:`~.manager.BatchManager.step`); whoever serves owns the timer that
+intake keeps as the one that follows, every few seconds
+(:meth:`~.intake.Intake.step`); whoever serves owns the timer that
 calls it.
 
 A step adds the rows of the source that are new and filled, as a person does
@@ -24,7 +24,7 @@ with ``put``, then reduces the rows that are ready and have no result::
 A step never changes a row that the table has, and never changes the blanks of
 the template: it takes only the columns that the table has. A row whose key is
 considered, such as one a person removed, is never added again; the caller
-keeps :attr:`Step.considered` and gives it to the next step (the manager in
+keeps :attr:`Step.considered` and gives it to the next step (the intake in
 ``source.json``). A key of the source that the table has is considered,
 whoever added the row, and the step keeps it so. So a row that a person added
 by hand with a key that the source gives later stays away once removed, and

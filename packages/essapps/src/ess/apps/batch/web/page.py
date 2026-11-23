@@ -98,7 +98,7 @@ the action "Stop following" (:meth:`Page.stop_following`), after which the
 batch never follows again; the page of a batch that does not follow has no
 action of Follow. While a batch follows, :meth:`Pages.tick
 <.pages.Pages.tick>` steps it every ``interval`` seconds
-(:meth:`~ess.apps.batch.BatchManager.step`), which adds the rows of its
+(:meth:`~ess.apps.batch.Intake.step`), which adds the rows of its
 source that are new and filled, and reduces the rows that
 :func:`~ess.apps.batch.not_reduced` gives, the rows that are ready and have
 no result, under the lock of all pages, with the batch's settings, whatever
@@ -343,9 +343,9 @@ class Page:
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, the lock, the
-        listing of the files, Follow, and what the application gives every
-        page.
+        What the pages share: the manager of the batch, the intake of its
+        rows and Follow, the lock, the listing of the files, and what the
+        application gives every page.
     label:
         The label of the batch.
     """
@@ -365,7 +365,7 @@ class Page:
     @property
     def batch(self) -> Batch:
         """The batch, asked of the manager at each use."""
-        return self.pages.manager.batch(self.label)
+        return self.pages.intake.manager.batch(self.label)
 
     @property
     def lock(self) -> AbstractContextManager[object]:
@@ -404,7 +404,7 @@ class Page:
 
     def _follows(self) -> bool:
         """Whether this batch is the one that follows."""
-        return self.pages.manager.following == self.label
+        return self.pages.intake.following == self.label
 
     # Reading
 
@@ -423,7 +423,8 @@ class Page:
             self.batch.version,
             pages.listing.cursor,
             pages.files_version,
-            pages.manager.version,
+            pages.intake.manager.version,
+            pages.intake.version,
             pages.follow_token(self.label),
         )
 
@@ -561,7 +562,7 @@ class Page:
         unapplied = self._unapplied()
         marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
         empty = batch.empty()
-        header = self.pages.manager.headers()[self.label]
+        header = self.pages.intake.manager.headers()[self.label]
         return State(
             version=self.version,
             start=self.start,
@@ -820,12 +821,12 @@ class Page:
     def offered(self) -> SourceRows:
         """
         The rows of the source that the table lacks, those that wait marked
-        (:meth:`~ess.apps.batch.BatchManager.offered`), for :meth:`take`;
+        (:meth:`~ess.apps.batch.Intake.offered`), for :meth:`take`;
         what the source refuses is a :class:`~.refusals.Problem`
         (:func:`~.refusals.refused`).
         """
         with refused('The rows of the source cannot be listed'):
-            given = self.pages.manager.offered(self.label)
+            given = self.pages.intake.offered(self.label)
         return listed(given, self.batch.fills)
 
     @_action
@@ -833,12 +834,12 @@ class Page:
         """
         Add the rows of ``keys`` as the source makes them now, so that Follow
         does not add them again once removed
-        (:meth:`~ess.apps.batch.BatchManager.take`). What the manager or the
+        (:meth:`~ess.apps.batch.Intake.take`). What the intake or the
         source refuses is a :class:`~.refusals.Problem`
         (:func:`~.refusals.refused`).
         """
         with refused('No row was added'):
-            self.pages.manager.take(self.label, keys)
+            self.pages.intake.take(self.label, keys)
         # The rows may name files that the listing lacks.
         self._list_again()
         return f'Added {_rows(len(keys))}.'
@@ -941,11 +942,11 @@ class Page:
     def stop_following(self) -> str:
         """
         Let none follow, if this batch follows
-        (:meth:`~ess.apps.batch.BatchManager.stop`); it cannot follow again.
+        (:meth:`~ess.apps.batch.Intake.stop`); it cannot follow again.
         """
         if not self._follows():
             return ''  # another batch follows, or none
-        self.pages.manager.stop()
+        self.pages.intake.stop()
         return 'Stopped following.'
 
     def stepped(self) -> None:
@@ -1043,7 +1044,7 @@ class Page:
         refuses is a :class:`~.refusals.Problem`, and changes nothing.
         """
         try:
-            self.pages.manager.change(
+            self.pages.intake.manager.change(
                 self.label, title=edit.title, description=edit.description
             )
         except ValueError as error:
