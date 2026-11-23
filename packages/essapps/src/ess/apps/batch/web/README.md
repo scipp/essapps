@@ -38,8 +38,8 @@ Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selec
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole table, its columns too; the page then shows the cells and the settings form of the columns loaded.
 It is refused while the settings form holds a change, which the new form would drop, as "Make this a column" and "Make this a setting" are.
-**+ Add rows from the runs**, on the page of a batch made from a source, lists the rows of the source that the table lacks (`BatchManager.offered`): those left out when the batch was made, those removed, those that wait for a run, marked, and, in a batch that does not follow, those filled after it was made or after it stopped.
-The rows a person picks are added as the source makes them now (`BatchManager.take`), and Follow does not add them again once removed; so a removed row comes back this way.
+**+ Add rows from the runs**, on the page of a batch made from a source, lists the rows of the source that the table lacks (`Intake.offered`): those left out when the batch was made, those removed, those that wait for a run, marked, and, in a batch that does not follow, those filled after it was made or after it stopped.
+The rows a person picks are added as the source makes them now (`Intake.take`), and Follow does not add them again once removed; so a removed row comes back this way.
 
 "Make this a column", at a setting in the Settings tab, makes the parameter a column with an empty cell in each row (`Batch.make_column`); it is offered only for a parameter that is no column and whose cell the page edits.
 The setting stays: a row whose cell is empty takes it, also a row added later, by Follow or by a person, until its cell is set.
@@ -79,13 +79,13 @@ Each state replaces the form, but not while the focused input holds a value type
 
 A batch follows from the time it is made, if **Follow** is ticked in **+ New batch** (see [Making a batch](#making-a-batch)), until it is stopped.
 At most one batch follows: making one with Follow stops the batch that followed before, and the list of batches marks the one that follows.
-The page of the batch that follows has **Stop following** next to **List runs again** (`POST api/follow/stop`, `BatchManager.stop`). It asks once, since the batch cannot follow again; rows that arrive later are then added with **+ Add rows from the runs**, or go to a new batch.
+The page of the batch that follows has **Stop following** next to **List runs again** (`POST api/follow/stop`, `Intake.stop`). It asks once, since the batch cannot follow again; rows that arrive later are then added with **+ Add rows from the runs**, or go to a new batch.
 The page of a batch that does not follow has no Follow control.
-While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(manager, interval=...)`, or `--interval SECONDS`), under the lock of every request, with or without a page open.
-A step is `BatchManager.step`:
+While a batch follows, a timer in the server runs a step every `interval` seconds (5 by default; `Pages(intake, interval=...)`, or `--interval SECONDS`), under the lock of every request, with or without a page open.
+A step is `Intake.step`:
 
 ```python
-done = manager.step()  # a Step, None if no batch follows
+done = intake.step()   # a Step, None if no batch follows
 done.refused           # why a row could not be submitted, by key
 done.waiting           # the keys of the rows of the source not filled yet
 ```
@@ -159,12 +159,12 @@ The page remembers in the session of the browser, so that a reload or a return t
 | Field | What it is |
 |---|---|
 | Title, Description | the header of the batch; the title is required |
-| Rows | from a source that the application registers (`BatchManager(sources=...)`), from a table file, or "none: no rows" |
+| Rows | from a source that the application registers (`Intake(sources=...)`), from a table file, or "none: no rows" |
 | Range | with a source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`Range`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; the table below lists every row the source makes, marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting at a column ticked stays, and each row whose cell is empty takes it, also a row that Follow adds; a column that the source fills gets no setting |
-| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the manager refuses a last row with Follow (`BatchManager.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
+| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the intake refuses a last row with Follow (`Intake.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
 **Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page shows the new batch in the Rows view.
@@ -176,11 +176,13 @@ In code:
 
 ```python
 settings = manager.batch(other).settings                        # thickness among them
-label = manager.create(spec, title=title, source=source,
-                       choose=Range(first, last, later),
-                       columns=['thickness'],                   # ticked: an empty column
-                       settings=settings,                       # less those of source.fills
-                       follow=follow)                           # Follow ticked
+batch = intake.create(spec, title=title, source=source,
+                      choose=Range(first, last, later),
+                      columns=['thickness'],                    # ticked: an empty column
+                      settings=settings,                        # less those of source.fills
+                      follow=follow)                            # Follow ticked
+batch = manager.create(spec, title=title, rows=table,           # from a table file, or rows=None
+                       columns=['thickness'], settings=settings)
 ```
 
 The batch is made in one call, so it is made as asked or not at all; a batch that follows replaces the one before only if it is made.
@@ -190,7 +192,7 @@ Opened on the page of a batch, the form starts at that batch's source, workflow,
 A batch that follows and has no row yet says so where its rows would be.
 Follow is off unless ticked, since it stops the batch that follows, for good, and reduces the rows taken within seconds, with the settings chosen.
 
-The choices come from `GET api/sources`; what can be made is decided by `BatchManager.create`, and what it refuses, such as an empty title, shows at the form, with nothing made.
+The choices come from `GET api/sources`; what can be made is decided by `Intake.create` and `BatchManager.create`, and what they refuse, such as an empty title, shows at the form, with nothing made.
 **Make** is disabled while it is sent, so a double click makes one batch.
 The new batch starts with the settings that the application gives its spec (`BatchManager(settings=...)`).
 A source that no spec fits is not offered.
@@ -246,15 +248,19 @@ flowchart TD
     api["api: create_app, the timer"]
     pages["Pages: one lock, the listing of the files, files_version"]
     page["Page, one per batch: poll compares the versions"]
+    intake["Intake: version"]
     manager["BatchManager: version"]
     batch["Batch: version"]
     browser -->|HTTP| api
     api -->|"tick(), page(label), routes of the workspace"| pages
     api -->|routes of a batch| page
-    pages -->|"step(), create, remove, counts"| manager
+    pages -->|"step(), create from a source"| intake
+    pages -->|"create, remove, counts"| manager
     page -->|"listing, what Follow said"| pages
-    page -->|"batch(label), stop()"| manager
+    page -->|"offered, take, stop()"| intake
+    page -->|"batch(label), change"| manager
     page -->|"put, reduce"| batch
+    intake --> manager
     manager -->|one per label| batch
 ```
 
@@ -262,10 +268,10 @@ flowchart TD
 |---|---|
 | `static/` | the page: `index.html`, `app.js`, `tables.js`, `form.js`; what is shown: selection, filter, view, tab, sort, axes |
 | `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch |
-| `pages.py` | `Pages`: what the pages share, without HTTP: the manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It alone writes the listing of the files and its version, the corrections of runs, and the step of Follow (`tick`) and what it said |
-| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a draft until Apply), the refusals and its version. Through the manager it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, Follow's stop. It asks `Pages` for the listing and for what to show of Follow |
+| `pages.py` | `Pages`: what the pages share, without HTTP: the intake and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It alone writes the listing of the files and its version, the corrections of runs, and the step of Follow (`tick`) and what it said |
+| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a draft until Apply), the refusals and its version. Through the manager and the intake it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Pages` for the listing and for what to show of Follow |
 | `refusals.py` | how `Pages` and `Page` refuse a request: `Problem` (422) or `Missing` (404); how an exception of the batch layer reads as a message (`why`, `kept`), and which exceptions of a source are said (`refused`: `ValueError`, `KeyError`, `OSError`; anything else is a defect) |
-| `ess.apps.batch` | the logic: `BatchManager`, `step`, `Batch`, `table`, states, `CorrectedFiles`; shared with the command `essapps-batch` |
+| `ess.apps.batch` | the logic: `BatchManager`, `Intake`, `step`, `Batch`, `table`, states, `CorrectedFiles`; shared with the command `essapps-batch` |
 
 `/docs` on a running server lists the API.
 
@@ -333,7 +339,7 @@ parent.mount('/batch', batch)
 ## Where the definition is kept
 
 The headers, the tables, the settings, the batch that follows, and the corrections of runs are the definitions of the workspace.
-The demo and the LoKI page give the manager and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
+The demo and the LoKI page give the manager, and so the intake, and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
 The settings form is a draft of the batch's settings: **Apply** writes it to the batch, and so to the definitions. A draft not applied is lost when the server stops.
 Results are records of the workspace, in `FOLDER/store/`.
 See [Where the definitions are kept](../../../../../docs/batch.md#where-the-definitions-are-kept).

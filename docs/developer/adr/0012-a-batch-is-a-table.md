@@ -271,7 +271,7 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 - An empty cell depends on the settings, outside the table. The page shows it in grey as the value that the row takes.
 - A table file shows an empty cell where a row takes the setting, so it needs the settings file to say what a row was reduced with.
 - A cell emptied after its row was reduced counts its value as a setting: the row reads `earlier`, not `outdated`.
-- A batch made from a source keeps the names that its source fills with it, in `source.json`, as they were when it was made; the batch, the command without the sources, and Follow read them there. A step asks the batch which names a row waits for.
+- A batch made from a source keeps the names that its source fills with it, as the blanks of `settings.json`, as they were when it was made; the batch, the command without the sources, and Follow read them there. A step asks the batch which names a row waits for.
 - The table of a batch made from a source keeps a column for each name that its source fills: `put`, a table file loaded, and "Make this a setting" refuse to drop one.
 - `settings.json` holds every setting, those at the columns too, as a template without blanks. A file whose template has blanks, as one written before, reads the same: its blanks are not read, and it has no settings at the columns.
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).

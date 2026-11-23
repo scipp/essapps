@@ -39,9 +39,9 @@ Problem 3 is not decided (see "Not decided").
 ### The manager
 
 ```python
-manager = BatchManager(client, sources={'sample-runs': SAMPLE_RUNS},
-                       definitions=FolderDefinitions(folder))
-label = manager.create('loki-iofq', title='Afternoon', source='sample-runs')
+manager = BatchManager(client, definitions=FolderDefinitions(folder))
+intake = Intake(manager, sources={'sample-runs': SAMPLE_RUNS})
+label = intake.create('loki-iofq', title='Afternoon', source='sample-runs').label
 manager.headers()              # {label: Header(title, description)}, sorted by label
 manager.batch(label)           # the Batch: frame(), put(), state(), reduce(), cancel(), settings
 manager.change(label, title='Afternoon, 2 mm cells')
@@ -58,7 +58,7 @@ What the application gives once, and what a person chooses for each batch:
 | Part | Given by |
 |---|---|
 | spec | a person, from the specs that the workspace binds (`client.specs()`); the name is kept, the version is the one bound, the highest if several are ([ADR 0009](0009-a-record-of-another-spec-stays-readable.md)) |
-| source | a person, from the sources that the application registers by name (`BatchManager(sources=...)`), or none |
+| source | a person, from the sources that the application registers by name (`Intake(sources=...)`), or none |
 | title, description | a person |
 | label | the manager |
 | first settings, `staged` | the application, for each spec (`BatchManager(settings=..., staged=...)`) |
@@ -92,18 +92,18 @@ Nothing checks that the batches cover every row or that they do not overlap.
 
 ### One batch follows
 
-The manager keeps the label of the batch that follows, or none:
+The intake keeps the label of the batch that follows, or none:
 
 ```python
-manager.create(..., source='sample-runs', follow=True)   # this batch follows, and no other
-manager.following                                        # its label, or None
-manager.stop()                                           # none follows
-manager.step()                                           # one step of Follow on it (ADR 0013)
+intake.create(..., source='sample-runs', follow=True)    # this batch follows, and no other
+intake.following                                         # its label, or None
+intake.stop()                                            # none follows
+intake.step()                                            # one step of Follow on it (ADR 0013)
 ```
 
 - One value means that at most one batch follows, with no rule to enforce. Making a batch that follows stops the batch that followed before.
-- The manager keeps the value in the definitions, apart from any batch, so a restart resumes. Removing the batch that follows ends Follow.
-- Whoever serves the pages owns the timer that calls `step`. The manager has no thread, no timer and no lock.
+- The intake keeps the value in the definitions, apart from any batch, so a restart resumes. Removing the batch that follows ends Follow.
+- Whoever serves the pages owns the timer that calls `step`. The intake has no thread, no timer and no lock.
 - The workspace has one lock: every request of every page and each step take it, so the batches, the manager and the corrections change in one request at a time.
 
 ### A page shows one batch, named in its URL

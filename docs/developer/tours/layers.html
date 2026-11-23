@@ -181,11 +181,11 @@ app = App(client)` },
     return pd.DataFrame({'runs': runs.values()}, index=list(runs))
 
 source = RowSource(angles, fills=('runs',), selector=Selector(role='sample'))
-manager = BatchManager(client, sources={'angles': source},
-                       definitions=FolderDefinitions(folder))
-manager.create('stitch', title='reflectivity', source='angles', follow=True,
-               settings={'reference': file(run=500)})
-manager.step()   # called every few seconds` },
+intake = Intake(BatchManager(client, definitions=FolderDefinitions(folder)),
+                sources={'angles': source})
+intake.create('stitch', title='reflectivity', source='angles', follow=True,
+              settings={'reference': file(run=500)})
+intake.step()   # called every few seconds` },
   { level: 11, caller: 'all', placement: 'service', planned: SERVICE, title: 'Many controllers, one history',
     body: `<p>All clients of a proposal share its history. A notebook can reference a transmission that the automatic reduction computed, and the app lists that record in its pickers.</p>
            <p>Every client of a workspace reads the same values. The automatic reduction persists its outputs, so they outlive the workspace. A proposal has one workspace. Whether its users share the values in memory, or the service separates or bounds them per user, is open. Provenance follows each reference back to the files.</p>`,
@@ -290,7 +290,7 @@ client.output(r[60339],
 const CALLER_SMALL = [
   h('Jupyter notebook', '', '<pre class="mini">client.submit(IOFQ, ...)</pre>'),
   h('Panel app', '', '<pre class="mini">App(client)</pre>'),
-  h('Automatic reduction', '', '<pre class="mini">manager.step()</pre>'),
+  h('Automatic reduction', '', '<pre class="mini">intake.step()</pre>'),
 ];
 
 function layout(cfg, { box, arrow }) {
@@ -405,8 +405,8 @@ const CODE = {
   caller: {
     notebook: `record = client.submit(SPEC, params={...})\nclient.output(record, ...)`,
     app: 'app = App(client)',
-    trigger: 'manager.step()   # every few seconds',
-    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nmanager.step()   # every few seconds',
+    trigger: 'intake.step()   # every few seconds',
+    all: '# each in its own process, with its own client\nclient.submit(SPEC, params={...})\nApp(client)\nintake.step()   # every few seconds',
   },
 };
 
