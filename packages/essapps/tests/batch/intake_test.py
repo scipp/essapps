@@ -453,6 +453,17 @@ def test_a_spec_title_or_label_is_refused_before_the_source_is_looked_up(
             intake.create(spec, title=title, source=source, label=label)
 
 
+def test_a_spec_that_lacks_a_parameter_the_source_fills_is_refused(
+    intake: Intake, definitions: FolderDefinitions
+) -> None:
+    said = 'the spec find has no parameter transmission, which the source pairs fills'
+
+    with pytest.raises(ValueError, match=f'^{said}$'):
+        intake.create('find', title='A', source='pairs', label='a')
+
+    assert definitions.labels() == []
+
+
 # Which batch follows
 
 

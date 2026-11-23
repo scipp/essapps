@@ -194,7 +194,7 @@ Follow is off unless ticked, since it stops the batch that follows, which the pa
 
 The choices come from `GET api/sources`; what can be made is decided by `Intake.create` and `BatchManager.create`, and what they refuse, such as an empty title, shows at the form, with nothing made.
 **Make** is disabled while it is sent, so a double click makes one batch.
-A row source that no spec fits is not offered.
+The form offers each row source with the specs that fit it (`fits`), and a row source that no spec fits not at all; this is an offer, not a rule: `Intake.create` refuses a spec that does not fit.
 
 The form is closed until **+ New batch** is pressed.
 `/` serves the page without a batch if no batch follows and there are none or several: the Batches view, with the form open if there is no batch, and the Runs view.

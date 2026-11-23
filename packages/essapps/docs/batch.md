@@ -300,7 +300,7 @@ SAMPLE_RUNS = RowSource(pair_by_sample, fills=('sample', 'sample_transmission'))
 - `description` (optional) says, for a person, what a row is and how the source pairs the files, such as which transmission run a sample run gets when several fit. `essapps-batch sources` prints it: a person cannot read the code to check a pairing.
 - `rows_of(client, source)` calls the source on the files listed now. It adds an empty column for each of `fills` that its rows lack, so a batch made on an empty folder still has its columns.
 - The page names a row by its note column `name` if the batch table has one, else by its key.
-- A source knows no spec. `fits(spec, source)` of `ess.apps.batch.intake` checks that each of `fills` is a parameter of the spec.
+- A source knows no spec. `fits(spec, source)` of `ess.apps.batch.intake` checks that each of `fills` is a parameter of the spec; `intake.create` refuses a spec that does not fit.
 
 A source is plain code on plain data: test it on a list of `FileInfo`.
 
@@ -546,8 +546,8 @@ batch = manager.create(spec, rows=table, fills=source.fills, ...)
 
 `Range` refuses an end that is not a key of the rows that arrived (a row that waits is not one), a first row after the last, and an end with `later=True`.
 `intake.create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the filled rows it leaves out are considered.
-It refuses a source that is not registered and a key from `choose` that is not in `arrived`, and refuses as `manager.create` does.
-It checks the label, the title and the spec first, with `manager.check`, so these refusals come before any of the source.
+It refuses a source that is not registered, a source that fills a parameter that the spec lacks (`fits`), and a key from `choose` that is not in `arrived`, and refuses as `manager.create` does.
+It checks the label, the title and the spec first, with `manager.check`, then the source and whether the spec fits it, so these refusals come before the source is listed.
 If the process stops while a batch that follows is made, the batch may be there and no batch follow (see [What is kept on disk](#what-is-kept-on-disk)).
 
 ## Follow

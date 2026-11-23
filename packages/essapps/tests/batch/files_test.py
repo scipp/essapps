@@ -769,6 +769,21 @@ def test_a_source_that_raises_is_an_error_and_leaves_no_batch(
     assert FolderDefinitions(folder).labels() == []
 
 
+def test_reduce_refuses_a_source_that_fills_a_parameter_the_spec_lacks(
+    command: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    template = folder / 'pair.yaml'
+    template.write_text('spec: {name: cli-pair, version: 1}\n')
+    reduce = [str(template), '-l', 'x', '--source', 'pairs']
+
+    assert main([*command, *SOURCES, 'reduce', *reduce]) == 2
+
+    assert capsys.readouterr().err == (
+        'the spec cli-pair has no parameter sample, which the source pairs fills\n'
+    )
+    assert FolderDefinitions(folder).labels() == []
+
+
 def kept(folder: Path, label: str) -> dict[str, str]:
     """The files that the definitions of ``label`` are kept in, by name."""
     files = (folder / 'definitions' / 'labels' / label).iterdir()

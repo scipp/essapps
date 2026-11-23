@@ -64,10 +64,16 @@ def fits(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> bool:
     """
     Whether a batch of ``spec`` can be made with ``source``: whether each
     parameter that the source fills is a parameter of the spec. With no
-    source, every spec fits.
+    source, every spec fits. :meth:`Intake.create` refuses a spec that does
+    not fit; the page offers only those that fit.
     """
+    return not _lacked(spec, source)
+
+
+def _lacked(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> list[str]:
+    """The parameters that ``source`` fills and ``spec`` lacks."""
     fills = () if source is None else source.fills
-    return set(fills) <= spec.params.model_fields.keys()
+    return [f for f in fills if f not in spec.params.model_fields]
 
 
 def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
@@ -288,10 +294,11 @@ class Intake:
         an empty cell there means that the row waits for its file, and the
         settings given are left out there.
 
-        The label and the spec are checked before the source is listed. The
-        manager writes the settings, the rows and the header; then, with
-        ``follow``, the ``source.json`` of the batch that followed says that
-        it follows no more; then the ``source.json`` of the batch is written.
+        The label, the spec, the source and whether the spec fits it are
+        checked before the source is listed. The manager writes the settings,
+        the rows and the header; then, with ``follow``, the ``source.json`` of
+        the batch that followed says that it follows no more; then the
+        ``source.json`` of the batch is written.
         If the definitions refuse one of these writes, the batch that
         followed is written to follow again, if its Follow was ended, and the
         batch is removed again (:meth:`~.manager.BatchManager.remove`). A process
@@ -327,8 +334,9 @@ class Intake:
         ValueError
             If ``follow`` is given with a ``last`` of a
             :class:`~.source.Range`; if no source ``source`` is registered;
-            if ``choose`` gives a row that the source did not; and as
-            :meth:`~.manager.BatchManager.create` refuses.
+            if the source fills a parameter that the spec lacks
+            (:func:`fits`); if ``choose`` gives a row that the source did
+            not; and as :meth:`~.manager.BatchManager.create` refuses.
         """
         if follow and isinstance(choose, Range) and choose.last is not None:
             raise ValueError(
@@ -338,6 +346,12 @@ class Intake:
         # Checked before the source is listed, which may be slow or raise.
         self.manager.check(spec, title=title, label=label)
         found = self._source(source)
+        if not fits(bound := self.manager.spec_named(spec), found):
+            raise ValueError(
+                f'the spec {spec} has no parameter '
+                f'{", ".join(_lacked(bound, found))}, which the source {source} '
+                'fills'
+            )
         given = self._given(found, found.fills)
         arrived = given[~given['waits']].drop(columns='waits')
         rows = arrived if choose is None else choose(arrived)
