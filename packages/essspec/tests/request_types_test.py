@@ -463,7 +463,8 @@ def test_a_value_written_inline_at_a_referenced_place_is_refused() -> None:
     assert raised.value.errors == (
         (
             ('mask',),
-            'is not a reference to an output, as the field is typed Referenced[...]',
+            'is not a reference to an output, as the field is typed Referenced[...]; '
+            'write one as {"@ref": "output", "record": ID, "output": NAME}',
         ),
     )
 

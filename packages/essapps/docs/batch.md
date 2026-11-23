@@ -655,23 +655,49 @@ key,sample,thickness,binning,name
 - A note column of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note column of a `.xlsx` file keeps the type of its cells.
 - A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row takes its setting, or the row is incomplete if there is none.
 
-The command, with `-b package.module:BINDINGS` before each subcommand:
+The command `essapps-batch` (`ess.apps.batch.cli`) works on a workspace folder. Its `--help` is the page for a person who operates batches; this section is for the developer.
+The options before the subcommand name the folder (`-w`), the bindings (`-b package.module:BINDINGS`) and the row sources (`-s package.module:SOURCES`, a mapping of names to `RowSource`):
 
-```
-essapps-batch -b ... rows package.module:SOURCE -o runs.csv   # the table a source makes now
-essapps-batch -b ... reduce iofq.yaml runs.csv -l water        # makes `water`: iofq.yaml its template, runs.csv its table
-essapps-batch -b ... reduce -l water -o done.csv               # reduces every ready row again; writes the table with results
-essapps-batch -b ... reduce iofq.yaml done.csv -l water        # iofq.yaml becomes the settings, done.csv the table; reduces
-essapps-batch -b ... reduce iofq.yaml -l water2 -s package.module:SOURCES --source sample-runs
-                                                               # a batch of the rows that the source has filled
+```sh
+B="essapps-batch -w FOLDER -b package.module:BINDINGS -s package.module:SOURCES"
+$B specs                                       # name, version, title, outputs of each spec bound
+$B template loki-iofq -o iofq.yaml             # a template to fill in: each parameter, with what it takes
+$B sources                                     # the row sources by name, with the parameters each fills
+$B rows sample-runs -o runs.csv                # the table that a source makes now
+$B reduce iofq.yaml runs.csv -l water          # makes `water`: iofq.yaml its template, runs.csv its table
+$B reduce iofq.yaml -l water2 --source sample-runs
+                                               # a batch of the rows that the source has filled
+$B batches                                     # label, title, spec, rows, done, source, follows
+$B show -l water -o done.csv                   # the table with results; reduces nothing
+$B reduce -l water -o done.csv                 # reduces every ready row again; writes the table with results
+$B reduce iofq.yaml done.csv -l water          # iofq.yaml becomes the settings, done.csv the table; reduces
+$B template -l water -o now.yaml               # the settings of water, as the page's "settings as a file"
 ```
 
+Each subcommand is a few calls of the batch layer:
+
+| Subcommand | In code |
+|---|---|
+| `specs` | `client.specs()` |
+| `template SPEC` | `templates.template_to_fill(client.spec_named(SPEC), client.specs(), sources)` |
+| `template -l LABEL` | `templates.template_text(Template(batch.spec, params=batch.settings))` |
+| `sources` | the names of `-s` and the `fills` of each |
+| `rows NAME` | `rows_of(client, sources[NAME])` |
+| `batches` | `manager.headers()`, `batch.shown()`, `intake.source(label)`, `intake.following` |
+| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame())` |
+| `reduce` | `manager.create` or `intake.create`, or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
+
+`template_to_fill` reads the type of each parameter with `ess.spec.field_types`, as the fields of the settings form do (`ess.apps.fields`).
+A required parameter is commented out, so the template as written is read by `load_template` and refused by `reduce`, naming each required parameter.
 The table written has the note columns `status` (the words of `RowState.text`), `record` and `failure`.
+`--json` writes a table as JSON in place of CSV: a list of objects, one per row, with the key as a field.
 For a label that exists, the template becomes the settings and the table replaces the table.
 A value of the template at a column of the table is the setting that each row with an empty cell takes.
 `--remaining` reduces only `left_to_reduce`; `--earlier-settings` adds `earlier_settings` to it.
 A row that `--remaining` leaves reads `earlier`, and the command exits with 3.
 A label without a batch and with neither a table nor `--source` gets one row, keyed by the label: every parameter is a setting.
+A `reduce` that makes a batch and is then refused removes it again (`manager.remove`): nothing was submitted, and the same command line works once the template is right.
+A wrong `package.module:NAME` is a message and exit status 2, before the folder is opened.
 The command does no step of Follow.
 
 ## Chains

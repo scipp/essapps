@@ -16,9 +16,9 @@ a manager keeps nothing::
 
     Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS), staged=True)
 
-The command takes the sources as
-``essapps-batch reduce -s ess.instruments.loki.batch:SOURCES``, and the source
-of the rows as ``essapps-batch rows ess.instruments.loki.batch:SAMPLE_RUNS``.
+The command takes the sources as ``essapps-batch -s
+ess.instruments.loki.batch:SOURCES``, and a source by its name, such as
+``essapps-batch -s ... rows sample-runs``.
 """
 
 import sys

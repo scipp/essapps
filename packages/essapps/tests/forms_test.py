@@ -755,7 +755,8 @@ def test_a_field_typed_referenced_is_filled_by_reference_only(
         with pytest.raises(
             SubmitError,
             match=r'^transmission: is not a reference to an output, as the field is '
-            r'typed Referenced\[\.\.\.\]$',
+            r'typed Referenced\[\.\.\.\]; write one as \{"@ref": "output", '
+            r'"record": ID, "output": NAME\}$',
         ):
             client.submit(ADD, params={'transmission': inline})
 

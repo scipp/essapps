@@ -150,7 +150,7 @@ from ..state import (
     to_reduce,
 )
 from ..table import KEY, as_request, cell_of, read_table, write_table
-from ..templates import checked_settings, load_template, write_template
+from ..templates import checked_settings, load_template, template_text
 from . import forms, plots
 from .models import (
     Action,
@@ -1163,9 +1163,7 @@ class Page:
         if missing := self._form_held()[1]:
             raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
         batch = self.batch
-        with named_file('settings.yaml') as path:
-            write_template(Template(batch.spec, params=batch.settings), path)
-            return path.read_bytes()
+        return template_text(Template(batch.spec, params=batch.settings)).encode()
 
     @_action
     def load_settings(self, name: str, content: bytes) -> str:

@@ -162,7 +162,8 @@ def not_its_source(value: Any, file: bool) -> PydanticCustomError:
         )
     return PydanticCustomError(
         'output_ref',
-        'is not a reference to an output, as the field is typed Referenced[...]',
+        'is not a reference to an output, as the field is typed Referenced[...]; '
+        'write one as {"@ref": "output", "record": ID, "output": NAME}',
     )
 
 
