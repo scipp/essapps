@@ -238,7 +238,7 @@ def _reduce(
     elif args.source is None:
         rows = pd.DataFrame(index=pd.Index([label], name=KEY))
     else:
-        rows = None  # the intake takes them from the source
+        rows = None  # Intake takes them from the source
     settings = None
     if template is not None:
         # Checked before anything is written.
@@ -320,10 +320,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f'--source {args.source} is not a name in --sources: '
                 f'{", ".join(args.sources) or "none given"}'
             )
-    definitions = FolderDefinitions(args.workspace)
     try:
+        definitions = FolderDefinitions(args.workspace)
         files = CorrectedFiles(folder_files(args.workspace), definitions=definitions)
-    except ValueError as error:
+    except ValueError as error:  # also definitions of another format
         sys.stderr.write(f'{error}\n')
         return 2
     try:

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The definition of batches kept in a folder workspace, opened twice."""
 
+import json
 import re
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
@@ -25,6 +26,7 @@ from ess.apps.batch import (
 )
 from ess.apps.batch.definition import (
     CORRECTIONS,
+    FORMAT,
     FromSource,
     Key,
     header_data,
@@ -383,3 +385,27 @@ def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> Non
     store.save(key, {'source': 'pairs', 'considered': ['60339']})
     with pytest.raises(ValueError, match=r'source\.json: follows: Field required'):
         store.load(key, source_of)
+
+
+def test_a_folder_gets_the_format_with_its_first_definitions(folder: Path) -> None:
+    store = FolderDefinitions(folder)
+    store.save(rows_key('a'), {})
+
+    format_file = folder / 'definitions' / 'format.json'
+    assert json.loads(format_file.read_text()) == {'format': FORMAT}
+    assert FolderDefinitions(folder).labels() == ['a']
+
+
+@pytest.mark.parametrize(('kept', 'said'), [(None, 'none'), (FORMAT + 1, FORMAT + 1)])
+def test_a_folder_of_definitions_of_another_format_is_refused(
+    folder: Path, kept: int | None, said: object
+) -> None:
+    FolderDefinitions(folder).save(rows_key('a'), {})
+    format_file = folder / 'definitions' / 'format.json'
+    if kept is None:
+        format_file.unlink()
+    else:
+        format_file.write_text(json.dumps({'format': kept}))
+
+    with pytest.raises(ValueError, match=f'format {said}.*make a new folder'):
+        FolderDefinitions(folder)

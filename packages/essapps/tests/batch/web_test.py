@@ -2133,13 +2133,9 @@ def test_a_batch_made_to_follow_follows_and_one_without_a_source_cannot(
     refused = http.post('/api/batches', json=new_batch(source=None, follow=True))
 
     assert intake.following == made['label']
-    assert (refused.status_code, refused.json()) == (
-        422,
-        {
-            'message': 'The batch was not made: '
-            'a batch follows its source, and none is given.'
-        },
-    )
+    assert refused.status_code == 422
+    [error] = refused.json()['detail']
+    assert error['msg'].endswith('a batch follows its source, and none is given')
 
 
 def test_stop_following_answers_the_page_of_a_batch_that_follows_no_more(

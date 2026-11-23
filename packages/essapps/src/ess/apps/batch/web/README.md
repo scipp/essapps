@@ -164,7 +164,7 @@ The page remembers in the session of the browser, so that a reload or a return t
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the source fills; any spec without a source |
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting at a column ticked stays, and each row whose cell is empty takes it, also a row that Follow adds; a column that the source fills gets no setting |
-| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the intake refuses a last row with Follow (`Intake.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
+| Follow | with a source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the `Intake` refuses a last row with Follow (`Intake.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
 | Columns | the columns that the source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
 **Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page shows the new batch in the Rows view.
@@ -185,7 +185,7 @@ batch = manager.create(spec, title=title, rows=table,           # from a table f
                        columns=['thickness'], settings=settings)
 ```
 
-The batch is made in one call, so it is made as asked or not at all; a batch that follows replaces the one before only if it is made.
+The batch is made in one call: a call that is refused leaves no batch, and a batch that follows replaces the one before only if it is made. A process that stops while a batch that follows is made may leave the batch made and no batch that follows ([What is kept on disk](../../../../../docs/batch.md#what-is-kept-on-disk)).
 
 Opened on the page of a batch, the form starts at that batch's source, workflow, columns and settings, so the next batch is this form with a range that starts later, and Follow ticked by the person.
 "From" starts at the first row, so a batch with Follow reduces every row taken again; "no row now" with Follow makes a batch of only the rows that arrive from now on.
@@ -220,7 +220,7 @@ The page then shows `/` in place of the batch in the history of the browser: the
 
 The web layer follows eight rules. Each says where a reader finds a kind of thing, so a change that breaks one needs a reason.
 
-1. **The batch layer decides.** Every rule of rows, settings, sources, reduction and Follow is in `ess.apps.batch`. The web layer says what the batch layer refuses in words for a person and copies no rule. The form in the browser may know a rule to be helpful, such as that a batch that follows has no last row, but the server does not decide it here.
+1. **The batch layer decides.** Every rule of rows, settings, sources, reduction and Follow is in `ess.apps.batch`. The web layer says what the batch layer refuses in words for a person and copies no rule of the batch layer. It refuses only a request that no call of the batch layer can express, such as Follow without a row source (`NewBatch`). The form in the browser may know a rule to be helpful, such as that a batch that follows has no last row, but the server does not decide it here.
 2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` takes it, and a caller may hold it already; a property of `Pages` (`listing`, `files_version`, `runs_version`, `corrects_runs`) reads one value without it.
 3. **Each piece of state has one owner, which alone writes it.**
 
@@ -268,8 +268,8 @@ flowchart TD
 |---|---|
 | `static/` | the page: `index.html`, `app.js`, `tables.js`, `form.js`; what is shown: selection, filter, view, tab, sort, axes |
 | `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch |
-| `pages.py` | `Pages`: what the pages share, without HTTP: the intake and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It alone writes the listing of the files and its version, the corrections of runs, and the step of Follow (`tick`) and what it said |
-| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a draft until Apply), the refusals and its version. Through the manager and the intake it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Pages` for the listing and for what to show of Follow |
+| `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It alone writes the listing of the files and its version, the corrections of runs, and the step of Follow (`tick`) and what it said |
+| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a draft until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Pages` for the listing and for what to show of Follow |
 | `refusals.py` | how `Pages` and `Page` refuse a request: `Problem` (422) or `Missing` (404); how an exception of the batch layer reads as a message (`why`, `kept`), and which exceptions of a source are said (`refused`: `ValueError`, `KeyError`, `OSError`; anything else is a defect) |
 | `ess.apps.batch` | the logic: `BatchManager`, `Intake`, `step`, `Batch`, `table`, states, `CorrectedFiles`; shared with the command `essapps-batch` |
 
@@ -338,8 +338,8 @@ parent.mount('/batch', batch)
 
 ## Where the definition is kept
 
-The headers, the tables, the settings, the batch that follows, and the corrections of runs are the definitions of the workspace.
-The demo and the LoKI page give the manager, and so the intake, and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
+The headers, the tables, the settings, the batch that follows, and the corrections of runs are the definitions of the workspace. A folder whose definitions are of another format is refused when the page starts (`FolderDefinitions`).
+The demo and the LoKI page give the manager, and so the `Intake`, and the file source the folder's definitions, `FOLDER/definitions/` (`ess.apps.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
 The settings form is a draft of the batch's settings: **Apply** writes it to the batch, and so to the definitions. A draft not applied is lost when the server stops.
 Results are records of the workspace, in `FOLDER/store/`.
 See [Where the definitions are kept](../../../../../docs/batch.md#where-the-definitions-are-kept).

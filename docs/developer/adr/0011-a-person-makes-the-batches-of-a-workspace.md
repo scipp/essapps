@@ -91,7 +91,7 @@ Nothing checks that the batches cover every row or that they do not overlap.
 
 ### One batch follows
 
-The intake keeps which batch follows, if any:
+`Intake` keeps which batch follows, if any:
 
 ```python
 intake.create(..., source='sample-runs', follow=True)    # this batch follows, and no other
@@ -101,8 +101,8 @@ intake.step()                                            # one step of Follow on
 ```
 
 - Making a batch that follows stops the batch that followed before, first, so at most one batch follows.
-- The intake keeps it in the definitions of the batch (`"follows"` in its `source.json`), so a restart resumes, and removing the batch that follows ends Follow, also for a batch made again with the label.
-- Whoever serves the pages owns the timer that calls `step`. The intake has no thread, no timer and no lock.
+- `Intake` keeps it in the definitions of the batch (`"follows"` in its `source.json`), so a restart resumes, and removing the batch that follows ends Follow, also for a batch made again with the label.
+- Whoever serves the pages owns the timer that calls `step`. `Intake` has no thread, no timer and no lock.
 - The workspace has one lock: every request of every page and each step take it, so the batches, the manager and the corrections change in one request at a time.
 
 ### A page shows one batch, named in its URL

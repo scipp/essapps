@@ -62,7 +62,7 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict
 from urllib.parse import quote, unquote
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
@@ -129,12 +129,28 @@ class DefinitionStore(Protocol):
 _NAME_MAX = 255
 """The bytes of a file name, on the file systems of Linux and macOS."""
 
+# Moves with every change of what the kept files mean, such as where the fills
+# of a batch are kept, so that a folder of another format is refused, not read
+# wrong. No folder is migrated.
+FORMAT = 1
+"""The format of the files of :class:`FolderDefinitions`, in ``format.json``."""
+
+_FORMAT_KEY: Key = ('format',)
+
+
+class _Format(TypedDict):
+    format: int
+
+
+_FORMAT = TypeAdapter(_Format)
+
 
 class FolderDefinitions:
     """
     A :class:`DefinitionStore` of JSON files in ``definitions/`` of a
     workspace's folder (see :mod:`ess.apps.folder`)::
 
+        definitions/format.json
         definitions/corrections.json
         definitions/labels/auto%2Fiofq/header.json
         definitions/labels/auto%2Fiofq/settings.json
@@ -149,10 +165,27 @@ class FolderDefinitions:
     file left by a write that was cut off stays, a few bytes, until its table
     is deleted: a reader cannot tell it from that of a write of another
     process that runs.
+
+    ``format.json`` holds ``{"format": FORMAT}`` (:data:`FORMAT`), written
+    before the first table of a folder without labels. Made on a folder with
+    labels and no ``format.json``, or another format, it raises
+    ``ValueError``: what the files mean may have changed, and no folder is
+    migrated.
     """
 
     def __init__(self, directory: Path) -> None:
         self._root = directory / 'definitions'
+        self._formatted = False  # format.json is written before the first table
+        if not self.labels():
+            return
+        found = self.load(_FORMAT_KEY, lambda data: _checked(_FORMAT, data)['format'])
+        if found != FORMAT:
+            given = 'none (no format.json)' if found is None else found
+            raise ValueError(
+                f'{self._root}: the definitions are of format {given}, and this '
+                f'version reads format {FORMAT}; make a new folder'
+            )
+        self._formatted = True
 
     def __str__(self) -> str:
         return str(self._root)
@@ -184,7 +217,13 @@ class FolderDefinitions:
             raise ValueError(f'{path}: {error}') from None
 
     def save(self, key: Key, data: Any) -> None:
-        path = self.path(key)
+        if not self._formatted:
+            self._write(self.path(_FORMAT_KEY), {'format': FORMAT})
+            self._formatted = True
+        self._write(self.path(key), data)
+
+    def _write(self, path: Path, data: Any) -> None:
+        """Write ``data`` to ``path`` whole; :class:`NotKept` if refused."""
         content = to_json(data, indent=1)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

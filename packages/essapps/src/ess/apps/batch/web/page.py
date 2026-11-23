@@ -343,7 +343,7 @@ class Page:
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, the intake of its
+        What the pages share: the manager of the batch, the ``Intake`` of its
         rows and Follow, the lock, the listing of the files, and what the
         application gives every page.
     label:
@@ -834,7 +834,7 @@ class Page:
         """
         Add the rows of ``keys`` as the source makes them now, so that Follow
         does not add them again once removed
-        (:meth:`~ess.apps.batch.Intake.take`). What the intake or the
+        (:meth:`~ess.apps.batch.Intake.take`). What ``Intake`` or the
         source refuses is a :class:`~.refusals.Problem`
         (:func:`~.refusals.refused`).
         """

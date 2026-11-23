@@ -134,9 +134,17 @@ class Intake:
         return self._read[1]
 
     def _kept_following(self) -> str | None:
-        """The first label whose ``source.json`` says that its batch follows."""
+        """
+        The first label whose ``source.json`` says that its batch follows. A
+        ``source.json`` that cannot be read is passed over: :meth:`source`
+        says why at the page of its batch, and the other pages still work.
+        """
         for label in self.manager.headers():
-            if (made := self._from(label)) is not None and made.follows:
+            try:
+                made = self._from(label)
+            except ValueError:
+                continue
+            if made is not None and made.follows:
                 return label
         return None
 
@@ -281,9 +289,7 @@ class Intake:
                 'so it has no last row'
             )
         # Checked before the source is listed, which may be slow or raise.
-        if label is not None:
-            self.manager.check_label(label)
-        self.manager.spec_named(spec)
+        self.manager.check(spec, title=title, label=label)
         found = self._source(source)
         given = self._given(found, found.fills)
         arrived = given[~given['waits']].drop(columns='waits')
@@ -335,7 +341,7 @@ class Intake:
         a source.
         """
         if (made := self._from(label)) is None:
-            raise ValueError(f'{label} was not made from a source of rows')
+            raise ValueError(f'{label} was not made from a row source')
         return made
 
     def source(self, label: str) -> str | None:

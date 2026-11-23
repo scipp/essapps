@@ -39,7 +39,7 @@ batch that cannot be made (:meth:`Pages.page`), with the reason, and that of
 a batch removed (:meth:`Pages.remove`): a :class:`~.page.Page` handed out
 before answers :class:`~.refusals.Missing` from then on.
 
-The intake keeps which batch follows
+``Intake`` keeps which batch follows
 (:attr:`~ess.apps.batch.Intake.following`). :meth:`Pages.tick` is one
 step of it (:meth:`~ess.apps.batch.Intake.step`), with or without a
 page open, plus what the page shows of the step
@@ -537,10 +537,10 @@ class Pages:
 
     def create(self, new: NewBatch, file: tuple[str, bytes] | None = None) -> Made:
         """
-        Make the batch of ``new`` in one call, with the intake if it has a
-        source (:meth:`~ess.apps.batch.Intake.create`), else with the manager
-        (:meth:`~ess.apps.batch.BatchManager.create`), so that it is made as
-        asked or not at all: with a source, of the rows of the
+        Make the batch of ``new`` in one call, with the :class:`Intake` if it
+        has a source (:meth:`~ess.apps.batch.Intake.create`), else with the
+        manager (:meth:`~ess.apps.batch.BatchManager.create`), so that a
+        refusal leaves no batch: with a source, of the rows of the
         :class:`~ess.apps.batch.Range` of ``new.first``, ``new.last`` and
         ``new.later`` of those that the source has filled now, with an empty
         column for each other of ``new.columns``; with a table ``file``, its
@@ -553,12 +553,12 @@ class Pages:
         It starts with the settings of the batch ``new.settings_from``, else
         with those that the application gives its spec. A setting at a column
         of ``new.columns`` stays, and each row with an empty cell takes it;
-        the intake leaves out the setting of a column that the source fills,
-        whose cells are those of the source.
+        the :class:`Intake` leaves out the setting of a column that the
+        source fills, whose cells are those of the source.
 
         Raises :class:`~.refusals.Problem` with what the file, the manager,
-        the intake or the source refuses, for Follow without a source, for
-        a label of ``settings_from`` that is no batch, if the definitions
+        the :class:`Intake` or the source refuses, for a label of
+        ``settings_from`` that is no batch, if the definitions
         refuse a write, and with what the source raises otherwise
         (:func:`~.refusals.refused`).
         """
@@ -591,8 +591,6 @@ class Pages:
                 if new.follow:
                     self._failure = None  # said of the batch that followed before
                 return Made(label=batch.label)
-            if new.follow:
-                raise ValueError('a batch follows its source, and none is given')
             batch = manager.create(
                 new.spec,
                 title=new.title,

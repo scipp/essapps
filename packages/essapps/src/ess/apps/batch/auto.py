@@ -24,7 +24,7 @@ with ``put``, then reduces the rows that are ready and have no result::
 A step never changes a row that the table has, and never changes the blanks of
 the template: it takes only the columns that the table has. A row whose key is
 considered, such as one a person removed, is never added again; the caller
-keeps :attr:`Step.considered` and gives it to the next step (the intake in
+keeps :attr:`Step.considered` and gives it to the next step (``Intake`` in
 ``source.json``). A key of the source that the table has is considered,
 whoever added the row, and the step keeps it so. So a row that a person added
 by hand with a key that the source gives later stays away once removed, and

@@ -155,7 +155,8 @@ class BatchManager:
     ) -> Batch:
         """
         Make a batch and keep it; its ``Batch``, whose ``label`` names it.
-        Nothing is written if a check fails. The header is written after the
+        Nothing is written if a check fails; :meth:`check` comes first. The
+        header is written after the
         other tables of the batch, so a label without a header is no batch.
 
         If the definitions refuse a write, the tables written are deleted,
@@ -202,14 +203,13 @@ class BatchManager:
             spec ``spec``; or if the rows are refused, as ``put`` refuses
             them, also for a table without a column of ``fills``.
         """
+        self.check(spec, title=title, label=label)
         if label is None:
             stamp = time.strftime('%Y%m%d-%H%M%S')
             label, n = stamp, 1
             while self._taken(label):
                 n += 1
                 label = f'{stamp}-{n}'
-        else:
-            self.check_label(label)
         header = Header(title, description)
         bound = self.spec_named(spec)
         if settings is None:
@@ -235,15 +235,18 @@ class BatchManager:
         self._version += 1
         return batch
 
-    def check_label(self, label: str) -> None:
+    def check(self, spec: str, *, title: str, label: str | None) -> None:
         """
-        Raise ``ValueError`` unless ``label`` can name a new batch: it is
-        letters, digits, ``_``, ``.`` and ``-``, starting with none of the
-        last two, and has no definitions or records.
+        Raise ``ValueError`` as :meth:`create` refuses ``spec``, ``title``
+        and ``label``, without rows: so a caller that lists rows first, such
+        as :meth:`.intake.Intake.create`, refuses in the same order.
         """
-        _check_label(label)
-        if self._taken(label):
-            raise ValueError(f'{label}: the label has definitions or records')
+        if label is not None:
+            _check_label(label)
+            if self._taken(label):
+                raise ValueError(f'{label}: the label has definitions or records')
+        Header(title)
+        self.spec_named(spec)
 
     def spec_named(self, spec: str) -> WorkflowSpec[Any, Any]:
         """

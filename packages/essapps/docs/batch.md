@@ -19,7 +19,7 @@ flowchart TD
         notebook["notebook, test"]
     end
     subgraph layer ["batch layer"]
-        intake["intake: Intake"]
+        intake["Intake"]
         manager["manager: BatchManager"]
         subgraph batch ["Batch"]
             settings
@@ -59,7 +59,7 @@ Nothing in the batch layer imports the page or the command.
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a table, list, change, remove; it knows no row source |
-| intake | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
+| `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
 
 ### Terms
@@ -68,7 +68,9 @@ Nothing in the batch layer imports the page or the command.
 |---|---|
 | workspace | a `Client` (specs bound, files, records) and the definitions; one folder |
 | batch | one spec reduced for many samples: a header (title, description), a spec, settings and a batch table |
-| label | the name of a batch outside the process: its folder in the definitions, the label of its records, its address on the page and for the command. `create` returns the `Batch`, the object that changes and reduces it, and `batch.label` is its label; every other method that names a batch takes the label, and `manager.batch(label)` gives the `Batch` again |
+| label | the name of a batch, unique in a workspace: its folder in the definitions, the label of its records, its address on the page and for the command; `batch.label` |
+| `Batch` | the object that holds the settings and the batch table of one label, and changes and reduces them |
+| `Intake` | the object that holds the manager and the row sources, by name, and brings rows of a source into a batch; it keeps which batch follows |
 | setting | the value of a parameter for the batch: an entry of `batch.settings` |
 | batch table | the rows of a batch, one per reduction: one `pandas.DataFrame` (below) |
 | value of a parameter for a row | what the row is reduced with at that parameter (rule 2) |
@@ -81,6 +83,9 @@ Nothing in the batch layer imports the page or the command.
 | filled, waits | a row of the source is filled once it has a value in each of `RowSource.fills`; until then it waits |
 | considered | the keys of the source that a batch made from it has taken or left out |
 | Follow | a step every few seconds on one batch: add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result; chosen when the batch is made, until it is stopped |
+
+`manager.create` and `intake.create` return the `Batch`, and `manager.batch(label)` gives it again.
+Every other method that names a batch takes its label.
 
 The batch table of the example below, as `batch.frame()` gives it:
 
@@ -132,7 +137,7 @@ Other tables are always named with what they are of:
 3. **The state is computed, never kept.** It is read from the records each time. Each rule (`ready`, `not_reduced`, `left_to_reduce`, `earlier_settings`, `to_reduce`) is a function from the states to keys.
 4. **A step never changes a row that the batch table has.** It adds rows, and reduces rows that have no result.
 5. **A batch is shown without its source and without the files.** A file that is not found is a problem of its row.
-6. **The rules are in the batch layer.** A refusal is a `ValueError`. The page and the command show it and copy no rule. The batch layer has no lock and no timer.
+6. **The rules are in the batch layer.** A refusal is a `ValueError`. The page and the command show it and copy no rule of the batch layer. The page refuses only a request that no call of the batch layer can express, such as Follow without a row source. The batch layer has no lock and no timer.
 7. **Follow is chosen when a batch is made.** A batch follows from `intake.create(..., follow=True)` until `intake.stop()`, its removal, or the making of another batch that follows. A batch that does not follow cannot be made to follow.
 
 ### What is kept on disk
@@ -142,17 +147,21 @@ Other tables are always named with what they are of:
 | `definitions/labels/<label>/header.json` | `{"title": ..., "description": ...}` | manager |
 | `definitions/labels/<label>/settings.json` | a template: the spec; the settings in `params`, also those of a parameter that has a column; `batch.fills` as its `blanks` | `Batch` |
 | `definitions/labels/<label>/rows.json` | the batch table: `{"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}]}` | `Batch.put` |
-| `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...], "follows": true}`; only for a batch made from a source | intake |
+| `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
+| `definitions/format.json` | `{"format": 1}`: the format of the files above | `FolderDefinitions`, before its first write |
 | `store/`, the log | the records | the workspace |
 
 A label is a batch if and only if `header.json` exists.
 `manager.create` writes rows and settings, then the header.
 `intake.create` then, if the batch follows, writes `"follows": false` to the `source.json` of the batch that followed, then writes the `source.json` of the batch; if the definitions refuse a write, it removes the batch again.
-A process that stops between the header and the batch's `source.json` leaves a batch made without a source, which neither offers rows nor follows, and no batch that follows.
+So a batch of `intake.create` is not always made as asked or not at all: a process that stops between the header and the batch's `source.json` leaves a batch made without a source, which neither offers rows nor follows, and no batch that follows.
 `manager.remove` deletes the header, then every other file of the label, `source.json` too.
 So whether a batch follows goes with its label: a batch made again with the label does not follow unless made so.
 Each file has one writer.
+
+`FolderDefinitions` refuses, with a `ValueError` that says "make a new folder", a folder with labels and no `format.json`, or another format.
+What the files mean changes with the format, such as where the fills of a batch are kept, and a folder read with the wrong meaning would reduce rows with wrong values; no folder is migrated.
 
 `rows.json` has the shape that pandas writes with `to_json(orient='table')`: a schema with the dtype of each column, and one record per row.
 The records are written and read as Python values and not by `to_json` and `read_json`, which round floats: `0.1 + 0.2` comes back as `0.3`.
@@ -160,7 +169,7 @@ A table file is written and read by pandas (`to_csv`, `read_csv`, `to_excel`, `r
 `settings.json` has the form of a template file of the client.
 Its `blanks` are the parameters that the row source of the batch fills (`batch.fills`): a template gives a blank no value, and each row must fill it.
 Which parameters have a column is said by the batch table; they are the blanks of `batch.template()`.
-A `source.json` with other entries than `source` and `considered` is refused when read.
+A `source.json` is refused when read unless its entries are `source`, `considered` and `follows`.
 
 ## One example followed through
 
@@ -240,7 +249,7 @@ intake.following             # 'afternoon'
 intake.step()                # adds 60343 and reduces it
 ```
 
-The manager reads the headers; the intake finds the batch that follows in their `source.json`.
+The manager reads the headers; the `Intake` finds the batch that follows in their `source.json`.
 `manager.batch('afternoon')` reads `settings.json` and `rows.json` and makes the `Batch`.
 The results are read from the records, so no row is reduced twice.
 
@@ -496,7 +505,7 @@ manager.remove(label)      # every file of the label goes; the records stay
 
 `columns` are parameters that are columns of empty cells, besides those of the table.
 
-- `create` refuses a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses.
+- `create` refuses an empty title, a label that has definitions or records, a spec that the workspace does not bind, and rows that `put` refuses. `manager.check(spec, title=..., label=...)` refuses the first three without rows, and `create` calls it first.
 - `fills=` names the parameters that a row source fills (`batch.fills`). `create` keeps them as the `blanks` of `settings.json`, refuses a table without one of their columns, and leaves out the settings there (`batch.settable`). Every other setting stays, at a column too. `Intake.create` gives them; code that makes a batch from a table leaves them out.
 - `manager.batch(label)` reads `settings.json`, with the fills as its blanks, and `rows.json`, binds the spec by name, and passes the definitions, so the `Batch` writes each change.
 - Ask for the batch each time: one handed out before `remove` must not be used after.
@@ -533,6 +542,8 @@ batch = manager.create(spec, rows=table, fills=source.fills, ...)
 `Range` refuses an end that is not a key of the rows that arrived (a row that waits is not one), a first row after the last, and an end with `later=True`.
 `intake.create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the filled rows it leaves out are considered.
 It refuses a source that is not registered and a key from `choose` that is not in `arrived`, and refuses as `manager.create` does.
+It checks the label, the title and the spec first, with `manager.check`, so these refusals come before any of the source.
+If the process stops while a batch that follows is made, the batch may be there and no batch follow (see [What is kept on disk](#what-is-kept-on-disk)).
 
 ## Follow
 
@@ -618,7 +629,8 @@ after run 3:  si@2,3,4  runs=[2, 3, 4]   # listed after run 4: a new key too
 Each list is a new row, which a step adds and reduces; the earlier rows keep their results.
 The key names the whole list, since a step adds a row only under a key that is not considered.
 
-`step`, `offered` and `take` raise `ValueError` "<label> was not made from a source of rows" for a batch without `source.json`.
+`offered` and `take` raise `ValueError` "<label> was not made from a row source" for a batch without `source.json`.
+`step` takes no label: it steps the batch that follows, whose `source.json` says so.
 `auto.step(batch, source, considered)` runs the same step on a `Batch` made in code, with `considered` in memory: give the next step `done.considered`.
 Whoever serves calls `intake.step()` on a timer, such as `every` of `ess.apps.batch.web.api`.
 
@@ -683,7 +695,7 @@ A refused write raises `NotKept`.
 ## The page
 
 `ess.apps.batch.web` serves the batches of a manager as a page.
-`Pages(intake, ...)` takes the intake and reaches the manager as `intake.manager`; it holds one lock over both, and the app calls `Pages.tick`, and so `intake.step()`, on a timer.
+`Pages(intake, ...)` takes the `Intake` and reaches the manager as `intake.manager`; it holds one lock over both, and the app calls `Pages.tick`, and so `intake.step()`, on a timer.
 `Page` is the presenter of one batch: each action that changes rows builds a table and calls `put`.
 The actions are described in [`batch/web/README.md`](../src/ess/apps/batch/web/README.md).
 Each action of the page is one call of the batch layer:
@@ -707,7 +719,7 @@ Each action of the page is one call of the batch layer:
 
 - Test the source on a list of `FileInfo`, without a workspace.
 - Test the batch on `ess.apps.local()` or a folder workspace with fake workflows (`ess.apps.testing`). They start in milliseconds, and refuse and fail as real ones do.
-- Use `FolderDefinitions(tmp_path)`, and make the manager and the intake again to test a restart.
+- Use `FolderDefinitions(tmp_path)`, and make the manager and the `Intake` again to test a restart.
 - `packages/essapps/tests/batch/toys.py` and `conftest.py` show the pattern.
 
 ## What it does not do

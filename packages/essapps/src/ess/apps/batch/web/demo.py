@@ -416,7 +416,10 @@ def main() -> None:
 def _serve(directory: Path, port: int, *, interval: float, samples: int) -> None:
     import uvicorn
 
-    client, files, definitions = open_demo(directory, samples=samples)
+    try:
+        client, files, definitions = open_demo(directory, samples=samples)
+    except ValueError as error:  # such as definitions of another format
+        raise SystemExit(str(error)) from None
     with client:
         folder = directory.name
         app = build(client, files, definitions, folder=folder, interval=interval)

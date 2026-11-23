@@ -397,9 +397,9 @@ def test_a_batch_made_without_a_source_offers_and_takes_no_rows(
 ) -> None:
     intake.manager.create('plain', title='A', label='a')
 
-    with pytest.raises(ValueError, match='a was not made from a source'):
+    with pytest.raises(ValueError, match='a was not made from a row source'):
         intake.offered('a')
-    with pytest.raises(ValueError, match='a was not made from a source'):
+    with pytest.raises(ValueError, match='a was not made from a row source'):
         intake.take('a', ['1'])
 
 
@@ -432,16 +432,21 @@ def _broken(files: Any) -> pd.DataFrame:
 
 
 @pytest.mark.parametrize(
-    ('spec', 'label', 'said'),
-    [('iofq', None, 'no spec iofq'), ('plain', 'a/b', 'a label is')],
+    ('spec', 'title', 'label', 'said'),
+    [
+        ('iofq', 'A', None, 'no spec iofq'),
+        ('plain', ' ', None, 'a title that is not empty'),
+        ('plain', 'A', 'a/b', 'a label is'),
+    ],
 )
-def test_a_spec_or_label_is_refused_before_the_source_is_listed(
-    manager: BatchManager, spec: str, label: str | None, said: str
+def test_a_spec_title_or_label_is_refused_before_the_source_is_looked_up(
+    manager: BatchManager, spec: str, title: str, label: str | None, said: str
 ) -> None:
     intake = Intake(manager, sources={'broken': RowSource(_broken, fills=())})
 
-    with pytest.raises(ValueError, match=said):
-        intake.create(spec, title='A', source='broken', label=label)
+    for source in ('broken', 'nope'):
+        with pytest.raises(ValueError, match=said):
+            intake.create(spec, title=title, source=source, label=label)
 
 
 # Which batch follows
@@ -466,6 +471,19 @@ def _follows(definitions: FolderDefinitions) -> list[str]:
         if (made := definitions.load(source_key(label), source_of)) is not None
         and made.follows
     ]
+
+
+def test_a_source_json_that_cannot_be_read_hides_neither_follow_nor_other_batches(
+    two: Intake, client: Client, definitions: FolderDefinitions
+) -> None:
+    two.create('plain', title='C', source='pairs', label='c', follow=True)
+    definitions.save(source_key('a'), {'source': 'pairs'})
+    again = _again(client, definitions)
+
+    assert again.following == 'c'
+    assert again.source('b') == 'pairs'
+    with pytest.raises(ValueError, match=r'source\.json: considered: '):
+        again.source('a')
 
 
 def test_a_batch_made_to_follow_ends_follow_on_the_one_before_then_writes_its_own(

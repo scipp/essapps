@@ -167,7 +167,10 @@ def main() -> None:
     args = parser.parse_args()
     if not (STATIC / 'vendor').is_dir():
         parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')
-    client, files, definitions = open_loki(args.folder)
+    try:
+        client, files, definitions = open_loki(args.folder)
+    except ValueError as error:  # such as definitions of another format
+        parser.exit(1, f'{error}\n')
     with client:
         folder = args.folder.resolve().name
         app = build(client, files, definitions, folder=folder, interval=args.interval)
