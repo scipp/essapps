@@ -285,17 +285,30 @@ def measurements(samples: int = len(SAMPLES)) -> list[list[Run]]:
     return groups
 
 
+DEMO_PID_PREFIX = '20.500.12269'
+"""The prefix of the catalogue identifiers of the demo's runs, that of ESS."""
+
+
 def measure(directory: Path, runs: Sequence[Run]) -> None:
     """
     Write the file of each of ``runs`` that is not there, then replace
-    ``files.csv`` with a table of ``runs``.
+    ``files.csv`` with a table of ``runs``, each with a catalogue identifier,
+    as a raw file at ESS has.
     """
     rows = []
     for run, content, role, sample in runs:
         path = directory / f'{run}.json'
         if not path.exists():
             path.write_text(json.dumps({'run': run, **content}))
-        rows.append({'file': path.name, 'run': run, 'role': role, 'sample': sample})
+        rows.append(
+            {
+                'file': path.name,
+                'run': run,
+                'pid': f'{DEMO_PID_PREFIX}/demo-run-{run}',
+                'role': role,
+                'sample': sample,
+            }
+        )
     write_files_table(directory, rows)
 
 

@@ -184,6 +184,11 @@
         </section>
       </div>
       <div class="tab" id="tab-publish" hidden>
+        <div class="settings-bar draft" id="publish-draft">
+          <span class="settings-bar-state"></span>
+          <button type="submit" form="publish-form" class="primary">Apply</button>
+          <button type="button" id="publish-discard">Discard</button>
+        </div>
         <form class="param header-form" id="publish-form">
           <h3>The datasets of this batch</h3>
           <p class="hint">Each row is published as one derived dataset of the catalogue, with the outputs chosen here. Its inputs, proposal and software are filled in from its result.</p>
@@ -194,7 +199,6 @@
           <div class="field"><label for="publish-owner">Owner</label><input type="text" id="publish-owner" name="owner"></div>
           <div class="field"><label for="publish-email">Contact email</label><input type="email" id="publish-email" name="contact_email"></div>
           <p class="problem" id="publish-problem"></p>
-          <div class="buttons"><button type="submit">Save</button></div>
         </form>
         <section class="param">
           <h3>Publish</h3>

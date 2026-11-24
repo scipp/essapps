@@ -1881,3 +1881,58 @@ def test_another_page_of_a_removed_batch_shows_why_and_the_list(
     assert page.is_hidden('#new-batch')
     assert all('status of 404' in e for e in page.errors)
     page.errors.clear()
+
+
+@pytest.fixture
+def publishing(
+    browser: Any, intake: Intake, url: str, batch: Batch, client: Client
+) -> Iterator[Any]:
+    """The page of ``url`` with a catalogue in memory, every row reduced."""
+    from scitacean.testing.client import FakeClient
+    from scitacean.testing.transfer import FakeFileTransfer
+
+    from ess.apps.batch.publish import Publisher
+    from ess.apps.scicat import Catalogue
+
+    scicat = FakeClient.without_login(
+        url='https://scicat.invalid/api/v3', file_transfer=FakeFileTransfer()
+    )
+    publisher = Publisher(intake.manager, Catalogue(client=scicat, instrument='loki'))
+    client.wait(list(batch.reduce(['1', '2']).values()))
+    with serve(create_app(Pages(intake, publisher=publisher))) as root:
+        page = watched(browser)
+        page.goto(f'{root}batches/{batch.label}/')
+        page.wait_for_selector('#rows .tabulator-row')
+        page.click('[data-tab=publish]')
+        yield page
+        page.close()
+        assert page.errors == []
+
+
+def test_the_publish_form_is_in_force_after_apply_and_holds_publishing_back_till_then(
+    publishing: Any,
+) -> None:
+    page = publishing
+    select(page, 'water')
+    page.check('#publish-outputs input[value=total]')
+    page.fill('#publish-owner', 'Anna')
+    page.fill('#publish-email', 'anna@example.org')
+    page.wait_for_selector('#publish-draft.changed')
+    held = page.is_disabled('#publish')
+
+    page.click('#publish-draft button.primary')
+    page.wait_for_selector('#publish-draft:not(.changed)')
+    page.fill('#publish-owner', 'Bob')
+    page.wait_for_selector('#publish-draft.changed')
+    page.click('#publish-discard')
+    page.wait_for_selector('#publish-draft:not(.changed)')
+    owner = page.input_value('#publish-owner')
+    page.once('dialog', lambda dialog: dialog.accept())
+    page.click('#publish')
+    published = page.locator('#rows .tabulator-row', has_text='water').locator(
+        '[tabulator-field=published]'
+    )
+    published.filter(has_text='pid:').wait_for()
+
+    assert held
+    assert owner == 'Anna'
