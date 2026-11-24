@@ -1914,6 +1914,8 @@ def test_the_publish_form_is_in_force_after_apply_and_holds_publishing_back_till
 ) -> None:
     page = publishing
     select(page, 'water')
+    page.wait_for_selector('#publish:disabled')
+    unfilled = page.inner_text('#publish-hint')
     page.check('#publish-outputs input[value=total]')
     page.fill('#publish-owner', 'Anna')
     page.fill('#publish-email', 'anna@example.org')
@@ -1934,5 +1936,6 @@ def test_the_publish_form_is_in_force_after_apply_and_holds_publishing_back_till
     )
     published.filter(has_text='pid:').wait_for()
 
+    assert unfilled.startswith('The form names no output, no owner, no contact email')
     assert held
     assert owner == 'Anna'

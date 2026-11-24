@@ -60,7 +60,7 @@ def test_a_row_is_published_as_a_derived_dataset_of_its_inputs(
 ) -> None:
     publisher.set_form(batch.label, FORM)
 
-    pids = publisher.publish(batch.label, {'1': 'water'})
+    pids = publisher.publish(batch.label, ['1'])
 
     [pid] = scicat.datasets
     assert pids == {'1': f'pid:{pid}'}
@@ -81,7 +81,7 @@ def test_what_is_published_is_kept_with_the_batch(
     publisher: Publisher, batch: Batch, client: Client, definitions: FolderDefinitions
 ) -> None:
     publisher.set_form(batch.label, FORM)
-    pids = publisher.publish(batch.label, {'1': 'water'})
+    pids = publisher.publish(batch.label, ['1'])
 
     again = Publisher(
         BatchManager(client, definitions=definitions), publisher.catalogue
@@ -97,10 +97,10 @@ def test_a_result_is_published_once(
     publisher: Publisher, batch: Batch, scicat: FakeClient
 ) -> None:
     publisher.set_form(batch.label, FORM)
-    publisher.publish(batch.label, {'1': 'water'})
+    publisher.publish(batch.label, ['1'])
 
     with pytest.raises(ValueError, match='published already: 1'):
-        publisher.publish(batch.label, {'2': 'sample A', '1': 'water'})
+        publisher.publish(batch.label, ['2', '1'])
     assert len(scicat.datasets) == 1
 
 
@@ -110,11 +110,11 @@ def test_a_form_without_owner_or_output_is_refused_before_any_upload(
     publisher.set_form(batch.label, Form(contact_email='anna@example.org'))
 
     with pytest.raises(ValueError, match='no output, no owner'):
-        publisher.publish(batch.label, {'1': 'water'})
+        publisher.publish(batch.label, ['1'])
     assert scicat.datasets == {}
 
 
-def test_a_row_without_a_completed_result_is_refused(
+def test_a_row_without_a_result_is_refused(
     publisher: Publisher, batch: Batch, fake: FakeFiles, client: Client
 ) -> None:
     fake.measure(3, 3.0, role='sample', sample='B')
@@ -122,8 +122,23 @@ def test_a_row_without_a_completed_result_is_refused(
     batch.put(toys.rows(client))
     publisher.set_form(batch.label, FORM)
 
-    with pytest.raises(ValueError, match='no completed result: 3'):
-        publisher.publish(batch.label, {'1': 'water', '3': 'B'})
+    with pytest.raises(ValueError, match='not outdated: 3'):
+        publisher.publish(batch.label, ['1', '3'])
+
+
+def test_an_outdated_result_is_refused(publisher: Publisher, batch: Batch) -> None:
+    toys.edit(batch, '1', thickness=2.0)
+    publisher.set_form(batch.label, FORM)
+
+    with pytest.raises(ValueError, match='not outdated: 1'):
+        publisher.publish(batch.label, ['1'])
+
+
+def test_a_row_the_batch_lacks_is_refused(publisher: Publisher, batch: Batch) -> None:
+    publisher.set_form(batch.label, FORM)
+
+    with pytest.raises(ValueError, match='the batch has no row 9'):
+        publisher.publish(batch.label, ['9'])
 
 
 def test_until_set_the_form_has_the_description_of_the_batch_and_the_pi_as_owner(
@@ -134,36 +149,53 @@ def test_until_set_the_form_has_the_description_of_the_batch_and_the_pi_as_owner
     )
 
 
-def test_a_proposal_the_catalogue_lacks_leaves_owner_and_contact_empty(
-    publisher: Publisher, batch: Batch, scicat: FakeClient
+@pytest.mark.parametrize('unknown', ['proposal', 'catalogue'])
+def test_a_pi_the_catalogue_cannot_name_leaves_owner_and_contact_empty(
+    manager: BatchManager, batch: Batch, scicat: FakeClient, unknown: str
 ) -> None:
-    del scicat.proposals['p1']
+    if unknown == 'proposal':
+        del scicat.proposals['p1']
+    else:  # as one that cannot be reached
+        scicat.scicat.main.disabled['get_proposal_model'] = OSError('unreachable')
+
+    publisher = Publisher(manager, Catalogue(client=scicat, instrument='loki'))
 
     assert publisher.form(batch.label) == Form(description='2 mm cells')
 
 
-@pytest.mark.parametrize(
-    ('form', 'match'),
-    [
-        (Form(outputs=('iofq',)), 'plain has no output iofq'),
-        (Form(name='{title} {sample}'), 'no other field'),
-    ],
-)
-def test_a_form_of_another_output_or_field_is_refused(
-    publisher: Publisher, batch: Batch, form: Form, match: str
+def test_a_form_of_another_output_is_refused(
+    publisher: Publisher, batch: Batch
 ) -> None:
     before = publisher.form(batch.label)
 
-    with pytest.raises(ValueError, match=match):
-        publisher.set_form(batch.label, form)
+    with pytest.raises(ValueError, match='plain has no output iofq'):
+        publisher.set_form(batch.label, Form(outputs=('iofq',)))
     assert publisher.form(batch.label) == before
+
+
+@pytest.mark.parametrize(
+    ('name', 'match'),
+    [
+        ('{title} {sample}', 'not {sample}'),
+        ('{title:>99}', 'not {title}'),
+        ('{title!r}', 'not {title}'),
+        ('{title.upper}', 'not {title.upper}'),
+        ('{title', 'do not match'),
+        (' ', 'not empty'),
+    ],
+)
+def test_a_name_with_another_field_a_format_or_nothing_is_refused(
+    name: str, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        Form(name=name)
 
 
 def test_removing_the_batch_forgets_what_was_published(
     publisher: Publisher, batch: Batch, manager: BatchManager
 ) -> None:
     publisher.set_form(batch.label, FORM)
-    publisher.publish(batch.label, {'1': 'water'})
+    publisher.publish(batch.label, ['1'])
 
     manager.remove(batch.label)
 

@@ -380,7 +380,7 @@ def build(
     return create_app(pages)
 
 
-def fake_catalogue(proposal: str = 'local') -> Catalogue:
+def fake_catalogue(proposal: str) -> Catalogue:
     """
     A SciCat in memory (scitacean's fakes), which lists ``proposal``, that of
     the demo's workspace, with a principal investigator; it forgets the
@@ -458,7 +458,7 @@ def main() -> None:
             args.port,
             interval=args.interval,
             samples=args.samples,
-            catalogue=fake_catalogue() if args.fake_catalogue else None,
+            fake=args.fake_catalogue,
         )
         return
     groups = measurements(args.samples)
@@ -477,7 +477,7 @@ def main() -> None:
             args.port,
             interval=args.interval,
             samples=args.samples,
-            catalogue=fake_catalogue() if args.fake_catalogue else None,
+            fake=args.fake_catalogue,
         )
 
 
@@ -487,7 +487,7 @@ def _serve(
     *,
     interval: float,
     samples: int,
-    catalogue: Catalogue | None,
+    fake: bool,
 ) -> None:
     import uvicorn
 
@@ -503,7 +503,7 @@ def _serve(
             definitions,
             folder=folder,
             interval=interval,
-            catalogue=catalogue,
+            catalogue=fake_catalogue(client.proposal) if fake else None,
         )
         uvicorn.run(app, host='localhost', port=port)
 

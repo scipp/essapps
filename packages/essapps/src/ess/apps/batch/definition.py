@@ -61,6 +61,7 @@ read: data of another shape raises ``ValueError`` naming the field, and
 from __future__ import annotations
 
 import os
+import string
 import tempfile
 from collections.abc import Callable, Mapping
 from contextlib import suppress
@@ -69,7 +70,13 @@ from pathlib import Path
 from typing import Any, Protocol, TypedDict
 from urllib.parse import quote, unquote
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 from pydantic_core import from_json, to_json
 
 from ess.spec import FileRef
@@ -336,7 +343,9 @@ class Form(BaseModel, frozen=True):
 
     ``outputs`` are the outputs of the spec that each dataset holds. ``name``
     names a dataset; it may hold ``{title}``, the title of the batch, ``{name}``,
-    the name of the row, and ``{key}``, its key.
+    the name of the row, and ``{key}``, its key, each without a format.
+    Another field in braces, or a name of only spaces, raises ``ValueError``.
+    It is also the body of ``POST api/publish/form`` of the page.
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -347,6 +356,30 @@ class Form(BaseModel, frozen=True):
     keywords: tuple[str, ...] = ()
     owner: str = ''
     contact_email: str = ''
+
+    @field_validator('name')
+    @classmethod
+    def _pattern(cls, name: str) -> str:
+        try:
+            fields = [
+                (field, spec, conversion)
+                for _, field, spec, conversion in string.Formatter().parse(name)
+                if field is not None
+            ]
+        except ValueError as error:  # an unmatched brace
+            raise ValueError(f'a name with braces that do not match: {error}') from None
+        if bad := [
+            f for f, spec, conv in fields if f not in _NAME_FIELDS or spec or conv
+        ]:
+            raise ValueError(
+                f'a name may hold {{title}}, {{name}} and {{key}}, not {{{bad[0]}}}'
+            )
+        if not name.strip():
+            raise ValueError('a name is not empty')
+        return name
+
+
+_NAME_FIELDS = frozenset({'title', 'name', 'key'})
 
 
 class Published(BaseModel, frozen=True):

@@ -151,7 +151,7 @@ from ..state import (
     ready,
     to_reduce,
 )
-from ..table import KEY, as_request, cell_of, read_table, write_table
+from ..table import KEY, NAME, as_request, cell_of, names, read_table, write_table
 from ..templates import checked_settings, load_template, settings_text
 from . import forms, plots
 from .models import (
@@ -196,9 +196,6 @@ class Shown:
 type Draw = Callable[[Sequence[Shown]], dict[str, Any]]
 """Draws results as a Plotly figure."""
 
-NAME = 'name'
-"""The note that names a row on the page; a row without one is named by its key."""
-
 _ORDER = (
     'ready',
     'running',
@@ -212,18 +209,6 @@ _ORDER = (
 _ENDED = (Status.FAILED, Status.CANCELLED)
 _DRAWN = 12
 """How many results the plot shows when no row is selected."""
-
-
-def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
-    """
-    What the page calls each row of ``frame``, a table whose parameter columns
-    are ``columns``, by key: its note :data:`NAME`, else its key.
-    """
-    if NAME not in frame.columns or NAME in columns:
-        return {key: key for key in frame.index}
-    return {
-        key: key if pd.isna(name) else str(name) for key, name in frame[NAME].items()
-    }
 
 
 def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
@@ -1085,24 +1070,27 @@ class Page:
         return publisher
 
     @_action
-    def set_publish_form(self, form: Form) -> str:
-        """Keep the form of the tab "Publish" (:meth:`Publisher.set_form`)."""
-        with refused('The form was not saved'):
-            self._publisher().set_form(self.label, form)
-        return 'Saved.'
+    def set_publish_form(self, fields: Mapping[str, Any]) -> str:
+        """
+        Keep the form of the tab "Publish", given as its fields
+        (:meth:`Publisher.set_form`).
+        """
+        with refused('Not applied'):
+            self._publisher().set_form(self.label, Form.model_validate(fields))
+        return 'Applied the form.'
 
     @_action
     def publish(self, keys: Sequence[str]) -> str:
         """
         Publish the result of each row of ``keys``, as the form says
         (:meth:`Publisher.publish`). A refusal publishes nothing; an upload
-        that fails keeps those before it, which the rows then show.
+        that fails keeps those before it, which its message names and the rows
+        then show.
         """
         if not keys:
             raise Problem('Select the rows to publish.')
-        named = names(self._frame(keys), self.batch.parameter_columns)
         with refused('Not published'):
-            pids = self._publisher().publish(self.label, {k: named[k] for k in keys})
+            pids = self._publisher().publish(self.label, keys)
         return f'Published {_rows(len(pids))}: {", ".join(pids.values())}.'
 
     # One row

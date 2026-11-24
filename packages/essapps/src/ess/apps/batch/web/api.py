@@ -43,7 +43,6 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
-from ..definition import Form
 from .models import (
     BatchCounts,
     Batches,
@@ -282,8 +281,14 @@ def create_app(pages: Pages) -> FastAPI:
         return page.change(body)
 
     @batch.post('/api/publish/form')
-    def set_publish_form(page: PageOfLabel, body: Form) -> State:
-        """Keep the form of the tab "Publish"."""
+    def set_publish_form(
+        page: PageOfLabel, body: Annotated[dict[str, Any], Body()]
+    ) -> State:
+        """
+        Keep the form of the tab "Publish": the fields of
+        :class:`~ess.apps.batch.definition.Form`, which the page checks, so
+        that a refusal is said as each other is.
+        """
         return page.set_publish_form(body)
 
     @batch.post('/api/publish')

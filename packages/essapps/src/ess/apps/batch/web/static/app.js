@@ -46,6 +46,7 @@ const view = {
   counts: null, // the counts of the rows of each batch, once counted
   files: {}, // the files that each batch names, from the last count answered
   columns: '', // the notes and the columns that the grid of the rows shows
+  publishing: false, // whether a publication waits for its answer
 };
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
@@ -1093,30 +1094,32 @@ const publishedColumn = {
 
 // The tab "Publish", if the application publishes to a catalogue. The form
 // holds changes until Apply, as the settings form does, but in the browser:
-// it is filled again only when the batch's form changed, so that what a
-// person types and has not applied stays.
+// one page of a batch serves every person, so a draft on the server would be
+// shared. A form of the server that changed refills it only if the person
+// holds no change, so that what they type and have not applied stays.
 function renderPublish(state) {
-  const tab = $('tab-publish-label');
-  tab.hidden = !state.publish;
+  $('tab-publish-label').hidden = !state.publish;
   if (!state.publish) {
     if (view.tab === 'publish') showTab('result');
     return;
   }
   const form = $('publish-form');
   const shown = JSON.stringify(state.publish);
-  if (shown === form.shown) return;
+  if (shown === form.shown) {
+    renderPublishDraft();
+    return;
+  }
+  const held = form.shown != null && publishChanged(JSON.parse(form.shown).form);
   form.shown = shown;
-  fillPublish(state.publish);
+  if (!held) fillPublish(state.publish);
+  else renderPublishDraft();
 }
 
 function fillPublish({form: given, outputs}) {
-  const form = $('publish-form');
   $('publish-outputs').replaceChildren(
-    ...outputs.map((o) =>
-      h('label', {class: 'check'}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`),
-    ),
+    ...outputs.map((o) => h('label', {}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`)),
   );
-  const {elements} = form;
+  const {elements} = $('publish-form');
   elements.name.value = given.name;
   elements.description.value = given.description;
   elements.keywords.value = given.keywords.join(', ');
@@ -1130,17 +1133,32 @@ function publishForm() {
   const {elements} = $('publish-form');
   return {
     outputs: [...document.querySelectorAll('#publish-outputs input:checked')].map((i) => i.value),
-    name: elements.name.value.trim(),
-    description: elements.description.value.trim(),
-    keywords: elements.keywords.value.split(',').map((k) => k.trim()).filter(Boolean),
-    owner: elements.owner.value.trim(),
-    contact_email: elements.contact_email.value.trim(),
+    name: elements.name.value,
+    description: elements.description.value,
+    keywords: elements.keywords.value.split(','),
+    owner: elements.owner.value,
+    contact_email: elements.contact_email.value,
   };
 }
 
-// Whether the form holds a change that is not applied.
-function publishChanged() {
-  return Boolean(view.state?.publish) && JSON.stringify(publishForm()) !== JSON.stringify(view.state.publish.form);
+// A form as a person reads it, the same from the server and from the inputs:
+// without the spaces around each text, the line ends of a textarea, empty
+// keywords, or the order of the outputs.
+function normal(form) {
+  const text = (value) => value.replace(/\r\n/g, '\n').trim();
+  return JSON.stringify([
+    [...form.outputs].sort(),
+    text(form.name),
+    text(form.description),
+    form.keywords.map(text).filter(Boolean),
+    text(form.owner),
+    text(form.contact_email),
+  ]);
+}
+
+// Whether the inputs hold a change of `form`, by default the form in force.
+function publishChanged(form = view.state?.publish?.form) {
+  return Boolean(form) && normal(publishForm()) !== normal(form);
 }
 
 function renderPublishDraft() {
@@ -1156,43 +1174,63 @@ function renderDraft(bar, changed, said, idle) {
   bar.querySelector('.settings-bar-state').textContent = changed ? `Changed, not applied yet. ${said}`.trim() : said || idle;
 }
 
-// The selected rows that the button "Publish" publishes: those with a
-// current result that is not published.
+// The selected rows that the button "Publish" publishes: those whose result
+// may be published (`ess.apps.batch.publish.PUBLISHABLE`) and is not.
 function toPublish() {
-  return selectedRows().filter((row) => row.result === 'current' && !row.published);
+  return selectedRows().filter((row) => ['done', 'earlier'].includes(row.status) && !row.published);
+}
+
+// What the button "Publish" waits for, in words; nothing if it may publish.
+function publishBlocked() {
+  const {form} = view.state.publish;
+  if (view.publishing) return 'Publishing…';
+  if (publishChanged()) return 'Apply or discard the changes of the form first.';
+  const fields = [['output', form.outputs.length], ['owner', form.owner], ['contact email', form.contact_email]];
+  const lacking = fields.filter(([, given]) => !given).map(([what]) => what);
+  if (lacking.length) return `The form names no ${lacking.join(', no ')}: fill it in and apply it.`;
+  if (!toPublish().length) return 'Select rows that are done or earlier and not published.';
+  return '';
 }
 
 function renderPublishButton() {
   if (!view.state.publish) return;
   const n = toPublish().length;
-  const changed = publishChanged();
-  $('publish').disabled = n === 0 || changed;
+  const blocked = publishBlocked();
+  $('publish').disabled = Boolean(blocked);
   $('publish').textContent = n ? `Publish ${n} selected` : 'Publish';
-  $('publish-hint').textContent = changed
-    ? 'Apply or discard the changes of the form first.'
-    : n
-      ? 'Publishes the result of each selected row that is done and not published, with the form in force.'
-      : 'Select rows that are done and not published.';
+  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or earlier and not published, with the form in force.';
+}
+
+function sayPublish(text) {
+  $('publish-problem').textContent = text;
 }
 
 // Apply the form of the tab "Publish"; a refusal shows at the form.
 function applyPublish(event) {
   event.preventDefault();
-  const say = (text) => ($('publish-problem').textContent = text);
-  say('');
-  act('publish/form', publishForm(), say);
+  sayPublish('');
+  act('publish/form', publishForm(), sayPublish);
 }
 
 // Show the batch's form again, without the changes.
 function discardPublish() {
-  $('publish-problem').textContent = '';
+  sayPublish('');
   fillPublish(view.state.publish);
 }
 
-function publish() {
+// Publish the rows of `toPublish`; the button waits until the answer, so that
+// a second click publishes nothing twice.
+async function publish() {
   const keys = toPublish().map((row) => row.key);
   if (!confirm(`Publish ${keys.length} result${keys.length === 1 ? '' : 's'} to the catalogue? A dataset cannot be removed from this page.`)) return;
-  act('publish', {keys});
+  view.publishing = true;
+  renderPublishButton();
+  try {
+    await act('publish', {keys});
+  } finally {
+    view.publishing = false;
+    if (view.state) renderPublishButton();
+  }
 }
 
 // The result
@@ -1432,7 +1470,10 @@ function wire() {
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;
   $('publish-form').onsubmit = applyPublish;
-  $('publish-form').oninput = renderPublishDraft;
+  $('publish-form').oninput = () => {
+    sayPublish('');
+    renderPublishDraft();
+  };
   $('publish-discard').onclick = discardPublish;
   $('publish').onclick = publish;
   $('remove-batch').onclick = removeBatch;

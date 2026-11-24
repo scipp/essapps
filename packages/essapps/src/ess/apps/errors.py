@@ -145,8 +145,10 @@ def said_at(field: str, message: str) -> str:
     """
     A reason at ``field``, as a sentence: ``run is missing`` for a value
     missing, ``run must be ...`` for pydantic's ``Input should be ...``,
-    else ``run: <message>``.
+    else ``run: <message>``, without the ``Value error, `` that pydantic puts
+    before the message of a validator.
     """
+    message = message.removeprefix('Value error, ')
     if message in ('empty', 'missing', 'Field required'):
         return f'{field} is missing'
     if message.startswith('Input should be '):

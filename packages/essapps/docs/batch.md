@@ -2,7 +2,7 @@
 
 `ess.apps.batch` reduces one spec for many samples: a table of rows, settings shared by all rows, and the result of each row.
 It is built on the client of `ess.apps`; [the client guide](../../../docs/developer/roles/client-authors.ipynb) explains specs, records, labels and stages.
-It needs `essapps[files]` (pandas).
+It needs `essapps[files]` (pandas); publishing results to SciCat (`ess.apps.batch.publish`) needs `essapps[scicat]` (scitacean).
 The decisions behind it are [ADR 0012](../../../docs/developer/adr/0012-a-batch-is-a-table.md) (a batch is a template and a table) and [ADR 0013](../../../docs/developer/adr/0013-follow-adds-the-rows-not-considered.md) (Follow adds the rows not considered).
 
 ## The system on one page
@@ -61,6 +61,7 @@ Nothing in the batch layer imports the page or the command.
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
 | `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
+| publisher | `publish.py`: `Publisher` | the results of a batch into SciCat, one derived dataset per row (`ess.apps.scicat`): the form of a batch's datasets, which results may be published, and what was published |
 
 ### Terms
 

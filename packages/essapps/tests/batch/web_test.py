@@ -2839,7 +2839,7 @@ def test_the_form_offers_the_outputs_of_the_spec_and_is_kept(
 
     saved = publishing.post('/api/publish/form', json=FORM).json()
 
-    assert saved['notice'] == 'Saved.'
+    assert saved['notice'] == 'Applied the form.'
     assert saved['publish']['form']['outputs'] == ['total']
     assert state(publishing)['publish']['form']['owner'] == 'Anna'
 
@@ -2858,19 +2858,26 @@ def test_a_published_row_shows_the_identifier_of_its_dataset(
     assert done['notice'] == f'Published 1 row: pid:{pid}.'
 
 
-def test_a_form_of_another_output_is_refused(publishing: TestClient) -> None:
-    refused = publishing.post('/api/publish/form', json={'outputs': ['nope']})
+@pytest.mark.parametrize(
+    ('form', 'message'),
+    [
+        ({'outputs': ['nope']}, 'Not applied: staged has no output nope'),
+        ({'name': '{sample}'}, 'Not applied: name: a name may hold {title}, {name}'),
+    ],
+)
+def test_a_form_refused_says_why(
+    publishing: TestClient, form: dict[str, Any], message: str
+) -> None:
+    refused = publishing.post('/api/publish/form', json=form)
 
     assert refused.status_code == 422
-    assert (
-        'The form was not saved: staged has no output nope' in refused.json()['message']
-    )
+    assert message in refused.json()['message']
 
 
 @pytest.mark.parametrize(
     ('form', 'keys', 'message'),
     [
-        (FORM, ['3'], 'Not published: no completed result: 3'),
+        (FORM, ['3'], 'Not published: no result to publish, done and not outdated: 3'),
         (FORM, [], 'Select the rows to publish'),
         ({}, ['1'], 'Not published: the form names no output'),
     ],

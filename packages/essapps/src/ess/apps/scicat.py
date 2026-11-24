@@ -29,14 +29,21 @@ install reduces and publishes.
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
-from scitacean import PID, Dataset, RemotePath, ScicatCommError
-from scitacean import Client as ScicatClient
+
+try:
+    from scitacean import PID, Dataset, RemotePath
+    from scitacean import Client as ScicatClient
+except ModuleNotFoundError as error:
+    raise ImportError(
+        'ess.apps.scicat needs scitacean: install essapps[scicat]'
+    ) from error
 
 from .client import Client
 from .records import Record
@@ -58,7 +65,9 @@ class Catalogue:
     folder:
         The folder on the file server that holds the files of a dataset, as a
         pattern of ``proposal``, ``instrument`` and ``record``. The default is
-        that of ESS.
+        that of ESS. A file transfer made with a ``source_folder`` of its own
+        puts the files there instead, so that the datasets of one proposal may
+        share a folder; give the client a transfer without one.
     """
 
     client: ScicatClient
@@ -89,11 +98,16 @@ def principal_investigator(catalogue: Catalogue, proposal: str) -> Person | None
     The principal investigator of ``proposal``, as the catalogue says, whom
     the ESS ingestor makes owner and contact of each raw dataset; ``None`` if
     the catalogue cannot say, such as without a login or for a proposal it
-    lacks.
+    lacks, or if it cannot be reached; that is logged.
     """
     try:
         found = catalogue.client.get_proposal(proposal)
-    except ScicatCommError:
+    except Exception as error:  # httpx raises its own errors, such as unreachable
+        logging.getLogger(__name__).warning(
+            'The principal investigator of proposal %s is not known: %s',
+            proposal,
+            error,
+        )
         return None
     name = ' '.join(n for n in (found.pi_firstname, found.pi_lastname) if n)
     return Person(name=name, email=found.pi_email or '')
@@ -101,7 +115,11 @@ def principal_investigator(catalogue: Catalogue, proposal: str) -> Person | None
 
 def installed_software() -> list[str]:
     """The installed Python distributions as ``name==version``, sorted."""
-    found = {d.name.lower(): d.version for d in importlib.metadata.distributions()}
+    found = {
+        d.name.lower(): d.version
+        for d in importlib.metadata.distributions()
+        if d.name  # a dist-info folder left without its metadata has none
+    }
     return [f'{name}=={version}' for name, version in sorted(found.items())]
 
 
