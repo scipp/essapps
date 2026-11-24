@@ -58,7 +58,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
@@ -97,6 +97,9 @@ from .models import (
 )
 from .page import Draw, Page, listed, read, read_file
 from .refusals import Missing, Problem, kept, refused, why
+
+if TYPE_CHECKING:
+    from ..publish import Publisher
 
 
 class SafeListing(Listing):
@@ -164,6 +167,9 @@ class Pages:
         The fields of a run that a person corrects, as a pydantic model.
     folder:
         What the header names as the place of the data, such as a folder.
+    publisher:
+        Publishes results to the catalogue; without it, the page has no tab
+        "Publish".
 
     Attributes
     ----------
@@ -181,8 +187,10 @@ class Pages:
         files: CorrectedFiles | None = None,
         marks: type[BaseModel] | None = None,
         folder: str = '',
+        publisher: Publisher | None = None,
     ) -> None:
         self.intake = intake
+        self.publisher = publisher
         self.interval = interval
         self.title = title
         self.draw = {} if draw is None else draw

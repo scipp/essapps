@@ -134,6 +134,7 @@
         <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" hidden>!</span><span class="badge earlier" id="earlier-badge" hidden></span></button>
         <button type="button" role="tab" data-tab="row" aria-selected="false" id="tab-row-label">Row</button>
         <button type="button" role="tab" data-tab="batch" aria-selected="false">Batch</button>
+        <button type="button" role="tab" data-tab="publish" aria-selected="false" id="tab-publish-label" hidden>Publish</button>
       </div>
       <div class="tab" id="tab-result">
         <div class="plot-head">
@@ -180,6 +181,25 @@
           <h3>Remove</h3>
           <p class="hint">Removes the title, description, settings and batch table of the batch, and whether it follows. Its results stay in the workspace.</p>
           <button type="button" id="remove-batch">Remove this batch</button>
+        </section>
+      </div>
+      <div class="tab" id="tab-publish" hidden>
+        <form class="param header-form" id="publish-form">
+          <h3>The datasets of this batch</h3>
+          <p class="hint">Each row is published as one derived dataset of the catalogue, with the outputs chosen here. Its inputs, proposal and software are filled in from its result.</p>
+          <fieldset class="field"><legend>Outputs</legend><div id="publish-outputs"></div></fieldset>
+          <div class="field"><label for="publish-name">Dataset name</label><input type="text" id="publish-name" name="name"><small class="hint">{title}: the batch's title, {name}: the row's name, {key}: its key</small></div>
+          <div class="field"><label for="publish-description">Description</label><textarea id="publish-description" name="description" rows="3"></textarea></div>
+          <div class="field"><label for="publish-keywords">Keywords</label><input type="text" id="publish-keywords" name="keywords"><small class="hint">Separated by commas</small></div>
+          <div class="field"><label for="publish-owner">Owner</label><input type="text" id="publish-owner" name="owner"></div>
+          <div class="field"><label for="publish-email">Contact email</label><input type="email" id="publish-email" name="contact_email"></div>
+          <p class="problem" id="publish-problem"></p>
+          <div class="buttons"><button type="submit">Save</button></div>
+        </form>
+        <section class="param">
+          <h3>Publish</h3>
+          <p class="hint" id="publish-hint"></p>
+          <button type="button" class="primary" id="publish">Publish</button>
         </section>
       </div>
     </aside>

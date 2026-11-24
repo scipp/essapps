@@ -261,12 +261,14 @@ function render(state) {
   $('files-problem').textContent = $('files-problem').title = state.files_problem ?? '';
   renderSettings(state);
   renderBatch(state);
+  renderPublish(state);
   renderSelection();
   if (view.tab === 'row') loadRow();
 }
 
 // The columns of the grid of the rows: the name, each note, each parameter
-// column, and the status; and the columns that can be edited, by field.
+// column, the status, and with a catalogue, the identifier of each published
+// result; and the columns that can be edited, by field.
 function gridColumns(state) {
   const named = {
     title: 'Name',
@@ -283,7 +285,7 @@ function gridColumns(state) {
     menu: (column) => (column.waits ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
-    columns: [named, ...notes, ...cells, statusColumn],
+    columns: [named, ...notes, ...cells, statusColumn, ...(state.publish ? [publishedColumn] : [])],
     edits: Object.fromEntries(state.columns.map((c) => [`cells.${c.name}.value`, c])),
   };
 }
@@ -561,6 +563,8 @@ async function show(url, page, how) {
   $('toast').hidden = true;
   $('batch-form').shown = null;
   $('batch-problem').textContent = '';
+  $('publish-form').shown = null;
+  $('publish-problem').textContent = '';
   if (page) showPage(page);
   drawBatches();
   if (shownLabel()) poll();
@@ -1075,7 +1079,88 @@ function renderSelection() {
   $('n-results-all').textContent = said(done);
   document.querySelector('[data-file="results-selected"]').disabled = doneSelected.length === 0;
   document.querySelector('[data-file="results-all"]').disabled = done.length === 0;
+  renderPublishButton();
   renderPlot();
+}
+
+// The publishing
+
+const publishedColumn = {
+  title: 'Published',
+  field: 'published',
+  minWidth: 120,
+  headerSort: false,
+  tooltip: (event, cell) => cell.getValue(),
+};
+
+// The tab "Publish", if the application publishes to a catalogue. The form
+// is filled again only when the batch's form changed, so that what a person
+// types and has not saved stays.
+function renderPublish(state) {
+  const tab = $('tab-publish-label');
+  tab.hidden = !state.publish;
+  if (!state.publish) {
+    if (view.tab === 'publish') showTab('result');
+    return;
+  }
+  const form = $('publish-form');
+  const shown = JSON.stringify(state.publish);
+  if (shown === form.shown) return;
+  form.shown = shown;
+  const {form: given, outputs} = state.publish;
+  $('publish-outputs').replaceChildren(
+    ...outputs.map((o) =>
+      h('label', {class: 'check'}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`),
+    ),
+  );
+  const {elements} = form;
+  elements.name.value = given.name;
+  elements.description.value = given.description;
+  elements.keywords.value = given.keywords.join(', ');
+  elements.owner.value = given.owner;
+  elements.contact_email.value = given.contact_email;
+}
+
+// The selected rows that the button "Publish" publishes: those with a
+// current result that is not published.
+function toPublish() {
+  return selectedRows().filter((row) => row.result === 'current' && !row.published);
+}
+
+function renderPublishButton() {
+  if (!view.state.publish) return;
+  const n = toPublish().length;
+  $('publish').disabled = n === 0;
+  $('publish').textContent = n ? `Publish ${n} selected` : 'Publish';
+  $('publish-hint').textContent = n
+    ? 'Publishes the result of each selected row that is done and not published, with the form as saved.'
+    : 'Select rows that are done and not published.';
+}
+
+// Save the form of the tab "Publish"; a refusal shows at the form.
+function savePublish(event) {
+  event.preventDefault();
+  const {elements} = $('publish-form');
+  const say = (text) => ($('publish-problem').textContent = text);
+  say('');
+  act(
+    'publish/form',
+    {
+      outputs: [...document.querySelectorAll('#publish-outputs input:checked')].map((i) => i.value),
+      name: elements.name.value.trim(),
+      description: elements.description.value.trim(),
+      keywords: elements.keywords.value.split(',').map((k) => k.trim()).filter(Boolean),
+      owner: elements.owner.value.trim(),
+      contact_email: elements.contact_email.value.trim(),
+    },
+    say,
+  );
+}
+
+function publish() {
+  const keys = toPublish().map((row) => row.key);
+  if (!confirm(`Publish ${keys.length} result${keys.length === 1 ? '' : 's'} to the catalogue? A dataset cannot be removed from this page.`)) return;
+  act('publish', {keys});
 }
 
 // The result
@@ -1266,7 +1351,7 @@ function showTab(tab) {
   view.tab = tab;
   remember();
   document.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-  for (const name of ['result', 'settings', 'row', 'batch']) $(`tab-${name}`).hidden = name !== tab;
+  for (const name of ['result', 'settings', 'row', 'batch', 'publish']) $(`tab-${name}`).hidden = name !== tab;
   if (tab === 'row' && view.state) loadRow();
   if (tab === 'result' && !$('plot').hidden) Plotly.Plots.resize($('plot'));
 }
@@ -1314,6 +1399,8 @@ function wire() {
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;
+  $('publish-form').onsubmit = savePublish;
+  $('publish').onclick = publish;
   $('remove-batch').onclick = removeBatch;
   $('remove').onclick = () => act('rows/remove', {keys: view.selected});
   document.querySelector('#message .close').onclick = () => {

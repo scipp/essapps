@@ -38,7 +38,7 @@ import time
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import numpy as np
 import pandas as pd
@@ -68,6 +68,9 @@ from ..table import KEY, cell_of
 from . import Pages, create_app, plots
 from .api import STATIC, every
 from .page import Shown
+
+if TYPE_CHECKING:
+    from ...scicat import Catalogue
 
 
 class Wavelength(BaseModel):
@@ -319,10 +322,12 @@ def build(
     folder: str = '',
     *,
     interval: float = 5.0,
+    catalogue: Catalogue | None = None,
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows. If no batch is listed,
+    every ``interval`` seconds while a batch follows, and the tab "Publish"
+    if given a ``catalogue``. If no batch is listed,
     a batch of the samples there are is made, with a column of thickness, so
     also at a start after a person removed the last one.
     """
@@ -344,6 +349,11 @@ def build(
         ]
         return plots.figure(curves, quantity='I(Q)')
 
+    publisher = None
+    if catalogue is not None:
+        from ..publish import Publisher
+
+        publisher = Publisher(intake.manager, catalogue)
     pages = Pages(
         intake,
         interval=interval,
@@ -352,8 +362,22 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
+        publisher=publisher,
     )
     return create_app(pages)
+
+
+def fake_catalogue() -> Catalogue:
+    """A SciCat in memory (scitacean's fakes); it forgets all at a restart."""
+    from scitacean.testing.client import FakeClient
+    from scitacean.testing.transfer import FakeFileTransfer
+
+    from ...scicat import Catalogue
+
+    scicat = FakeClient.without_login(
+        url='https://scicat.invalid/api/v3', file_transfer=FakeFileTransfer()
+    )
+    return Catalogue(client=scicat, instrument='demo')
 
 
 def main() -> None:
@@ -383,6 +407,11 @@ def main() -> None:
         metavar='SECONDS',
         help='a step of Follow every SECONDS (5)',
     )
+    parser.add_argument(
+        '--fake-catalogue',
+        action='store_true',
+        help='publish to a SciCat in memory (needs the extra scicat)',
+    )
     args = parser.parse_args()
     if args.start is not None and args.arrive is None:
         parser.error('--start goes with --arrive')
@@ -397,7 +426,13 @@ def main() -> None:
     sys.stdout.write(f'folder {directory}\n')
     sys.stdout.flush()
     if args.arrive is None:
-        _serve(directory, args.port, interval=args.interval, samples=args.samples)
+        _serve(
+            directory,
+            args.port,
+            interval=args.interval,
+            samples=args.samples,
+            catalogue=fake_catalogue() if args.fake_catalogue else None,
+        )
         return
     groups = measurements(args.samples)
     start = 1 + (AT_START if args.start is None else args.start)  # the empty cell
@@ -410,10 +445,23 @@ def main() -> None:
 
     plan = [partial(arrive, g) for g in groups[start:]]
     with every(args.arrive, plan):
-        _serve(directory, args.port, interval=args.interval, samples=args.samples)
+        _serve(
+            directory,
+            args.port,
+            interval=args.interval,
+            samples=args.samples,
+            catalogue=fake_catalogue() if args.fake_catalogue else None,
+        )
 
 
-def _serve(directory: Path, port: int, *, interval: float, samples: int) -> None:
+def _serve(
+    directory: Path,
+    port: int,
+    *,
+    interval: float,
+    samples: int,
+    catalogue: Catalogue | None,
+) -> None:
     import uvicorn
 
     try:
@@ -422,7 +470,14 @@ def _serve(directory: Path, port: int, *, interval: float, samples: int) -> None
         raise SystemExit(str(error)) from None
     with client:
         folder = directory.name
-        app = build(client, files, definitions, folder=folder, interval=interval)
+        app = build(
+            client,
+            files,
+            definitions,
+            folder=folder,
+            interval=interval,
+            catalogue=catalogue,
+        )
         uvicorn.run(app, host='localhost', port=port)
 
 

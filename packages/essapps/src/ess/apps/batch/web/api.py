@@ -43,6 +43,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
+from ..definition import Form
 from .models import (
     BatchCounts,
     Batches,
@@ -279,6 +280,16 @@ def create_app(pages: Pages) -> FastAPI:
     def change(page: PageOfLabel, body: HeaderEdit) -> State:
         """Change the title and description of the batch."""
         return page.change(body)
+
+    @batch.post('/api/publish/form')
+    def set_publish_form(page: PageOfLabel, body: Form) -> State:
+        """Keep the form of the tab "Publish"."""
+        return page.set_publish_form(body)
+
+    @batch.post('/api/publish')
+    def publish(page: PageOfLabel, body: Keys) -> State:
+        """Publish the results of the rows of ``keys`` to the catalogue."""
+        return page.publish(body.keys)
 
     @batch.post('/api/batch/remove')
     def remove_batch(label: str) -> Notice:

@@ -148,6 +148,7 @@ Other tables are always named with what they are of:
 | `definitions/labels/<label>/settings.json` | a template: the spec; the settings in `params`, also those of a parameter that has a column; `batch.fills` as its `blanks` | `Batch` |
 | `definitions/labels/<label>/rows.json` | the batch table: `{"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}]}` | `Batch.put` |
 | `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
+| `definitions/labels/<label>/publish.json` | `{"form": {"outputs": ["iofq"], ...}, "published": [{"key": "60339", "record": ..., "pid": ...}]}`; only for a batch published from (`ess.apps.batch.publish`) | `Publisher` |
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
 | `definitions/format.json` | `{"format": 1}`: the format of the files above | `FolderDefinitions`, before its first write |
 | `store/`, the log | the records | the workspace |

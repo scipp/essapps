@@ -142,6 +142,7 @@ from ...errors import FieldError, SubmitError, said
 from ...fields import UNSET, Fields
 from ...records import Record, Status
 from .. import frames
+from ..definition import Form
 from ..export import export_table
 from ..reduction import Batch
 from ..state import (
@@ -162,7 +163,9 @@ from .models import (
     HeaderEdit,
     HeaderShown,
     MakeSetting,
+    Output,
     Plot,
+    PublishShown,
     Reduce,
     Refused,
     Row,
@@ -175,6 +178,7 @@ from .models import (
 from .refusals import Problem, kept, refused, say, why
 
 if TYPE_CHECKING:
+    from ..publish import Publisher
     from .pages import Pages
 
 
@@ -535,6 +539,8 @@ class Page:
         requested = batch.cells()
         named = names(frame, columns)
         notes = [n for n in frame.columns if n not in columns and n != NAME]
+        publisher = self.pages.publisher
+        published = {} if publisher is None else publisher.published(self.label)
         rows = [
             self._row(
                 key,
@@ -545,6 +551,7 @@ class Page:
                 states[key],
                 unsubmitted.get(key, ''),
                 failures,
+                published,
             )
             for key, cells in frame.to_dict('index').items()
         ]
@@ -604,7 +611,18 @@ class Page:
             refused=[self._refused(e, named) for e in self.refused],
             follow=self.pages.follow_shown(self.label),
             files_problem=self.pages.listing.failure,
+            publish=self._publish_shown(),
             notice=notice,
+        )
+
+    def _publish_shown(self) -> PublishShown | None:
+        publisher = self.pages.publisher
+        if publisher is None:
+            return None
+        outputs = self.batch.spec.outputs.model_fields
+        return PublishShown(
+            form=publisher.form(self.label),
+            outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
         )
 
     def _said(self, errors: Sequence[FieldError]) -> str:
@@ -662,6 +680,7 @@ class Page:
         state: RowState,
         unsubmitted: str,
         failures: Mapping[str, str],
+        published: Mapping[str, str],
     ) -> Row:
         titles = {**self.settings.titles, **self._cells.titles}
         problems = {
@@ -705,6 +724,7 @@ class Page:
             changed=changed,
             record=None if record is None else record.id,
             result=result,
+            published='' if record is None else published.get(record.id, ''),
             cells={
                 c: Cell(
                     value=forms.cell(self._cells.fields[c], given.get(c, UNSET)),
@@ -1056,6 +1076,34 @@ class Page:
         except ValueError as error:
             raise Problem(f'The batch was not changed: {why(error)}.') from None
         return 'Saved.'
+
+    # The catalogue
+
+    def _publisher(self) -> Publisher:
+        if (publisher := self.pages.publisher) is None:
+            raise Problem('This application publishes to no catalogue.')
+        return publisher
+
+    @_action
+    def set_publish_form(self, form: Form) -> str:
+        """Keep the form of the tab "Publish" (:meth:`Publisher.set_form`)."""
+        with refused('The form was not saved'):
+            self._publisher().set_form(self.label, form)
+        return 'Saved.'
+
+    @_action
+    def publish(self, keys: Sequence[str]) -> str:
+        """
+        Publish the result of each row of ``keys``, as the form says
+        (:meth:`Publisher.publish`). A refusal publishes nothing; an upload
+        that fails keeps those before it, which the rows then show.
+        """
+        if not keys:
+            raise Problem('Select the rows to publish.')
+        named = names(self._frame(keys), self.batch.parameter_columns)
+        with refused('Not published'):
+            pids = self._publisher().publish(self.label, {k: named[k] for k in keys})
+        return f'Published {_rows(len(pids))}: {", ".join(pids.values())}.'
 
     # One row
 

@@ -2789,3 +2789,103 @@ def test_a_batch_made_again_under_a_removed_label_gets_a_new_page(
 
     assert pages.page('scan') is not page
     assert state(http)['title'] == 'Again'
+
+
+# Publishing
+
+
+@pytest.fixture
+def scicat() -> Any:
+    from scitacean.testing.client import FakeClient
+    from scitacean.testing.transfer import FakeFileTransfer
+
+    return FakeClient.without_login(
+        url='https://scicat.invalid/api/v3', file_transfer=FakeFileTransfer()
+    )
+
+
+@pytest.fixture
+def publishing(
+    intake: Intake, scicat: Any, label: str, sample: Measure, client: Client
+) -> TestClient:
+    """The page of ``label`` with a catalogue, rows 1 and 2 done, 3 incomplete."""
+    from ess.apps.batch.publish import Publisher
+    from ess.apps.scicat import Catalogue
+
+    publisher = Publisher(intake.manager, Catalogue(client=scicat, instrument='loki'))
+    http = opened(Pages(intake, publisher=publisher), label)
+    sample(1, 'water')
+    sample(2, 'sds')
+    sample(3, 'oil', partner=False)
+    intake.manager.batch(label).put(toys.rows(client))
+    reduced(http, client)
+    return http
+
+
+FORM = {'outputs': ['total'], 'owner': 'Anna', 'contact_email': 'anna@example.org'}
+
+
+def test_without_a_catalogue_the_page_has_no_publishing(http: TestClient) -> None:
+    assert state(http)['publish'] is None
+    assert http.post('/api/publish', json={'keys': ['1']}).status_code == 422
+
+
+def test_the_form_offers_the_outputs_of_the_spec_and_is_kept(
+    publishing: TestClient,
+) -> None:
+    assert state(publishing)['publish']['outputs'] == [
+        {'name': 'total', 'title': 'total'}
+    ]
+
+    saved = publishing.post('/api/publish/form', json=FORM).json()
+
+    assert saved['notice'] == 'Saved.'
+    assert saved['publish']['form']['outputs'] == ['total']
+    assert state(publishing)['publish']['form']['owner'] == 'Anna'
+
+
+def test_a_published_row_shows_the_identifier_of_its_dataset(
+    publishing: TestClient, scicat: Any
+) -> None:
+    publishing.post('/api/publish/form', json=FORM)
+
+    done = publishing.post('/api/publish', json={'keys': ['2']}).json()
+
+    [pid] = scicat.datasets
+    assert scicat.get_dataset(pid).name == 'Scan sds'
+    shown = {row['key']: row['published'] for row in done['rows']}
+    assert shown == {'1': '', '2': f'pid:{pid}', '3': ''}
+    assert done['notice'] == f'Published 1 row: pid:{pid}.'
+
+
+def test_a_form_of_another_output_is_refused(publishing: TestClient) -> None:
+    refused = publishing.post('/api/publish/form', json={'outputs': ['nope']})
+
+    assert refused.status_code == 422
+    assert (
+        'The form was not saved: staged has no output nope' in refused.json()['message']
+    )
+
+
+@pytest.mark.parametrize(
+    ('form', 'keys', 'message'),
+    [
+        (FORM, ['3'], 'Not published: no completed result: 3'),
+        (FORM, [], 'Select the rows to publish'),
+        ({}, ['1'], 'Not published: the form names no output'),
+    ],
+)
+def test_a_refused_publication_says_why_and_publishes_nothing(
+    publishing: TestClient,
+    scicat: Any,
+    form: dict[str, Any],
+    keys: list[str],
+    message: str,
+) -> None:
+    publishing.post('/api/publish/form', json=form)
+
+    refused = publishing.post('/api/publish', json={'keys': keys})
+
+    assert refused.status_code == 422
+    assert message in refused.json()['message']
+    assert scicat.datasets == {}

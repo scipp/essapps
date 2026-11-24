@@ -18,6 +18,8 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, model_validator
 
+from ..definition import Form
+
 
 class Way(BaseModel):
     value: str
@@ -126,7 +128,8 @@ class Row(BaseModel):
     parameter column. ``result`` says whether it has a result to show,
     ``current`` or ``outdated``. ``changed`` names, for a row that reads
     ``earlier``, the settings that changed since its result, such as
-    ``'Binning changed'``.
+    ``'Binning changed'``. ``published`` is the catalogue identifier of its
+    result, if published.
     """
 
     key: str
@@ -138,6 +141,7 @@ class Row(BaseModel):
     record: str | None
     result: Literal['current', 'outdated'] | None
     cells: dict[str, Cell]
+    published: str = ''
 
 
 class Action(BaseModel):
@@ -201,6 +205,23 @@ class HeaderShown(BaseModel):
     description: str
 
 
+class Output(BaseModel):
+    """An output of the spec of a batch: its name and its title."""
+
+    name: str
+    title: str
+
+
+class PublishShown(BaseModel):
+    """
+    The tab "Publish": the ``form`` of the batch, and the ``outputs`` of its
+    spec that the form may name.
+    """
+
+    form: Form
+    outputs: list[Output]
+
+
 class State(BaseModel):
     """
     Everything the page of a batch shows but the details of one row, the plot,
@@ -219,6 +240,7 @@ class State(BaseModel):
     form shows them; it has a field per parameter, a column's for its setting.
     ``may_be_columns`` names the parameters that "Make this a column" offers:
     those that are no column and whose cell the page edits.
+    ``publish`` is the tab "Publish", ``None`` without a catalogue.
     ``files_problem`` says why the files cannot be listed,
     if the file source raises: the pickers then offer none. ``notice`` says
     what the action that answers with this state did.
@@ -245,6 +267,7 @@ class State(BaseModel):
     refused: list[Refused]
     follow: Following
     files_problem: str | None
+    publish: PublishShown | None = None
     notice: str = ''
 
 
