@@ -44,11 +44,15 @@ from .definition import (
     Publishing,
     publish_key,
     publishing_data,
-    publishing_of,
 )
 from .export import RECORD_FILE, write_outputs
 from .manager import BatchManager
 from .table import names
+
+
+class UploadFailed(RuntimeError):
+    """An upload failed; the rows published before it stay published."""
+
 
 PUBLISHABLE = ('done', 'earlier')
 """What the row of a result that may be published reads (``RowState.text``)."""
@@ -113,10 +117,6 @@ class Publisher:
             raise ValueError(f'{spec.name} has no output {", ".join(unknown)}')
         self._keep(label, self._kept(label).model_copy(update={'form': form}))
 
-    def published(self, label: str) -> dict[str, str]:
-        """The catalogue identifier of each published record of ``label``, by ID."""
-        return self.manager.batch(label).published()
-
     def publish(self, label: str, keys: Sequence[str]) -> dict[str, str]:
         """
         Publish the result of the row of each of ``keys`` as the form of
@@ -125,7 +125,7 @@ class Publisher:
         Raises ``ValueError``, before any upload, if the form names no output,
         no owner or no contact email, or a row is not in the batch, has no
         result to publish, or one published already. If an upload fails,
-        raises ``RuntimeError`` that names the rows published before it,
+        raises :class:`UploadFailed` that names the rows published before it,
         which are kept.
         """
         form = self.form(label)
@@ -154,13 +154,12 @@ class Publisher:
             )
             try:
                 pids[key] = self._publish(label, key, record, form.outputs, about)
-            except Exception as error:
-                if not pids:
-                    raise
+            except NotKept:
+                raise
+            except Exception as error:  # the catalogue's client may raise anything
                 done = ', '.join(f'{k} as {p}' for k, p in pids.items())
-                raise RuntimeError(
-                    f'published {done}; then {key} failed: {said(error)}'
-                ) from error
+                before = f'published {done}; then ' if pids else ''
+                raise UploadFailed(f'{before}{key} failed: {said(error)}') from error
         return pids
 
     def _results(self, label: str, keys: Sequence[str]) -> dict[str, Record]:
@@ -181,7 +180,7 @@ class Publisher:
             raise ValueError(
                 f'no result to publish, done and not outdated: {", ".join(lacking)}'
             )
-        done = self.published(label)
+        done = batch.published()
         if again := [k for k, r in records.items() if r.id in done]:
             raise ValueError(f'the result is published already: {", ".join(again)}')
         return records
@@ -208,9 +207,7 @@ class Publisher:
         return pid
 
     def _kept(self, label: str) -> Publishing:
-        self.manager.batch(label)  # KeyError for a label without a batch
-        kept = self.manager.definitions.load(publish_key(label), publishing_of)
-        return Publishing() if kept is None else kept
+        return self.manager.batch(label).publishing()
 
     def _keep(self, label: str, publishing: Publishing) -> None:
         self.manager.definitions.save(publish_key(label), publishing_data(publishing))

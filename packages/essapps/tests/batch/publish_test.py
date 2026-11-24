@@ -10,7 +10,7 @@ from scitacean.testing.transfer import FakeFileTransfer
 from ess.apps import Client
 from ess.apps.batch import Batch, BatchManager, FolderDefinitions
 from ess.apps.batch.definition import Form
-from ess.apps.batch.publish import Publisher
+from ess.apps.batch.publish import Publisher, UploadFailed
 from ess.apps.scicat import Catalogue
 from ess.apps.testing import FakeFiles
 
@@ -90,7 +90,7 @@ def test_what_is_published_is_kept_with_the_batch(
     assert again.form(batch.label) == FORM
     record = batch.state(['1'])['1'].record
     assert record is not None
-    assert again.published(batch.label) == {record.id: pids['1']}
+    assert again.manager.batch(batch.label).published() == {record.id: pids['1']}
 
 
 def test_a_result_is_published_once(
@@ -200,3 +200,25 @@ def test_removing_the_batch_forgets_what_was_published(
     manager.remove(batch.label)
 
     assert manager.definitions.labels() == []
+
+
+def test_an_upload_that_fails_names_and_keeps_the_rows_published_before_it(
+    publisher: Publisher,
+    batch: Batch,
+    scicat: FakeClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publisher.set_form(batch.label, FORM)
+    created = scicat.scicat.create_dataset_model
+
+    def second_fails(dataset: object) -> object:
+        if scicat.datasets:
+            raise OSError('SciCat is down')
+        return created(dataset)
+
+    monkeypatch.setattr(scicat.scicat, 'create_dataset_model', second_fails)
+
+    with pytest.raises(UploadFailed, match=r'published 1 as pid:.*; then 2 failed'):
+        publisher.publish(batch.label, ['1', '2'])
+
+    assert list(batch.published().values()) == [f'pid:{next(iter(scicat.datasets))}']

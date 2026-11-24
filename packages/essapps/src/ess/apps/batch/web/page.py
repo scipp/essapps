@@ -524,8 +524,7 @@ class Page:
         requested = batch.cells()
         named = names(frame, columns)
         notes = [n for n in frame.columns if n not in columns and n != NAME]
-        publisher = self.pages.publisher
-        published = {} if publisher is None else publisher.published(self.label)
+        published = batch.published()
         rows = [
             self._row(
                 key,

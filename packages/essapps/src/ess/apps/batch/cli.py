@@ -105,7 +105,7 @@ Exit status:
     0  done; after reduce or follow, every row of the batch is done
     1  an error, such as a folder that another process holds
     2  refused, so that nothing ran: a wrong command line, template or table
-       file, or a row that cannot be reduced
+       file, or a row that cannot be reduced or published
     3  reduce or follow left a row not done, such as one that failed
     130  follow ended at once by a second SIGINT (143: SIGTERM, 129: SIGHUP)
 
@@ -243,7 +243,10 @@ def _publisher(given: _Given) -> Publisher:
     from .publish import Publisher
 
     args = given.args
-    catalogue = _catalogue(args.catalogue)(args.proposal)
+    try:
+        catalogue = _catalogue(args.catalogue)(args.proposal)
+    except Exception as error:  # a real catalogue logs in, and may fail to
+        raise _Failed(f'{args.catalogue}: {said(error)}') from None
     if not isinstance(catalogue, Catalogue):
         raise _Wrong(
             f'{args.catalogue} gave a {type(catalogue).__name__}, not a catalogue '
@@ -557,7 +560,7 @@ def _publish(given: _Given) -> pd.DataFrame:
     Keep the form given, then publish the rows of the keys given; those rows,
     as ``show`` writes them.
     """
-    from .publish import load_form
+    from .publish import UploadFailed, load_form
 
     args = given.args
     publisher = _publisher(given)
@@ -567,10 +570,8 @@ def _publish(given: _Given) -> pd.DataFrame:
     try:
         if args.keys:
             publisher.publish(label, args.keys)
-    except (ValueError, NotKept):  # refused before an upload, or not kept
-        raise
-    except Exception as error:  # the catalogue's client may raise anything
-        raise _Failed(f'not published: {said(error)}') from None
+    except UploadFailed as error:
+        raise _Failed(f'not published: {error}') from None
     return _table(given.client, publisher.manager.batch(label), args.keys)
 
 
