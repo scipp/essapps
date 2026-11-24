@@ -55,7 +55,8 @@ packages/
                     ess.apps.http.server   [server]    HTTP server in front of a workspace
                     ess.apps.http.remote   [remote]    connect(), a client of that server
                     ess.apps.panel         [panel]     Panel forms and apps
-                    ess.apps.service       [service]   storage, workers, SciCat, retention, auth, automatic reduction
+                    ess.apps.scicat        [scicat]    a record published to SciCat as a derived dataset
+                    ess.apps.service       [service]   storage, workers, retention, auth, automatic reduction
                     ess.apps.writers       [scipp]     writers of outputs to files
   essinstruments/   ess.instruments        specs and bindings per instrument, extras [loki], [dream], ...
 frontends/
@@ -63,7 +64,8 @@ frontends/
 ```
 
 The *framework* is `essspec` and `essapps`; the *core* is the plain install of `essapps`, without extras.
-Of these, `essspec`, `essapps`, and `ess.apps.panel` exist.
+Of these, `essspec`, `essapps`, `ess.apps.panel`, and `ess.apps.scicat` exist.
+Publishing is an extra of its own, not part of the service, since a person publishes from an application on VISA or a laptop too.
 Each of the others is created with its first module, so none is an empty scaffold.
 
 An arrow points from a distribution to one it depends on; the dashed arrow is a dependency through an extra:

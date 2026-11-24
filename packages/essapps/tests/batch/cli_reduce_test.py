@@ -586,6 +586,7 @@ def test_reduce_on_a_batch_without_rows_writes_a_table_of_its_columns(
         'status',
         'record',
         'failure',
+        'published',
     ]
     assert read_text(out).empty
 

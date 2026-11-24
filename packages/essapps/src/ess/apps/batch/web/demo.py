@@ -38,7 +38,7 @@ import time
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 import numpy as np
 import pandas as pd
@@ -68,6 +68,9 @@ from ..table import KEY, cell_of
 from . import Pages, create_app, plots
 from .api import STATIC, every
 from .page import Shown
+
+if TYPE_CHECKING:
+    from ...scicat import Catalogue
 
 
 class Wavelength(BaseModel):
@@ -282,17 +285,30 @@ def measurements(samples: int = len(SAMPLES)) -> list[list[Run]]:
     return groups
 
 
+DEMO_PID_PREFIX = '20.500.12269'
+"""The prefix of the catalogue identifiers of the demo's runs, that of ESS."""
+
+
 def measure(directory: Path, runs: Sequence[Run]) -> None:
     """
     Write the file of each of ``runs`` that is not there, then replace
-    ``files.csv`` with a table of ``runs``.
+    ``files.csv`` with a table of ``runs``, each with a catalogue identifier,
+    as a raw file at ESS has.
     """
     rows = []
     for run, content, role, sample in runs:
         path = directory / f'{run}.json'
         if not path.exists():
             path.write_text(json.dumps({'run': run, **content}))
-        rows.append({'file': path.name, 'run': run, 'role': role, 'sample': sample})
+        rows.append(
+            {
+                'file': path.name,
+                'run': run,
+                'pid': f'{DEMO_PID_PREFIX}/demo-run-{run}',
+                'role': role,
+                'sample': sample,
+            }
+        )
     write_files_table(directory, rows)
 
 
@@ -319,10 +335,12 @@ def build(
     folder: str = '',
     *,
     interval: float = 5.0,
+    catalogue: Catalogue | None = None,
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows. If no batch is listed,
+    every ``interval`` seconds while a batch follows, and the tab "Publish"
+    if given a ``catalogue``. If no batch is listed,
     a batch of the samples there are is made, with a column of thickness, so
     also at a start after a person removed the last one.
     """
@@ -344,6 +362,11 @@ def build(
         ]
         return plots.figure(curves, quantity='I(Q)')
 
+    publisher = None
+    if catalogue is not None:
+        from ..publish import Publisher
+
+        publisher = Publisher(intake.manager, catalogue)
     pages = Pages(
         intake,
         interval=interval,
@@ -352,8 +375,36 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
+        publisher=publisher,
     )
     return create_app(pages)
+
+
+def fake_catalogue(proposal: str) -> Catalogue:
+    """
+    A SciCat in memory (scitacean's fakes), which lists ``proposal``, that of
+    the demo's workspace, with a principal investigator; it forgets the
+    datasets published at a restart.
+    """
+    from scitacean import model
+    from scitacean.testing.client import FakeClient
+    from scitacean.testing.transfer import FakeFileTransfer
+
+    from ...scicat import Catalogue
+
+    scicat = FakeClient.without_login(
+        url='https://scicat.invalid/api/v3', file_transfer=FakeFileTransfer()
+    )
+    scicat.proposals[proposal] = model.DownloadProposal(
+        proposalId=proposal,
+        title='Micelles and nanoparticles in solution',
+        email='useroffice@example.org',
+        ownerGroup=proposal,
+        pi_firstname='Ada',
+        pi_lastname='Lovelace',
+        pi_email='ada.lovelace@example.org',
+    )
+    return Catalogue(client=scicat, instrument='demo')
 
 
 def main() -> None:
@@ -383,6 +434,11 @@ def main() -> None:
         metavar='SECONDS',
         help='a step of Follow every SECONDS (5)',
     )
+    parser.add_argument(
+        '--fake-catalogue',
+        action='store_true',
+        help='publish to a SciCat in memory (needs the extra scicat)',
+    )
     args = parser.parse_args()
     if args.start is not None and args.arrive is None:
         parser.error('--start goes with --arrive')
@@ -397,7 +453,13 @@ def main() -> None:
     sys.stdout.write(f'folder {directory}\n')
     sys.stdout.flush()
     if args.arrive is None:
-        _serve(directory, args.port, interval=args.interval, samples=args.samples)
+        _serve(
+            directory,
+            args.port,
+            interval=args.interval,
+            samples=args.samples,
+            fake=args.fake_catalogue,
+        )
         return
     groups = measurements(args.samples)
     start = 1 + (AT_START if args.start is None else args.start)  # the empty cell
@@ -410,10 +472,23 @@ def main() -> None:
 
     plan = [partial(arrive, g) for g in groups[start:]]
     with every(args.arrive, plan):
-        _serve(directory, args.port, interval=args.interval, samples=args.samples)
+        _serve(
+            directory,
+            args.port,
+            interval=args.interval,
+            samples=args.samples,
+            fake=args.fake_catalogue,
+        )
 
 
-def _serve(directory: Path, port: int, *, interval: float, samples: int) -> None:
+def _serve(
+    directory: Path,
+    port: int,
+    *,
+    interval: float,
+    samples: int,
+    fake: bool,
+) -> None:
     import uvicorn
 
     try:
@@ -422,7 +497,14 @@ def _serve(directory: Path, port: int, *, interval: float, samples: int) -> None
         raise SystemExit(str(error)) from None
     with client:
         folder = directory.name
-        app = build(client, files, definitions, folder=folder, interval=interval)
+        app = build(
+            client,
+            files,
+            definitions,
+            folder=folder,
+            interval=interval,
+            catalogue=fake_catalogue(client.proposal) if fake else None,
+        )
         uvicorn.run(app, host='localhost', port=port)
 
 

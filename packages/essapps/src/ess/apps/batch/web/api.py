@@ -280,6 +280,22 @@ def create_app(pages: Pages) -> FastAPI:
         """Change the title and description of the batch."""
         return page.change(body)
 
+    @batch.post('/api/publish/form')
+    def set_publish_form(
+        page: PageOfLabel, body: Annotated[dict[str, Any], Body()]
+    ) -> State:
+        """
+        Keep the form of the tab "Publish": the fields of
+        :class:`~ess.apps.batch.definition.Form`, which the page checks, so
+        that a refusal is said as each other is.
+        """
+        return page.set_publish_form(body)
+
+    @batch.post('/api/publish')
+    def publish(page: PageOfLabel, body: Keys) -> State:
+        """Publish the results of the rows of ``keys`` to the catalogue."""
+        return page.publish(body.keys)
+
     @batch.post('/api/batch/remove')
     def remove_batch(label: str) -> Notice:
         """Remove the batch; its results stay in the workspace."""

@@ -731,6 +731,10 @@ class Workspace(WorkspaceProtocol):
                 return f'{where} was not persisted'
         return None
 
+    @property
+    def proposal(self) -> str:
+        return self._proposal
+
     def specs(self) -> list[Spec]:
         self._check_running()
         return [binding.spec for binding in self._bindings.values()]

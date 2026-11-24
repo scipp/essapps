@@ -98,7 +98,7 @@ import copy
 import json
 import re
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from enum import Enum
@@ -118,6 +118,23 @@ from ..files import file, replace_at_once
 
 KEY = 'key'
 """The name of the index of a batch table: the key of each row."""
+
+NAME = 'name'
+"""The note that names a row, as the page shows it and a published dataset
+is named; a row without one is named by its key."""
+
+
+def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
+    """
+    The name of each row of ``frame``, a table whose parameter columns are
+    ``columns``, by key: its note :data:`NAME`, else its key.
+    """
+    if NAME not in frame.columns or NAME in columns:
+        return {key: key for key in frame.index}
+    return {
+        key: key if pd.isna(name) else str(name) for key, name in frame[NAME].items()
+    }
+
 
 _WORDS = {
     'string': 'text',
@@ -471,7 +488,7 @@ def frame_of(data: Any) -> pd.DataFrame:
     return pd.DataFrame(columns, index=index, columns=names)
 
 
-RESULT = ('status', 'record', 'failure')
+RESULT = ('status', 'record', 'failure', 'published')
 """The columns of what came of each row, which a table file may hold."""
 
 _READERS: dict[str, Callable[..., pd.DataFrame]] = {

@@ -10,6 +10,7 @@ The page of a batch is at `/batches/<label>/`.
 sh packages/essapps/src/ess/apps/batch/web/static/vendor.sh   # once: the page's libraries into static/vendor/ (needs npm)
 
 python -m ess.apps.batch.web.demo [FOLDER] --port 8000                  # fake runs, fake I(Q)
+python -m ess.apps.batch.web.demo --fake-catalogue                      # the same, with the tab Publish to a SciCat in memory
 python -m ess.apps.batch.web.demo --arrive 10 [--start M]               # fake runs, a sample arriving every 10 s
 python -m ess.apps.batch.web.demo --samples 150 --arrive 2 --start 100  # 150 samples: 100 at the start, one more every 2 s
 python -m ess.instruments.loki.web FOLDER --port 8000                   # LoKI's I(Q) on a workspace folder
@@ -29,6 +30,7 @@ With `--arrive`, the runs of one sample (fake demo) or one run (LoKI) arrive eve
 Each page reads `files.csv` again when it is replaced (`ess.apps.folder.ArrivingFiles`), so a run registered by hand, with `ess.apps.folder.write_files_table`, shows too.
 The demo and the LoKI page take `--interval SECONDS`, the time between two steps of Follow (5).
 The LoKI arrivals take `--follow [SECONDS]`, which makes their first batch with Follow, with a step every `SECONDS` (5).
+`--fake-catalogue` needs the extra `essapps[scicat]`; the catalogue forgets its datasets at a restart, while the batch keeps which records it published (see [Publishing](#publishing)).
 
 ## The batch table
 
@@ -211,9 +213,26 @@ Its workflow, columns and label are shown as text.
 Its title and description are a form, which **Save** sends to `POST api/batch` (`BatchManager.change`).
 What the manager refuses, such as an empty title, shows at the form, and nothing changes.
 
-**Remove this batch**, after a confirmation, removes the header and every other file of the batch: its settings, its batch table and its `source.json` (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace.
+**Remove this batch**, after a confirmation, removes the header and every other file of the batch: its settings, its batch table, its `source.json` and its `publish.json` (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace, and its datasets in the catalogue.
 If the batch follows, none follows from then on.
 The page then shows `/` in place of the batch in the history of the browser: the batch that `/` redirects to, the one that follows or the only one left, else the page without a batch.
+
+## Publishing
+
+An application given a publisher (`Pages(..., publisher=Publisher(manager, catalogue))`, `ess.apps.batch.publish`) has the tab **Publish**, and the grid a column **Published**; without one, neither shows.
+The result of a row is published as one derived dataset of SciCat (`ess.apps.scicat.publish`).
+The tab holds a form, kept per batch, which **Apply** sends to `POST api/publish/form` (`Publisher.set_form`): the outputs that each dataset holds, the pattern of its name (`{title}`, `{name}`, `{key}`), its description, keywords, owner and contact email.
+The form holds a change until **Apply**, under the bar of the Settings tab ("Changed, not applied yet"), and **Discard** shows the form in force again.
+Unlike the draft of the settings, which the `Page` holds, the browser holds this one: it is lost at a reload or a change of batch, and a form in force that changed elsewhere refills the inputs only while they hold no change.
+Until a person applies the form, its description is the batch's, and its owner and contact email are those of the principal investigator of the proposal, as the catalogue says (`ess.apps.scicat.principal_investigator`): the ESS ingestor makes the same person owner and contact of each raw dataset.
+The principal investigator is asked of the catalogue once, when the publisher is made; if the catalogue cannot be reached then, owner and contact stay empty until a restart.
+The rest is read from the result: the files it read with a catalogue identifier are its inputs, the proposal is the workspace's, and the software is that of the server now.
+**Publish N selected** publishes the selected rows that read `done` or `earlier` and are not published, with the form in force (`POST api/publish`, `Publisher.publish`); the column **Published** then shows the identifier of each dataset.
+The publisher decides which results may be published (`PUBLISHABLE`); the button only mirrors it, and waits, with a hint, while the form holds a change, names no output, owner or contact email, or a publication runs.
+A result is published once; a row reduced again may be published again, as a new dataset.
+What the publisher refuses, such as a row whose result is outdated, publishes nothing; an upload that fails keeps those before it, which its message names.
+Which SciCat, and whether files are copied on a shared file system or sent over SFTP, is the `scitacean.Client` and its file transfer that the application gives (`ess.apps.scicat.Catalogue`); the transfer must have no `source_folder` of its own, so that each dataset has the folder of its record.
+There is no login yet.
 
 ## The rules of the design
 
@@ -225,10 +244,10 @@ The web layer follows eight rules. Each says where a reader finds a kind of thin
 
    | Owner | State |
    |---|---|
-   | the batch layer | the batches: batch table, settings, header, which batch follows |
+   | the batch layer | the batches: batch table, settings, header, which batch follows, the publish form and what was published |
    | `Pages` | the listing of the files and its version, the corrections of runs, what the last step of Follow said |
    | `Page` | the draft of the settings form, the refusals of the last reduction, its version |
-   | the browser | what is shown: selection, filter, view, tab, sort, axes |
+   | the browser | what is shown: selection, filter, view, tab, sort, axes; the draft of the publish form ([Publishing](#publishing)) |
 
    A `Page` changes its batch through the batch layer, and asks `Pages` for the listing and for what to show of Follow.
 4. **A request answers what the page needs next.** An action that changes a batch answers the `State` after it. A request that reads answers what it reads, also when it is a POST because its body is long (`api/plot`, `api/results.zip`). An action of the workspace answers what the page shows next, since the page without a batch has no state: a `Notice` for correcting a run or removing a batch, `Made` for a new batch. Any request may answer 422 with a message, or 404 for a label that is no batch.
@@ -368,7 +387,7 @@ See [Where the definitions are kept](../../../../../docs/batch.md#where-the-defi
 - One process holds the folder. `essapps-batch` opens it only while the server is stopped; what its commands write to the definitions, such as a batch that `reduce` makes or the rows that `take` adds, the page shows at its next start.
 - One `Batch` per label. Another one on the page's label writes its whole batch table at each change, over that of the page ([Where the definitions are kept](../../../../../docs/batch.md#where-the-definitions-are-kept)).
 - One user. Two open pages of one batch show and edit the same state.
-- One lock for all pages: a request waits while a step of Follow runs on another batch.
+- One lock for all pages: a request waits while a step of Follow runs on another batch, and while results are published, uploads included.
 - A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so it is removed only in code.
 - The confirmations are the browser's dialogs (`confirm`).
 

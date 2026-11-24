@@ -301,6 +301,11 @@ class Client:
         self.submitter = submitter
         self.files = Files(workspace)
 
+    @property
+    def proposal(self) -> str:
+        """The proposal of the workspace, which every record of it names."""
+        return self._workspace.proposal
+
     def __enter__(self) -> Self:
         return self
 

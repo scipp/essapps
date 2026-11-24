@@ -2,7 +2,7 @@
 
 `ess.apps.batch` reduces one spec for many samples: a table of rows, settings shared by all rows, and the result of each row.
 It is built on the client of `ess.apps`; [the client guide](../../../docs/developer/roles/client-authors.ipynb) explains specs, records, labels and stages.
-It needs `essapps[files]` (pandas).
+It needs `essapps[files]` (pandas); publishing results to SciCat (`ess.apps.batch.publish`) needs `essapps[scicat]` (scitacean).
 The decisions behind it are [ADR 0012](../../../docs/developer/adr/0012-a-batch-is-a-table.md) (a batch is a template and a table) and [ADR 0013](../../../docs/developer/adr/0013-follow-adds-the-rows-not-considered.md) (Follow adds the rows not considered).
 
 ## The system on one page
@@ -61,6 +61,7 @@ Nothing in the batch layer imports the page or the command.
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
 | `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
+| publisher | `publish.py`: `Publisher` | the results of a batch into SciCat, one derived dataset per row (`ess.apps.scicat`): the form of a batch's datasets, which results may be published, and what was published |
 
 ### Terms
 
@@ -148,6 +149,7 @@ Other tables are always named with what they are of:
 | `definitions/labels/<label>/settings.json` | a template: the spec; the settings in `params`, also those of a parameter that has a column; `batch.fills` as its `blanks` | `Batch` |
 | `definitions/labels/<label>/rows.json` | the batch table: `{"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}]}` | `Batch.put` |
 | `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
+| `definitions/labels/<label>/publish.json` | `{"form": {"outputs": ["iofq"], ...}, "published": [{"key": "60339", "record": ..., "pid": ...}]}`; only for a batch published from (`ess.apps.batch.publish`) | `Publisher` |
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
 | `definitions/format.json` | `{"format": 1}`: the format of the files above | `FolderDefinitions`, before its first write |
 | `store/`, the log | the records | the workspace |
@@ -654,7 +656,7 @@ key,sample,thickness,binning,name
 
 - `table.write_table(table, path)` is the only writer, and `table.read_table(path, spec.params)` the only reader that gives a batch table. `export TABLE` reads its table file as text (`table.read_text`).
 - A list or a group is JSON text. Empty is the only missing marker, so `NA` in a note column is text.
-- `read_table` reads columns with their dtypes, and drops `status`, `record` and `failure`.
+- `read_table` reads columns with their dtypes, and drops `status`, `record`, `failure` and `published`.
 - A note column of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note column of a `.xlsx` file keeps the type of its cells.
 - A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row takes its setting, or the row is incomplete if there is none.
 
@@ -681,6 +683,10 @@ $B reduce -l water -o done.csv                 # reduces every ready row again; 
 $B reduce iofq.yaml done.csv -l water          # iofq.yaml becomes the settings, done.csv the batch table; reduces
 $B template -l water -o now.yaml               # the settings of water, as the page's "settings as a file"
 $B export -l water results                     # the outputs of the done rows of water, by key
+$B -c package.module:catalogue publish-form -l water -o form.yaml
+                                               # the form of water's datasets in SciCat, as YAML
+$B -c package.module:catalogue publish -l water --form form.yaml 60339 60340
+                                               # keep the form, publish the results of 60339, 60340
 $B offered -l water2                           # the rows of the row source that the batch table lacks
 $B take -l water2 60337 60338                  # put them into the batch table; reduces nothing
 $B follow -l water2                            # follow, a step every 5 s until Ctrl-C
@@ -699,9 +705,11 @@ Each subcommand is a few calls of the batch layer:
 | `sources` | the names of `-s`, and the `fills` and `description` of each |
 | `rows NAME` | `intake.rows_of(NAME)` |
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
-| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame())` |
+| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame(), published=batch.published())` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
 | `export TABLE` or `export -l LABEL` | `export.export_table(client, table, directory)`, of the table file or of what `show` gives |
+| `publish-form -l LABEL` | `publish.Publisher(manager, catalogue).form_text(label)` |
+| `publish -l LABEL [--form FILE] KEY...` | `publisher.set_form(label, publish.load_form(FILE))`, then `publisher.publish(label, keys)` |
 | `offered -l LABEL` | `intake.offered(label)` |
 | `take -l LABEL KEY...` | `intake.take(label, keys)`, then the rows taken as `show` gives them |
 | `follow -l LABEL` | `intake.follow(label)`, then `cli.follow(intake, ...)`: `intake.step()` every `--interval` seconds |
@@ -712,7 +720,7 @@ Each subcommand is a few calls of the batch layer:
 Every parameter is commented out, one with a default showing it: the template as written is read by `load_template` and refused by `reduce`, naming each required parameter, and a parameter left commented takes the spec's default, not a copy of today's.
 A file in a group is written in its JSON form, `{'@ref': file, file: run:1}`, since `as_request` converts the value of a parameter, not of a field of a group.
 `batches` counts the rows whose newest result completed (`reduced`), without comparing requests, which would resolve every row of every batch; `show` gives the status of each row.
-The table written has the note columns `status` (the words of `RowState.text`), `record` and `failure`.
+The table written has the note columns `status` (the words of `RowState.text`), `record`, `failure` and `published` (the catalogue identifier of the row's result, read from `publish.json` by `Batch.published`, so `show` needs no `-c`).
 `--json` writes a table as JSON in place of CSV: a list of objects, one per row, with the key as a field, `null` for an empty cell, and a list of names as a list (a CSV holds the names separated by a space).
 For a label that exists, the template becomes the settings and the table file replaces the batch table.
 A value of the template at a parameter column of the batch table is the setting that each row with an empty cell takes.
@@ -725,6 +733,10 @@ A wrong `package.module:NAME`, a file given that does not exist, a row source th
 A command is a function of `_Given` and an item of `_COMMANDS` in `cli.py`.
 The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs; it reads `files.csv` once at the opening too, so that a files table in error is refused before anything runs.
 A table file or a files table that the command or the page writes replaces the file at once (`files.replace_at_once`, also used by `folder.write_files_table`): `files -o files.csv` does not open the folder, so it runs while `follow` holds the folder, and `follow` never reads half a files table.
+
+`publish-form` and `publish` make the catalogue with the function that `-c package.module:NAME` names, called with `--proposal`, as `fake_catalogue` of `ess.apps.batch.web.demo` is.
+They are the page's tab Publish: the same `Publisher`, so the form, which rows may be published, and what was published are one per batch whoever publishes. The form file holds the fields of `definition.Form`, read with `Form.model_validate` as the page's body is.
+`publish` refuses (exit 2) what `Publisher.publish` refuses before any upload; an upload that fails exits with 1, and the rows published before it stay published.
 
 `follow` is the second way to run Follow, after the page: whoever runs the loop owns the timer, and one process works on a folder, so the two never run on one folder at once.
 `cli.follow(intake, say=..., pause=..., stopped=..., steps=...)` is the loop: a step, `pause()`, a step, ..., until `stopped()` or after `steps`; then it waits for the reductions that run.

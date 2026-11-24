@@ -46,6 +46,7 @@ const view = {
   counts: null, // the counts of the rows of each batch, once counted
   files: {}, // the files that each batch names, from the last count answered
   columns: '', // the notes and the columns that the grid of the rows shows
+  publishing: false, // whether a publication waits for its answer
 };
 let rows; // the Grid of the rows
 let runs; // the Grid of the runs
@@ -261,12 +262,14 @@ function render(state) {
   $('files-problem').textContent = $('files-problem').title = state.files_problem ?? '';
   renderSettings(state);
   renderBatch(state);
+  renderPublish(state);
   renderSelection();
   if (view.tab === 'row') loadRow();
 }
 
 // The columns of the grid of the rows: the name, each note, each parameter
-// column, and the status; and the columns that can be edited, by field.
+// column, the status, and with a catalogue, the identifier of each published
+// result; and the columns that can be edited, by field.
 function gridColumns(state) {
   const named = {
     title: 'Name',
@@ -283,7 +286,7 @@ function gridColumns(state) {
     menu: (column) => (column.waits ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
-    columns: [named, ...notes, ...cells, statusColumn],
+    columns: [named, ...notes, ...cells, statusColumn, ...(state.publish ? [publishedColumn] : [])],
     edits: Object.fromEntries(state.columns.map((c) => [`cells.${c.name}.value`, c])),
   };
 }
@@ -561,6 +564,8 @@ async function show(url, page, how) {
   $('toast').hidden = true;
   $('batch-form').shown = null;
   $('batch-problem').textContent = '';
+  $('publish-form').shown = null;
+  $('publish-problem').textContent = '';
   if (page) showPage(page);
   drawBatches();
   if (shownLabel()) poll();
@@ -973,9 +978,7 @@ function renderSettings(state) {
   $('earlier').hidden = counts.earlier === 0;
   $('earlier-state').textContent = `${count(counts.earlier)} reduced with earlier settings.`;
   $('reduce-earlier').disabled = Boolean(action.blocked);
-  $('draft').classList.toggle('changed', changed);
-  const said = problem ? ` ${problem}.` : '';
-  $('draft-state').textContent = changed ? `Changed, not applied yet.${said}` : said.trim() || 'These settings are in force.';
+  renderDraft($('draft'), changed, problem ? `${problem}.` : '', 'These settings are in force.');
   // The file holds the batch's settings, so it waits for Apply or Discard.
   const download = document.querySelector('[data-file="settings.yaml"]');
   download.disabled = changed;
@@ -1075,7 +1078,159 @@ function renderSelection() {
   $('n-results-all').textContent = said(done);
   document.querySelector('[data-file="results-selected"]').disabled = doneSelected.length === 0;
   document.querySelector('[data-file="results-all"]').disabled = done.length === 0;
+  renderPublishButton();
   renderPlot();
+}
+
+// The publishing
+
+const publishedColumn = {
+  title: 'Published',
+  field: 'published',
+  minWidth: 120,
+  headerSort: false,
+  tooltip: (event, cell) => cell.getValue(),
+};
+
+// The tab "Publish", if the application publishes to a catalogue. The form
+// holds changes until Apply, as the settings form does, but in the browser:
+// one page of a batch serves every person, so a draft on the server would be
+// shared. A form of the server that changed refills it only if the person
+// holds no change, so that what they type and have not applied stays.
+function renderPublish(state) {
+  $('tab-publish-label').hidden = !state.publish;
+  if (!state.publish) {
+    if (view.tab === 'publish') showTab('result');
+    return;
+  }
+  const form = $('publish-form');
+  const shown = JSON.stringify(state.publish);
+  if (shown === form.shown) {
+    renderPublishDraft();
+    return;
+  }
+  const held = form.shown != null && publishChanged(JSON.parse(form.shown).form);
+  form.shown = shown;
+  if (!held) fillPublish(state.publish);
+  else renderPublishDraft();
+}
+
+function fillPublish({form: given, outputs}) {
+  $('publish-outputs').replaceChildren(
+    ...outputs.map((o) => h('label', {}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`)),
+  );
+  const {elements} = $('publish-form');
+  elements.name.value = given.name;
+  elements.description.value = given.description;
+  elements.keywords.value = given.keywords.join(', ');
+  elements.owner.value = given.owner;
+  elements.contact_email.value = given.contact_email;
+  renderPublishDraft();
+}
+
+// The form of the tab "Publish" as the server takes it.
+function publishForm() {
+  const {elements} = $('publish-form');
+  return {
+    outputs: [...document.querySelectorAll('#publish-outputs input:checked')].map((i) => i.value),
+    name: elements.name.value,
+    description: elements.description.value,
+    keywords: elements.keywords.value.split(','),
+    owner: elements.owner.value,
+    contact_email: elements.contact_email.value,
+  };
+}
+
+// A form as a person reads it, the same from the server and from the inputs:
+// without the spaces around each text, the line ends of a textarea, empty
+// keywords, or the order of the outputs.
+function normal(form) {
+  const text = (value) => value.replace(/\r\n/g, '\n').trim();
+  return JSON.stringify([
+    [...form.outputs].sort(),
+    text(form.name),
+    text(form.description),
+    form.keywords.map(text).filter(Boolean),
+    text(form.owner),
+    text(form.contact_email),
+  ]);
+}
+
+// Whether the inputs hold a change of `form`, by default the form in force.
+function publishChanged(form = view.state?.publish?.form) {
+  return Boolean(form) && normal(publishForm()) !== normal(form);
+}
+
+function renderPublishDraft() {
+  renderDraft($('publish-draft'), publishChanged(), '', 'This form is in force.');
+  renderPublishButton();
+}
+
+// The bar over a form that holds changes until Apply, in the tabs "Settings"
+// and "Publish": whether the form holds a change not applied, and `said`,
+// such as why the form is refused, else `idle`.
+function renderDraft(bar, changed, said, idle) {
+  bar.classList.toggle('changed', changed);
+  bar.querySelector('.settings-bar-state').textContent = changed ? `Changed, not applied yet. ${said}`.trim() : said || idle;
+}
+
+// The selected rows that the button "Publish" publishes: those whose result
+// may be published (`ess.apps.batch.publish.PUBLISHABLE`) and is not.
+function toPublish() {
+  return selectedRows().filter((row) => ['done', 'earlier'].includes(row.status) && !row.published);
+}
+
+// What the button "Publish" waits for, in words; nothing if it may publish.
+function publishBlocked() {
+  const {form} = view.state.publish;
+  if (view.publishing) return 'Publishing…';
+  if (publishChanged()) return 'Apply or discard the changes of the form first.';
+  const fields = [['output', form.outputs.length], ['owner', form.owner], ['contact email', form.contact_email]];
+  const lacking = fields.filter(([, given]) => !given).map(([what]) => what);
+  if (lacking.length) return `The form names no ${lacking.join(', no ')}: fill it in and apply it.`;
+  if (!toPublish().length) return 'Select rows that are done or earlier and not published.';
+  return '';
+}
+
+function renderPublishButton() {
+  if (!view.state.publish) return;
+  const n = toPublish().length;
+  const blocked = publishBlocked();
+  $('publish').disabled = Boolean(blocked);
+  $('publish').textContent = n ? `Publish ${n} selected` : 'Publish';
+  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or earlier and not published, with the form in force.';
+}
+
+function sayPublish(text) {
+  $('publish-problem').textContent = text;
+}
+
+// Apply the form of the tab "Publish"; a refusal shows at the form.
+function applyPublish(event) {
+  event.preventDefault();
+  sayPublish('');
+  act('publish/form', publishForm(), sayPublish);
+}
+
+// Show the batch's form again, without the changes.
+function discardPublish() {
+  sayPublish('');
+  fillPublish(view.state.publish);
+}
+
+// Publish the rows of `toPublish`; the button waits until the answer, so that
+// a second click publishes nothing twice.
+async function publish() {
+  const keys = toPublish().map((row) => row.key);
+  if (!confirm(`Publish ${keys.length} result${keys.length === 1 ? '' : 's'} to the catalogue? A dataset cannot be removed from this page.`)) return;
+  view.publishing = true;
+  renderPublishButton();
+  try {
+    await act('publish', {keys});
+  } finally {
+    view.publishing = false;
+    if (view.state) renderPublishButton();
+  }
 }
 
 // The result
@@ -1266,7 +1421,7 @@ function showTab(tab) {
   view.tab = tab;
   remember();
   document.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-  for (const name of ['result', 'settings', 'row', 'batch']) $(`tab-${name}`).hidden = name !== tab;
+  for (const name of ['result', 'settings', 'row', 'batch', 'publish']) $(`tab-${name}`).hidden = name !== tab;
   if (tab === 'row' && view.state) loadRow();
   if (tab === 'result' && !$('plot').hidden) Plotly.Plots.resize($('plot'));
 }
@@ -1314,6 +1469,13 @@ function wire() {
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;
+  $('publish-form').onsubmit = applyPublish;
+  $('publish-form').oninput = () => {
+    sayPublish('');
+    renderPublishDraft();
+  };
+  $('publish-discard').onclick = discardPublish;
+  $('publish').onclick = publish;
   $('remove-batch').onclick = removeBatch;
   $('remove').onclick = () => act('rows/remove', {keys: view.selected});
   document.querySelector('#message .close').onclick = () => {

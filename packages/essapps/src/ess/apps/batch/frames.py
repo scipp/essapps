@@ -10,8 +10,8 @@ with a template, keeping nothing; :func:`reduce_batch` reduces the rows of a
 batch, such as one of a manager. Both return the table with the columns of
 :data:`RESULT`, so the table that comes back is the table that went in::
 
-    key    sample     name    status  record    failure
-    60339  run:60339  water   done    3f2a...
+    key    sample     name    status  record    failure         published
+    60339  run:60339  water   done    3f2a...                   pid:20.500/...
     60340  run:60340  sds     failed  81c0...   refused: ...
 """
 
@@ -153,19 +153,24 @@ def reduce_batch(
     frame = batch.frame()
     if keys is not None:
         frame = frame.loc[list(keys)]
-    return with_results(client, batch.state(keys), frame)
+    return with_results(client, batch.state(keys), frame, published=batch.published())
 
 
 def with_results(
-    client: Client, states: Mapping[str, RowState], frame: pd.DataFrame
+    client: Client,
+    states: Mapping[str, RowState],
+    frame: pd.DataFrame,
+    *,
+    published: Mapping[str, str],
 ) -> pd.DataFrame:
     """
     ``frame``, the table of a batch or some of its rows, with the columns of
     :data:`RESULT`, replaced if it has them: what ``states`` say of the row of
     each key. ``status`` is the row's status in the words of the page
     (:attr:`~.state.RowState.text`), ``record`` the ID of its result, and
-    ``failure`` why that failed; each text is empty where there is nothing to
-    say.
+    ``failure`` why that failed, and ``published`` its catalogue identifier,
+    of ``published`` by record ID (:meth:`~.reduction.Batch.published`); each
+    text is empty where there is nothing to say.
     """
     keys = list(frame.index)
     records = [states[key].record for key in keys]
@@ -175,4 +180,5 @@ def with_results(
         status=[states[key].text for key in keys],
         record=['' if r is None else r.id for r in records],
         failure=['' if r is None else failure[r.id] or '' for r in records],
+        published=['' if r is None else published.get(r.id, '') for r in records],
     )

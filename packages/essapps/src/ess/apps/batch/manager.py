@@ -17,6 +17,8 @@ each batch. A batch is kept as these entries of the definitions
     rows        the batch table                         the Batch
     source      the source, the keys considered, and    Intake; only for a
                 whether the batch follows               batch made from a source
+    publish     the form of its datasets in the         Publisher; only for a
+                catalogue, and the records published    batch published from
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the specs that the workspace binds, and the specs that run staged.

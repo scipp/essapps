@@ -42,7 +42,7 @@ def test_a_table_with_results_has_what_came_of_each_row(
     batch.put(toys.rows(client))
     client.wait(batch.reduce(['1']))
 
-    table = with_results(client, batch.state(), batch.frame())
+    table = with_results(client, batch.state(), batch.frame(), published={})
 
     assert list(table.columns) == ['run', 'name', *toys.COLUMNS, *RESULT]
     assert list(table['status']) == ['done', 'ready']
