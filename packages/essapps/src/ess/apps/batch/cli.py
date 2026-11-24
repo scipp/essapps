@@ -8,7 +8,9 @@ Each row of the batch table is one reduction, such as of one sample run; the
 template holds the settings that the rows share.
 
 The options before the command name the folder, the bindings (the reductions
-that the folder runs) and the row sources (which make rows from the files):
+that the folder runs) and the row sources (which make rows from the files);
+publish-form and publish also need the catalogue (-c), a function from the
+proposal (--proposal) to the catalogue, which needs the extra scicat:
 
     B="essapps-batch -w FOLDER -b package.module:BINDINGS -s package.module:SOURCES"
 
@@ -31,6 +33,10 @@ A first session, in this order; each command has its own --help:
     $B reduce -l water --remaining       # reduce the rows that are not done
     $B template -l water -o now.yaml     # the settings of water, as a template
     $B export -l water results    # write the outputs of the rows of water
+    $B -c package.module:CATALOGUE publish-form -l water -o form.yaml
+                                  # the form of the datasets of water in SciCat
+    $B -c package.module:CATALOGUE publish -l water --form form.yaml KEY...
+                                  # keep the form; publish the results of KEY...
     $B offered -l water           # the rows of the row source that water lacks
     $B take -l water KEY...       # put those rows into water; reduces nothing
     $B follow -l water --steps 3  # add and reduce the rows that arrive: 3 steps,
@@ -130,7 +136,7 @@ from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
 from types import FrameType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -159,13 +165,19 @@ from .source import Range, RowSource
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template, settings_text, template_to_fill
 
+if TYPE_CHECKING:
+    from .publish import Publisher
+
 
 class _Wrong(Exception):
     """A wrong command line, said as argparse says one: exit status 2."""
 
 
-class _Held(Exception):
-    """The folder is held by another process: exit status 1."""
+class _Failed(Exception):
+    """
+    An error said in one line, such as a folder that another process holds:
+    exit status 1.
+    """
 
 
 def _named(name: str) -> Any:
@@ -208,6 +220,36 @@ def _sources(name: str) -> Mapping[str, RowSource]:
             'row sources (ess.apps.batch.RowSource), such as package.module:SOURCES'
         )
     return sources
+
+
+def _catalogue(name: str) -> Callable[[str], Any]:
+    """The function that ``name`` names; ``_Wrong`` if it names something else."""
+    make = _named(name)
+    if not callable(make):
+        raise _Wrong(
+            f'{name} is a {type(make).__name__}, not a function from '
+            'a proposal to its catalogue (ess.apps.scicat.Catalogue)'
+        )
+    return make
+
+
+def _publisher(given: _Given) -> Publisher:
+    """
+    The publisher of the folder, to the catalogue that the function of
+    ``--catalogue`` gives for the proposal; ``_Wrong`` if it gives another
+    thing.
+    """
+    from ..scicat import Catalogue  # the extra scicat
+    from .publish import Publisher
+
+    args = given.args
+    catalogue = _catalogue(args.catalogue)(args.proposal)
+    if not isinstance(catalogue, Catalogue):
+        raise _Wrong(
+            f'{args.catalogue} gave a {type(catalogue).__name__}, not a catalogue '
+            '(ess.apps.scicat.Catalogue)'
+        )
+    return Publisher(given.manager(), catalogue)
 
 
 def _existing(text: str) -> Path:
@@ -499,6 +541,37 @@ def _export(given: _Given) -> pd.DataFrame:
             )
         table = table.set_index(KEY)
     return export_table(given.client, table, args.directory)
+
+
+def _publish_form(given: _Given) -> str:
+    """The form of a batch, as YAML to edit and give to publish."""
+    publisher = _publisher(given)
+    return publisher.form_text(_known(publisher.manager, given.args.label))
+
+
+def _publish(given: _Given) -> pd.DataFrame:
+    """
+    Keep the form given, then publish the rows of the keys given; those rows,
+    with the record and catalogue identifier of each.
+    """
+    from .publish import load_form
+
+    args = given.args
+    publisher = _publisher(given)
+    label = _known(publisher.manager, args.label)
+    if args.form is not None:
+        publisher.set_form(label, load_form(args.form))
+    try:
+        pids = publisher.publish(label, args.keys) if args.keys else {}
+    except (ValueError, NotKept):  # refused before an upload, or not kept
+        raise
+    except Exception as error:  # the catalogue's client may raise anything
+        raise _Failed(f'not published: {said(error)}') from None
+    record_of = {pid: record for record, pid in publisher.published(label).items()}
+    return pd.DataFrame(
+        {'record': [record_of[p] for p in pids.values()], 'pid': list(pids.values())},
+        index=pd.Index(list(pids), name=KEY),
+    )
 
 
 def _offered(given: _Given) -> pd.DataFrame:
@@ -899,6 +972,23 @@ def _take_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
+def _publish_arguments(command: argparse.ArgumentParser) -> None:
+    _label(command, required=True, help='the label of the batch')
+    command.add_argument(
+        'keys',
+        metavar='KEY',
+        nargs='*',
+        help='the key of a row whose result to publish: done, or earlier',
+    )
+    command.add_argument(
+        '--form',
+        type=_existing,
+        metavar='FILE',
+        help='a form, YAML (see the command publish-form), to keep for the '
+        'batch before publishing',
+    )
+
+
 def _seconds(text: str) -> float:
     """A number of seconds, 0 or more; argparse refuses another."""
     with suppress(ValueError):
@@ -947,6 +1037,17 @@ def _one_of(first: str, second: str) -> Callable[[argparse.Namespace], str | Non
         return None
 
     return check
+
+
+def _with_catalogue(name: str) -> Callable[[argparse.Namespace], str | None]:
+    """A check that -c/--catalogue is given to the command ``name``."""
+    return lambda args: None if args.catalogue else f'{name} needs -c/--catalogue'
+
+
+def _publish_check(args: argparse.Namespace) -> str | None:
+    if not (args.keys or args.form):
+        return 'give a KEY to publish, or --form, or both'
+    return _with_catalogue('publish')(args)
 
 
 def _reduce_check(args: argparse.Namespace) -> str | None:
@@ -1054,6 +1155,28 @@ _COMMANDS = {
         arguments=_export_arguments,
         check=_one_of('table', 'label'),
     ),
+    'publish-form': _Command(
+        _publish_form,
+        description='Write the form of the batch of LABEL as YAML, to edit and '
+        'give to publish --form: the outputs that each dataset holds, its '
+        'name, description, keywords, owner and contact email. Until a form '
+        'is kept, the owner and contact are the principal investigator of the '
+        'proposal, as the catalogue says.',
+        arguments=_show_arguments,
+        check=_with_catalogue('publish-form'),
+        output='text',
+    ),
+    'publish': _Command(
+        _publish,
+        description='Keep the form FILE for the batch of LABEL, if given; then '
+        'publish the result of the row of each KEY to the catalogue as one '
+        'derived dataset, as the form says, and write those rows with the '
+        'record and catalogue identifier of each. A result is published once; '
+        'a new result of the row is a new dataset. If an upload fails, the '
+        'rows published before it stay published, and the error names them.',
+        arguments=_publish_arguments,
+        check=_publish_check,
+    ),
     'offered': _Command(
         _offered,
         description='List the rows that the row source of the batch of LABEL '
@@ -1131,6 +1254,13 @@ def _parser() -> argparse.ArgumentParser:
         metavar='MODULE:NAME',
         help='the row sources by name, for sources, rows, offered, take, '
         'follow, reduce --source and template',
+    )
+    parser.add_argument(
+        '-c',
+        '--catalogue',
+        metavar='MODULE:NAME',
+        help='a function from the proposal to the catalogue to publish to '
+        '(ess.apps.scicat.Catalogue), for publish-form and publish',
     )
     parser.add_argument(
         '--json',
@@ -1215,7 +1345,7 @@ def _opened(given: _Given, command: _Command) -> _Result:
     try:
         client = open_folder(args.workspace, bind, files=files, proposal=args.proposal)
     except RuntimeError as error:  # another process holds the folder
-        raise _Held(str(error)) from None
+        raise _Failed(str(error)) from None
     with client:
         return command.run(_Given(args, given.sources, (client, definitions)))
 
@@ -1233,6 +1363,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sources = {} if args.sources is None else _sources(args.sources)
         if (wrong := command.check(args)) is not None:
             raise _Wrong(wrong)
+        if args.catalogue is not None:
+            _catalogue(args.catalogue)  # refused before the folder is opened
         # A name of the command line, so refused before the folder is opened,
         # also while another process holds it.
         source = getattr(args, 'source', None)
@@ -1242,7 +1374,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = _opened(given, command) if command.folder else command.run(given)
     except _Wrong as error:
         parser.error(str(error))
-    except _Held as error:
+    except _Failed as error:
         sys.stderr.write(f'{error}\n')
         return 1
     except NotKept as error:

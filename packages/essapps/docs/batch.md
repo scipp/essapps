@@ -683,6 +683,10 @@ $B reduce -l water -o done.csv                 # reduces every ready row again; 
 $B reduce iofq.yaml done.csv -l water          # iofq.yaml becomes the settings, done.csv the batch table; reduces
 $B template -l water -o now.yaml               # the settings of water, as the page's "settings as a file"
 $B export -l water results                     # the outputs of the done rows of water, by key
+$B -c package.module:catalogue publish-form -l water -o form.yaml
+                                               # the form of water's datasets in SciCat, as YAML
+$B -c package.module:catalogue publish -l water --form form.yaml 60339 60340
+                                               # keep the form, publish the results of 60339, 60340
 $B offered -l water2                           # the rows of the row source that the batch table lacks
 $B take -l water2 60337 60338                  # put them into the batch table; reduces nothing
 $B follow -l water2                            # follow, a step every 5 s until Ctrl-C
@@ -704,6 +708,8 @@ Each subcommand is a few calls of the batch layer:
 | `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame())` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
 | `export TABLE` or `export -l LABEL` | `export.export_table(client, table, directory)`, of the table file or of what `show` gives |
+| `publish-form -l LABEL` | `publish.Publisher(manager, catalogue).form_text(label)` |
+| `publish -l LABEL [--form FILE] KEY...` | `publisher.set_form(label, publish.load_form(FILE))`, then `publisher.publish(label, keys)` |
 | `offered -l LABEL` | `intake.offered(label)` |
 | `take -l LABEL KEY...` | `intake.take(label, keys)`, then the rows taken as `show` gives them |
 | `follow -l LABEL` | `intake.follow(label)`, then `cli.follow(intake, ...)`: `intake.step()` every `--interval` seconds |
@@ -727,6 +733,10 @@ A wrong `package.module:NAME`, a file given that does not exist, a row source th
 A command is a function of `_Given` and an item of `_COMMANDS` in `cli.py`.
 The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs; it reads `files.csv` once at the opening too, so that a files table in error is refused before anything runs.
 A table file or a files table that the command or the page writes replaces the file at once (`files.replace_at_once`, also used by `folder.write_files_table`): `files -o files.csv` does not open the folder, so it runs while `follow` holds the folder, and `follow` never reads half a files table.
+
+`publish-form` and `publish` make the catalogue with the function that `-c package.module:NAME` names, called with `--proposal`, as `fake_catalogue` of `ess.apps.batch.web.demo` is.
+They are the page's tab Publish: the same `Publisher`, so the form, which rows may be published, and what was published are one per batch whoever publishes. The form file holds the fields of `definition.Form`, read with `Form.model_validate` as the page's body is.
+`publish` refuses (exit 2) what `Publisher.publish` refuses before any upload; an upload that fails exits with 1, and the rows published before it stay published.
 
 `follow` is the second way to run Follow, after the page: whoever runs the loop owns the timer, and one process works on a folder, so the two never run on one folder at once.
 `cli.follow(intake, say=..., pause=..., stopped=..., steps=...)` is the loop: a step, `pause()`, a step, ..., until `stopped()` or after `steps`; then it waits for the reductions that run.

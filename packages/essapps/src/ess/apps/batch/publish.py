@@ -20,6 +20,9 @@ removes the entry, not the datasets in the catalogue.
 
 Publishing runs in the caller's thread, uploads included: a page holds its
 lock until the last upload ends.
+
+The command line gives the form as a YAML file of its fields, which
+:meth:`Publisher.form_text` writes and :func:`load_form` reads.
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ from __future__ import annotations
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+
+import yaml
+from pydantic import ValidationError
 
 from ..errors import said
 from ..records import Record
@@ -80,6 +86,21 @@ class Publisher:
             description=self.manager.headers()[label].description,
             owner='' if pi is None else pi.name,
             contact_email='' if pi is None else pi.email,
+        )
+
+    def form_text(self, label: str) -> str:
+        """
+        The form of ``label`` as YAML (:meth:`form`), with a comment on what
+        its outputs and its name may hold; :func:`load_form` reads it back.
+        """
+        outputs = ', '.join(self.manager.batch(label).spec.outputs.model_fields)
+        fields = self.form(label).model_dump(mode='json')
+        return (
+            f'# The datasets that the results of {label} are published as.\n'
+            f'# outputs: some of {outputs}\n'
+            '# name: may hold {title}, {name} and {key}: the title of the batch,\n'
+            '#   the name of the row, and its key\n'
+            + yaml.safe_dump(fields, sort_keys=False, allow_unicode=True)
         )
 
     def set_form(self, label: str, form: Form) -> None:
@@ -193,3 +214,14 @@ class Publisher:
 
     def _keep(self, label: str, publishing: Publishing) -> None:
         self.manager.definitions.save(publish_key(label), publishing_data(publishing))
+
+
+def load_form(path: Path) -> Form:
+    """
+    The form in a YAML file, as :meth:`Publisher.form_text` writes it.
+    Raises ``ValueError`` if the file is not a form.
+    """
+    try:
+        return Form.model_validate(yaml.safe_load(path.read_text()))
+    except (yaml.YAMLError, ValidationError) as error:
+        raise ValueError(f'{path}: {said(error)}') from None
