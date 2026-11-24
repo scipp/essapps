@@ -128,6 +128,19 @@ def batch(client: Client) -> Iterator[Batch]:
 
 
 @pytest.fixture
+def done_batch(fake: FakeFiles, client: Client, manager: BatchManager) -> Batch:
+    """The batch Morning of two rows, water (1) and sample A (2), both reduced."""
+    for run, name in [(1, 'water'), (2, 'sample A')]:
+        fake.measure(run, float(run), role='sample', sample=name, pid=f'20.500/s{run}')
+        fake.measure(run + 1000, 1.0, role='transmission', sample=name)
+    batch = manager.create(
+        'plain', title='Morning', description='2 mm cells', rows=toys.rows(client)
+    )
+    client.wait(list(batch.reduce(['1', '2']).values()))
+    return batch
+
+
+@pytest.fixture
 def definitions(tmp_path: Path) -> FolderDefinitions:
     return FolderDefinitions(tmp_path / 'workspace')
 
@@ -240,6 +253,7 @@ from typing import Annotated
 import pandas as pd
 from ess.apps.batch import RowSource
 from ess.apps.testing import StagedFunction, read_file
+from ess.apps.writers import Writer
 from ess.spec import RunFile, WorkflowSpec, function_binding
 from pydantic import AfterValidator, BaseModel
 from ess.spec import Referenced
@@ -340,6 +354,13 @@ UPGRADED = [
     function_binding(FIND, _find),
 ]
 STAGING = [StagedFunction(SPEC, _reduce), function_binding(FIND, _find)]
+
+
+def _text(outputs, about, directory):
+    (directory / 'total.txt').write_text(f'{about.name}: {outputs["total"]}')
+
+
+WRITERS = {'cli-toy': [Writer('text', ('total',), _text)]}
 
 
 def pair(files):

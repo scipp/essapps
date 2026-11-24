@@ -364,9 +364,12 @@ def build(
 
     publisher = None
     if catalogue is not None:
+        from ...scicat import principal_investigator
         from ..publish import Publisher
+        from ..writing import Writing
 
-        publisher = Publisher(intake.manager, catalogue)
+        contact = principal_investigator(catalogue, client.proposal)
+        publisher = Publisher(Writing(intake.manager, {}, contact), catalogue)
     pages = Pages(
         intake,
         interval=interval,

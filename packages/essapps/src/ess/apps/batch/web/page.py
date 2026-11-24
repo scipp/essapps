@@ -143,7 +143,7 @@ from ...fields import UNSET, Fields
 from ...records import Record, Status
 from .. import frames
 from ..definition import Form
-from ..export import export_table
+from ..export import every_output, export_table
 from ..reduction import Batch
 from ..state import (
     RowState,
@@ -605,7 +605,7 @@ class Page:
             return None
         outputs = self.batch.spec.outputs.model_fields
         return PublishShown(
-            form=publisher.form(self.label),
+            form=publisher.writing.form(self.label),
             outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
         )
 
@@ -1072,10 +1072,10 @@ class Page:
     def set_publish_form(self, fields: Mapping[str, Any]) -> str:
         """
         Keep the form of the tab "Publish", given as its fields
-        (:meth:`Publisher.set_form`).
+        (:meth:`~..writing.Writing.set_form`).
         """
         with refused('Not applied'):
-            self._publisher().set_form(self.label, Form.model_validate(fields))
+            self._publisher().writing.set_form(self.label, Form.model_validate(fields))
         return 'Applied the form.'
 
     @_action
@@ -1241,8 +1241,8 @@ class Page:
             table = frames.with_results(
                 batch.client, states, frame.loc[done], published=batch.published()
             )
-            exported = export_table(batch.client, table, folder)
-            write_table(exported, folder / 'results.csv')
+            export_table(batch.client, table, folder, every_output(batch.client))
+            write_table(table, folder / 'results.csv')
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted(folder.rglob('*')):
                     if path.is_file():

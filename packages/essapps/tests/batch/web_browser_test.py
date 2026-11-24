@@ -1892,12 +1892,14 @@ def publishing(
     from scitacean.testing.transfer import FakeFileTransfer
 
     from ess.apps.batch.publish import Publisher
+    from ess.apps.batch.writing import Writing
     from ess.apps.scicat import Catalogue
 
     scicat = FakeClient.without_login(
         url='https://scicat.invalid/api/v3', file_transfer=FakeFileTransfer()
     )
-    publisher = Publisher(intake.manager, Catalogue(client=scicat, instrument='loki'))
+    catalogue = Catalogue(client=scicat, instrument='loki')
+    publisher = Publisher(Writing(intake.manager, {}), catalogue)
     client.wait(list(batch.reduce(['1', '2']).values()))
     with serve(create_app(Pages(intake, publisher=publisher))) as root:
         page = watched(browser)
@@ -1936,6 +1938,6 @@ def test_the_publish_form_is_in_force_after_apply_and_holds_publishing_back_till
     )
     published.filter(has_text='pid:').wait_for()
 
-    assert unfilled.startswith('The form names no output, no owner, no contact email')
+    assert unfilled.startswith('The form names no owner, no contact email')
     assert held
     assert owner == 'Anna'

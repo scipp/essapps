@@ -433,8 +433,8 @@ class Batch:
 
     def publishing(self) -> definition.Publishing:
         """
-        What the batch keeps of the catalogue: the form and each upload; empty
-        if not kept. Only :class:`~.publish.Publisher` writes it.
+        What the batch keeps of the catalogue: each upload; empty if not
+        kept. Only :class:`~.publish.Publisher` writes it.
         """
         kept = None
         if self._definitions is not None:

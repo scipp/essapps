@@ -1132,6 +1132,7 @@ function fillPublish({form: given, outputs}) {
 function publishForm() {
   const {elements} = $('publish-form');
   return {
+    format: view.state.publish.form.format,
     outputs: [...document.querySelectorAll('#publish-outputs input:checked')].map((i) => i.value),
     name: elements.name.value,
     description: elements.description.value,

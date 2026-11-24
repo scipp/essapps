@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""
+The writers of the outputs of LoKI's reductions.
+
+:data:`NXCANSAS` writes I(Q) as an NXcanSAS file with esssans. The module needs the
+``loki`` extra of ``essinstruments``, which brings esssans.
+
+An application gives :data:`WRITERS`, the writers by the name of a spec, for example
+``essapps-batch -W ess.instruments.loki.writers:WRITERS``.
+"""
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+from ess.sans.io import save_background_subtracted_iofq
+from ess.sans.types import Measurement, SampleRun
+
+from ess.apps.writers import About, Writer
+
+from .specs import IOFQ
+
+
+def _nxcansas(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
+    iofq = outputs['iofq']
+    if iofq.run is None:
+        raise ValueError('NXcanSAS needs a run number; the sample file has none')
+    save_background_subtracted_iofq(
+        iofq=iofq.intensity,
+        out_filename=directory / 'iofq.h5',
+        measurement=Measurement[SampleRun](title=iofq.title, run_number=iofq.run),
+    )
+
+
+NXCANSAS = Writer('NXcanSAS', ('iofq',), _nxcansas)
+"""I(Q) as ``iofq.h5``, an NXcanSAS file with the title and run of the sample."""
+
+WRITERS = {IOFQ.name: [NXCANSAS]}

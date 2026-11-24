@@ -2810,9 +2810,11 @@ def publishing(
 ) -> TestClient:
     """The page of ``label`` with a catalogue, rows 1 and 2 done, 3 incomplete."""
     from ess.apps.batch.publish import Publisher
+    from ess.apps.batch.writing import Writing
     from ess.apps.scicat import Catalogue
 
-    publisher = Publisher(intake.manager, Catalogue(client=scicat, instrument='loki'))
+    catalogue = Catalogue(client=scicat, instrument='loki')
+    publisher = Publisher(Writing(intake.manager, {}), catalogue)
     http = opened(Pages(intake, publisher=publisher), label)
     sample(1, 'water')
     sample(2, 'sds')
@@ -2822,7 +2824,12 @@ def publishing(
     return http
 
 
-FORM = {'outputs': ['total'], 'owner': 'Anna', 'contact_email': 'anna@example.org'}
+FORM = {
+    'format': 'scipp HDF5',
+    'outputs': ['total'],
+    'owner': 'Anna',
+    'contact_email': 'anna@example.org',
+}
 
 
 def test_without_a_catalogue_the_page_has_no_publishing(http: TestClient) -> None:
@@ -2861,8 +2868,8 @@ def test_a_published_row_shows_the_identifier_of_its_dataset(
 @pytest.mark.parametrize(
     ('form', 'message'),
     [
-        ({'outputs': ['nope']}, 'Not applied: staged has no output nope'),
-        ({'name': '{sample}'}, 'Not applied: name: a name may hold {title}, {name}'),
+        (FORM | {'outputs': ['nope']}, 'Not applied: staged has no output nope'),
+        (FORM | {'name': '{sample}'}, 'Not applied: name: a name may hold {title}'),
     ],
 )
 def test_a_form_refused_says_why(
@@ -2879,7 +2886,7 @@ def test_a_form_refused_says_why(
     [
         (FORM, ['3'], 'Not published: no result to publish, done and not outdated: 3'),
         (FORM, [], 'Select the rows to publish'),
-        ({}, ['1'], 'Not published: the form names no output'),
+        (FORM | {'owner': ''}, ['1'], 'Not published: the form names no owner'),
     ],
 )
 def test_a_refused_publication_says_why_and_publishes_nothing(
