@@ -1,0 +1,146 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
+"""Publishing results of a batch to a fake SciCat."""
+
+import pytest
+from scitacean.testing.client import FakeClient
+from scitacean.testing.transfer import FakeFileTransfer
+
+from ess.apps import Client
+from ess.apps.batch import Batch, BatchManager, FolderDefinitions
+from ess.apps.batch.definition import Form
+from ess.apps.batch.publish import Publisher
+from ess.apps.scicat import Catalogue
+from ess.apps.testing import FakeFiles
+
+from . import toys
+
+FORM = Form(outputs=('total',), owner='Anna', contact_email='anna@example.org')
+
+
+@pytest.fixture
+def scicat() -> FakeClient:
+    return FakeClient.without_login(
+        url='https://scicat.example.org/api/v3', file_transfer=FakeFileTransfer()
+    )
+
+
+@pytest.fixture
+def publisher(manager: BatchManager, scicat: FakeClient) -> Publisher:
+    return Publisher(manager, Catalogue(client=scicat, instrument='loki'))
+
+
+@pytest.fixture
+def batch(fake: FakeFiles, client: Client, manager: BatchManager) -> Batch:
+    """A batch of two rows, water (1) and sample A (2), both reduced."""
+    for run, name in [(1, 'water'), (2, 'sample A')]:
+        fake.measure(run, float(run), role='sample', sample=name, pid=f'20.500/s{run}')
+        fake.measure(run + 1000, 1.0, role='transmission', sample=name)
+    batch = manager.create(
+        'plain', title='Morning', description='2 mm cells', rows=toys.rows(client)
+    )
+    client.wait(list(batch.reduce(['1', '2']).values()))
+    return batch
+
+
+def test_a_row_is_published_as_a_derived_dataset_of_its_inputs(
+    publisher: Publisher, batch: Batch, scicat: FakeClient
+) -> None:
+    publisher.set_form(batch.label, FORM)
+
+    pids = publisher.publish(batch.label, {'1': 'water'})
+
+    [pid] = scicat.datasets
+    assert pids == {'1': f'pid:{pid}'}
+    dataset = scicat.get_dataset(pid)
+    assert dataset.type == 'derived'
+    assert dataset.name == 'Morning water'
+    assert [str(p) for p in dataset.input_datasets] == ['20.500/s1']
+    assert dataset.proposal_ids == ['p1']
+    assert dataset.owner_group == 'p1'
+    assert dataset.meta['other_inputs'] == ['uuid:run-1001']
+    assert any(s.startswith('scitacean==') for s in dataset.used_software)
+    assert sorted(
+        f.remote_access_path(dataset.source_folder).name for f in dataset.files
+    ) == ['_record.json', 'total.h5']
+
+
+def test_what_is_published_is_kept_with_the_batch(
+    publisher: Publisher, batch: Batch, client: Client, definitions: FolderDefinitions
+) -> None:
+    publisher.set_form(batch.label, FORM)
+    pids = publisher.publish(batch.label, {'1': 'water'})
+
+    again = Publisher(
+        BatchManager(client, definitions=definitions), publisher.catalogue
+    )
+
+    assert again.form(batch.label) == FORM
+    record = batch.state(['1'])['1'].record
+    assert record is not None
+    assert again.published(batch.label) == {record.id: pids['1']}
+
+
+def test_a_result_is_published_once(
+    publisher: Publisher, batch: Batch, scicat: FakeClient
+) -> None:
+    publisher.set_form(batch.label, FORM)
+    publisher.publish(batch.label, {'1': 'water'})
+
+    with pytest.raises(ValueError, match='published already: 1'):
+        publisher.publish(batch.label, {'2': 'sample A', '1': 'water'})
+    assert len(scicat.datasets) == 1
+
+
+def test_a_form_without_owner_or_output_is_refused_before_any_upload(
+    publisher: Publisher, batch: Batch, scicat: FakeClient
+) -> None:
+    publisher.set_form(batch.label, Form(contact_email='anna@example.org'))
+
+    with pytest.raises(ValueError, match='no output, no owner'):
+        publisher.publish(batch.label, {'1': 'water'})
+    assert scicat.datasets == {}
+
+
+def test_a_row_without_a_completed_result_is_refused(
+    publisher: Publisher, batch: Batch, fake: FakeFiles, client: Client
+) -> None:
+    fake.measure(3, 3.0, role='sample', sample='B')
+    fake.measure(1003, 1.0, role='transmission', sample='B')
+    batch.put(toys.rows(client))
+    publisher.set_form(batch.label, FORM)
+
+    with pytest.raises(ValueError, match='no completed result: 3'):
+        publisher.publish(batch.label, {'1': 'water', '3': 'B'})
+
+
+def test_until_set_the_form_has_the_description_of_the_batch(
+    publisher: Publisher, batch: Batch
+) -> None:
+    assert publisher.form(batch.label) == Form(description='2 mm cells')
+
+
+@pytest.mark.parametrize(
+    ('form', 'match'),
+    [
+        (Form(outputs=('iofq',)), 'plain has no output iofq'),
+        (Form(name='{title} {sample}'), 'no other field'),
+    ],
+)
+def test_a_form_of_another_output_or_field_is_refused(
+    publisher: Publisher, batch: Batch, form: Form, match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        publisher.set_form(batch.label, form)
+    assert publisher.form(batch.label) == Form(description='2 mm cells')
+
+
+def test_removing_the_batch_forgets_what_was_published(
+    publisher: Publisher, batch: Batch, manager: BatchManager
+) -> None:
+    publisher.set_form(batch.label, FORM)
+    publisher.publish(batch.label, {'1': 'water'})
+
+    manager.remove(batch.label)
+
+    assert manager.definitions.labels() == []

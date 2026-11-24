@@ -35,8 +35,9 @@ dependencies = [
 panel = ["panel>=1.10", "pandas", "plopp"]
 files = ["essspec[scipp]", "h5py", "openpyxl", "pandas", "pyyaml"]
 web = ["essapps[files]", "fastapi", "uvicorn"]
+scicat = ["essapps[files]", "scitacean>=26.10"]
 test = [
-    "essapps[files,panel,web]",
+    "essapps[files,panel,scicat,web]",
     "httpx",
     "essspec[scipp,sciline]",
     "playwright",

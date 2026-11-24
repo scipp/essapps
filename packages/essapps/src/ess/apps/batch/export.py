@@ -15,6 +15,7 @@ its output.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
@@ -28,12 +29,18 @@ RECORD_FILE = '_record.json'
 """The file of the record in the folder of a row; no output is named so."""
 
 
-def write_outputs(client: Client, record: Record, directory: Path) -> dict[str, Path]:
+def write_outputs(
+    client: Client,
+    record: Record,
+    directory: Path,
+    names: Sequence[str] | None = None,
+) -> dict[str, Path]:
     """
-    Write each output that a completed ``record`` returned to ``directory``, and
-    the record itself, which names the files and the values they were computed
-    from. It names a file by its identity: its catalogue identifier, or its
-    path, relative to the workspace's folder if the file is in it::
+    Write each output of ``names``, or every output, that a completed
+    ``record`` returned to ``directory``, and the record itself, which names
+    the files and the values they were computed from. It names a file by its
+    identity: its catalogue identifier, or its path, relative to the
+    workspace's folder if the file is in it::
 
         iofq.h5            what scipp.io.load_hdf5 reads (see ess.apps.hdf5)
         _record.json       the record
@@ -43,7 +50,12 @@ def write_outputs(client: Client, record: Record, directory: Path) -> dict[str, 
     directory.mkdir(parents=True, exist_ok=True)
     (directory / RECORD_FILE).write_text(record.model_dump_json(indent=2))
     paths = {}
-    for name, value in client.output(record).items():
+    values = (
+        client.output(record)
+        if names is None
+        else {name: client.output(record, name) for name in names}
+    )
+    for name, value in values.items():
         paths[name] = directory / f'{name}.h5'
         hdf5.write(value, paths[name])
     return paths

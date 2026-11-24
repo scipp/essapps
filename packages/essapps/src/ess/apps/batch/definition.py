@@ -14,6 +14,8 @@ rows of a batch are written by its ``Batch``, which the manager makes:
     source        the row source a batch was made from, the  Intake
                   keys of it that the batch has considered,
                   and whether the batch follows
+    publish       the form of its datasets in the catalogue,  Publisher
+                  and the records published
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
@@ -26,6 +28,7 @@ definitions*, keeps each entry as plain data under a key::
     ('labels', label, 'settings')
     ('labels', label, 'rows')
     ('labels', label, 'source')
+    ('labels', label, 'publish')
 
 and its writer saves it whole at each change. It can forget an entry
 (``delete``) and list the labels that have an entry (``labels``). Only
@@ -40,6 +43,8 @@ The plain data of each entry, as the functions below give and read it::
     rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
     source        {'source': 'sample-runs', 'considered': ['60337', '60338'],
                    'follows': True}
+    publish       {'form': {'outputs': ['iofq'], 'name': '{title} {name}', ...},
+                   'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
 
 The settings are a template in the format of the file that a person saves
 from a page: its params are the settings of the batch, also those at the
@@ -64,7 +69,7 @@ from pathlib import Path
 from typing import Any, Protocol, TypedDict
 from urllib.parse import quote, unquote
 
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic_core import from_json, to_json
 
 from ess.spec import FileRef
@@ -93,9 +98,19 @@ def source_key(label: str) -> Key:
     return ('labels', label, 'source')
 
 
+def publish_key(label: str) -> Key:
+    return ('labels', label, 'publish')
+
+
 def label_keys(label: str) -> tuple[Key, ...]:
     """Every entry of ``label``: the header first, then the others."""
-    return header_key(label), source_key(label), rows_key(label), settings_key(label)
+    return (
+        header_key(label),
+        source_key(label),
+        rows_key(label),
+        settings_key(label),
+        publish_key(label),
+    )
 
 
 class NotKept(OSError):
@@ -314,7 +329,50 @@ class FromSource:
     follows: bool
 
 
+class Form(BaseModel, frozen=True):
+    """
+    What a person says of the datasets that the results of a batch are
+    published as, once for all its rows (see :mod:`.publish`).
+
+    ``outputs`` are the outputs of the spec that each dataset holds. ``name``
+    names a dataset; it may hold ``{title}``, the title of the batch, ``{name}``,
+    the name of the row, and ``{key}``, its key.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    outputs: tuple[str, ...] = ()
+    name: str = '{title} {name}'
+    description: str = ''
+    keywords: tuple[str, ...] = ()
+    owner: str = ''
+    contact_email: str = ''
+
+
+class Published(BaseModel, frozen=True):
+    """One upload: the row, its result record, and the dataset's identifier."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    key: str
+    record: str
+    pid: str
+
+
+class Publishing(BaseModel, frozen=True):
+    """
+    What a batch keeps of the catalogue: the form, ``None`` until a person
+    sets it, and each upload, in order.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    form: Form | None = None
+    published: tuple[Published, ...] = ()
+
+
 _HEADER = TypeAdapter(Header)
+_PUBLISHING = TypeAdapter(Publishing)
 _FROM_SOURCE = TypeAdapter(FromSource)
 _CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
 _TEMPLATE = TypeAdapter(Template)
@@ -369,3 +427,13 @@ def source_data(made: FromSource) -> dict[str, Any]:
 def source_of(data: Any) -> FromSource:
     """The source of :func:`source_data`; ``ValueError`` names a field."""
     return _checked(_FROM_SOURCE, data)
+
+
+def publishing_data(publishing: Publishing) -> dict[str, Any]:
+    """What a batch keeps of the catalogue, as plain data."""
+    return _PUBLISHING.dump_python(publishing, mode='json')
+
+
+def publishing_of(data: Any) -> Publishing:
+    """The publishing of :func:`publishing_data`; ``ValueError`` names a field."""
+    return _checked(_PUBLISHING, data)
