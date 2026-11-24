@@ -65,7 +65,6 @@ from .. import (
     RowSource,
 )
 from ..table import KEY, cell_of
-from ..writing import Writing
 from . import Pages, create_app, plots
 from .api import STATIC, every
 from .page import Shown
@@ -363,11 +362,6 @@ def build(
         ]
         return plots.figure(curves, quantity='I(Q)')
 
-    contact = None
-    if catalogue is not None:
-        from ...scicat import principal_investigator
-
-        contact = principal_investigator(catalogue, client.proposal)
     pages = Pages(
         intake,
         interval=interval,
@@ -376,7 +370,6 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
-        writing=Writing(intake.manager, {}, contact),
         catalogue=catalogue,
     )
     return create_app(pages)

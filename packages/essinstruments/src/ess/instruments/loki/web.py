@@ -69,7 +69,6 @@ from ess.apps import Client
 from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
 from ess.apps.batch.web import Pages, Shown, create_app, plots
 from ess.apps.batch.web.api import STATIC
-from ess.apps.batch.writing import Writing
 from ess.apps.folder import ArrivingFiles, open_folder
 
 from .batch import SOURCES, STAGED
@@ -151,7 +150,7 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
-        writing=Writing(manager, WRITERS),
+        writers=WRITERS,
     )
     return create_app(pages)
 

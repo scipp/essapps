@@ -1906,9 +1906,9 @@ def output(
     The page of ``url`` with the format ``text`` and no catalogue, rows 1 and
     2 reduced, at the tab "Output".
     """
-    writing = Writing(intake.manager, {STAGED.name: [TEXT]})
     client.wait(list(batch.reduce(['1', '2']).values()))
-    with output_tab(browser, Pages(intake, writing=writing), batch.label) as page:
+    pages = Pages(intake, writers={STAGED.name: [TEXT]})
+    with output_tab(browser, pages, batch.label) as page:
         yield page
 
 
@@ -1948,6 +1948,26 @@ def test_a_download_of_results_waits_for_the_output_form_and_writes_by_it(
         'results/2/total.h5',
         'results/results.csv',
     ]
+
+
+def test_a_kept_format_the_page_lacks_says_why_until_a_format_is_applied(
+    browser: Any, intake: Intake, url: str, batch: Batch, client: Client
+) -> None:
+    writing = Writing(intake.manager, {STAGED.name: [TEXT]})
+    writing.set_form(batch.label, writing.form(batch.label))
+    client.wait(list(batch.reduce(['1', '2']).values()))
+    with output_tab(browser, Pages(intake), batch.label) as page:
+        said = page.inner_text('#output-draft .settings-bar-state')
+        held = page.is_disabled('[data-file="results-all"]')
+        unchanged = page.locator('#output-draft.changed').count() == 0
+
+        page.select_option('#output-format', 'scipp HDF5')
+        page.click('#output-draft button.primary')
+        page.wait_for_selector('[data-file="results-all"]:enabled', state='attached')
+
+    assert 'no writer of the format text' in said
+    assert held
+    assert unchanged
 
 
 @pytest.fixture

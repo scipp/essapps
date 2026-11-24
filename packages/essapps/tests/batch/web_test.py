@@ -2831,8 +2831,8 @@ def publishing(
 @pytest.fixture
 def written(intake: Intake, label: str, sample: Measure, client: Client) -> TestClient:
     """The page of ``label`` with the format ``text``, rows 1 and 2 done."""
-    writing = Writing(intake.manager, {STAGED.name: [TEXT]})
-    return with_rows(Pages(intake, writing=writing), label, sample, client)
+    pages = Pages(intake, writers={STAGED.name: [TEXT]})
+    return with_rows(pages, label, sample, client)
 
 
 FORM = {
@@ -2875,6 +2875,23 @@ def test_the_formats_are_those_given_and_scipp_hdf5_the_default_first(
         {'name': 'scipp HDF5', 'outputs': None},
     ]
     assert output['form']['format'] == 'text'
+
+
+def test_a_kept_format_the_page_lacks_is_a_problem_until_one_it_has_is_applied(
+    intake: Intake, label: str, sample: Measure, client: Client
+) -> None:
+    writing = Writing(intake.manager, {STAGED.name: [TEXT]})
+    writing.set_form(label, writing.form(label))
+    http = with_rows(Pages(intake), label, sample, client)
+    kept = state(http)['output']
+    refused = http.post('/api/results.zip', json={'keys': ['1']})
+
+    http.post('/api/output/form', json=FORM)
+
+    assert kept['form']['format'] == 'text'
+    assert 'no writer of the format text' in kept['problem']
+    assert refused.status_code == 422
+    assert state(http)['output']['problem'] == ''
 
 
 def test_the_results_download_as_the_form_says(written: TestClient) -> None:

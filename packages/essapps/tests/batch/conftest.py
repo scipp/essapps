@@ -245,7 +245,9 @@ def table() -> pd.DataFrame:
     )
 
 
-MODULE = '''
+MODULE = (
+    f'from {toys.__name__} import TEXT\n'
+    + '''
 import os
 import signal
 from typing import Annotated
@@ -253,7 +255,6 @@ from typing import Annotated
 import pandas as pd
 from ess.apps.batch import RowSource
 from ess.apps.testing import StagedFunction, read_file
-from ess.apps.writers import Writer
 from ess.spec import RunFile, WorkflowSpec, function_binding
 from pydantic import AfterValidator, BaseModel
 from ess.spec import Referenced
@@ -356,11 +357,7 @@ UPGRADED = [
 STAGING = [StagedFunction(SPEC, _reduce), function_binding(FIND, _find)]
 
 
-def _text(outputs, about, directory):
-    (directory / 'total.txt').write_text(f'{about.name}: {outputs["total"]}')
-
-
-WRITERS = {'cli-toy': [Writer('text', ('total',), _text)]}
+WRITERS = {'cli-toy': [TEXT]}
 
 
 def pair(files):
@@ -388,6 +385,7 @@ REFUSING = {
     )
 }
 '''
+)
 
 
 @pytest.fixture

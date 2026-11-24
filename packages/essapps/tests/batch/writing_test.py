@@ -34,7 +34,7 @@ def test_until_set_the_form_is_of_the_first_writer_every_output_and_the_contact(
         owner='Ada Lovelace',
         contact_email='ada@example.org',
     )
-    assert [w.format for w in writing.formats(done_batch.label)] == [
+    assert [w.format for w in writing.writers(done_batch.label)] == [
         'text',
         'scipp HDF5',
     ]
@@ -101,7 +101,7 @@ def test_a_row_is_written_by_the_form_with_its_record(
     record = done_batch.state(['1'])['1'].record
     assert record is not None
 
-    writing.by_form(done_batch.label)('1', record, tmp_path / '1')
+    writing.by_form(done_batch.label)[0]('1', record, tmp_path / '1')
 
     assert sorted(p.name for p in (tmp_path / '1').iterdir()) == [
         '_record.json',

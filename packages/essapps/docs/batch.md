@@ -61,7 +61,7 @@ Nothing in the batch layer imports the page or the command.
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
 | `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
-| writing | `writing.py`: `Writing` | how the results of a batch are written: the form of a batch (a format, outputs, and what a person says of them, `ess.apps.writers.About`), and the writers of each spec (`ess.apps.writers.Writer`); `export -l` and publishing write by it |
+| writing | `writing.py`: `Writing` | how the results of a batch are written: the form of a batch (a format, outputs, and what a person says of them, `ess.apps.writers.About`), and the writers of each spec (`ess.apps.writers.Writer`); the download of the page, `export -l` and publishing write by it |
 | publisher | `publish.py`: `Publisher` | the results of a batch into SciCat, one derived dataset per row (`ess.apps.scicat`) with the files that `Writing` writes: which results may be published, and what was published |
 
 ### Terms
@@ -709,9 +709,9 @@ Each subcommand is a few calls of the batch layer:
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
 | `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame(), published=batch.published())` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
-| `export TABLE` | `export.export_table(client, table, directory, export.every_output(client))`, of the table file |
-| `export -l LABEL` | `export.export_table(client, table, directory, writing.by_form(label))`, of what `show` gives |
-| `form -l LABEL [FILE]` | `writing.set_form(label, writing.load_form(FILE))` if FILE is given, then `writing.form_text(label)`, with `writing = Writing(manager, writers, contact)` |
+| `export TABLE` | `export.export_table(client, table, directory, export.by_writer(client))`, of the table file |
+| `export -l LABEL` | `export.export_table(client, table, directory, writing.by_form(label)[0])`, of what `show` gives |
+| `form -l LABEL [FILE]` | `writing.set_form(label, writing.load_form(FILE))` if FILE is given, then `writing.form_text(label)`, with `writing = Writing(manager, writers, contact)`, `contact` the principal investigator with `-c` |
 | `publish -l LABEL KEY...` | `publish.Publisher(writing, catalogue).publish(label, keys)` |
 | `offered -l LABEL` | `intake.offered(label)` |
 | `take -l LABEL KEY...` | `intake.take(label, keys)`, then the rows taken as `show` gives them |
@@ -742,8 +742,9 @@ A table file or a files table that the command or the page writes replaces the f
 Until a form is kept, its format is the first writer that `-W` gives for the spec, else scipp HDF5.
 A kept form of a format that `-W` lacks is refused (exit 2), naming the format; it is never written in another format.
 `export TABLE` writes each output that a row's record returned as scipp HDF5: a table file names no batch, so it has no form.
+`export` replaces the folder of each key whole: a row is written into a temporary folder in DIRECTORY, then moved in place of the folder of its key, so an earlier export in another format or of other outputs leaves no files behind.
 `-c package.module:NAME` makes the catalogue with the function it names, called with `--proposal`, as `fake_catalogue` of `ess.apps.batch.web.demo` is; `publish` needs it.
-With `-c`, the owner and contact of a form not set are the principal investigator of the proposal (`scicat.principal_investigator`), also for `form` and `export -l`.
+With `-c`, the owner and contact of a form not set are the principal investigator of the proposal (`scicat.principal_investigator`), for `form` and `publish`; `export -l` does not contact the catalogue.
 `publish` refuses (exit 2) what `Publisher.publish` refuses before any upload; an upload that fails exits with 1, and the rows published before it stay published.
 
 `follow` is the second way to run Follow, after the page: whoever runs the loop owns the timer, and one process works on a folder, so the two never run on one folder at once.

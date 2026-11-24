@@ -101,6 +101,7 @@ from .refusals import Missing, Problem, kept, refused, why
 
 if TYPE_CHECKING:
     from ...scicat import Catalogue
+    from ...writers import Writer
     from ..publish import Publisher
 
 
@@ -169,14 +170,16 @@ class Pages:
         The fields of a run that a person corrects, as a pydantic model.
     folder:
         What the header names as the place of the data, such as a folder.
-    writing:
-        Keeps the form of the tab "Output" of each batch, and writes its
-        results by it; by default, with no writers but
+    writers:
+        The writers of each spec, by its name, that the form of the tab
+        "Output" may pick (:class:`~..writing.Writing`), beside
         :data:`~ess.apps.writers.SCIPP_HDF5`.
     catalogue:
         The catalogue that the tab "Output" publishes results to
         (:class:`~..publish.Publisher`); without it, the tab has no button
-        "Publish", and the grid no column "Published".
+        "Publish", and the grid no column "Published". With it, the owner
+        and contact of a form not set are the principal investigator of the
+        proposal, as the catalogue says, asked once here.
 
     Attributes
     ----------
@@ -194,15 +197,22 @@ class Pages:
         files: CorrectedFiles | None = None,
         marks: type[BaseModel] | None = None,
         folder: str = '',
-        writing: Writing | None = None,
+        writers: Mapping[str, Sequence[Writer]] | None = None,
         catalogue: Catalogue | None = None,
     ) -> None:
         self.intake = intake
-        self.writing = Writing(intake.manager, {}) if writing is None else writing
+        writers = {} if writers is None else writers
         self.publisher: Publisher | None = None
-        if catalogue is not None:
-            from ..publish import Publisher  # needs the extra scicat
+        if catalogue is None:
+            self.writing = Writing(intake.manager, writers)
+        else:
+            from ...scicat import principal_investigator  # needs the extra scicat
+            from ..publish import Publisher
 
+            proposal = intake.manager.client.proposal
+            self.writing = Writing(
+                intake.manager, writers, principal_investigator(catalogue, proposal)
+            )
             self.publisher = Publisher(self.writing, catalogue)
         self.interval = interval
         self.title = title

@@ -12,9 +12,11 @@ the values the outputs were computed from::
     iofq.h5            the files of the format
     _record.json       the record, the same for every format
 
-Download, export and publishing all write through :func:`write`, so that
-they give the same files. :data:`SCIPP_HDF5` writes each output as scipp
-HDF5 (:mod:`ess.apps.hdf5`), for a spec that has no writer of its own.
+Download, ``export -l`` and publishing all write through :func:`write` by
+the form of a batch (:mod:`ess.apps.batch.writing`), so that they give the
+same files. :data:`SCIPP_HDF5` writes each output as scipp HDF5
+(:mod:`ess.apps.hdf5`), for a spec that has no writer of its own, and for
+``export TABLE``, which names no batch.
 
 A writer is a plain function with the name of its format and the outputs it
 reads. The writers of a technique call the save functions of its workflow
@@ -75,7 +77,8 @@ class Writer:
         picks them.
     write:
         Writes the files from the outputs, by name, and what a person says of
-        them, into a folder.
+        them, directly into a folder, with no folder inside it: the publisher
+        uploads the files of the folder.
     """
 
     format: str
@@ -102,15 +105,15 @@ def write(
 ) -> None:
     """
     Write the outputs of a completed ``record`` with ``writer`` into
-    ``directory``, and the record as ``_record.json``, replacing files of
-    the same names.
+    ``directory``, a folder that does not exist, and the record as
+    ``_record.json``.
     The outputs are those the writer reads, or ``chosen`` if it reads those
     a person picks; then ``ValueError`` if none is chosen.
     """
     names = writer.outputs if writer.outputs is not None else tuple(chosen)
     if not names:
-        raise ValueError(f'{writer.format} writes the outputs chosen, and none is')
+        raise ValueError(f'{writer.format}: no output to write')
     outputs = {name: client.output(record, name) for name in names}
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(parents=True)
     (directory / RECORD_FILE).write_text(record.model_dump_json(indent=2))
     writer.write(outputs, about, directory)

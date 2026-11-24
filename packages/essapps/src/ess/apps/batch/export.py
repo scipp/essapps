@@ -6,14 +6,16 @@ The files that a person takes away from a batch. It needs pandas, scipp, and h5p
 :func:`export_table` takes the table that :func:`.frames.reduce_table` returned,
 indexed by key, and writes the result of each completed row to a folder named
 by its key, with a :data:`RowWriter`: by the form of the batch
-(:meth:`.writing.Writing.by_form`), or each output as scipp HDF5
-(:func:`every_output`) for a table that names no batch. It finds a row's
+(:meth:`.writing.Writing.by_form`), or with one writer (:func:`by_writer`),
+such as scipp HDF5 for a table that names no batch. It finds a row's
 result by the ``record`` column, so it exports what the table says, also after
 later reductions under the same label.
 """
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -22,21 +24,23 @@ import pandas as pd
 from .. import writers
 from ..client import Client
 from ..records import Record, Status
+from ..writers import SCIPP_HDF5, About, Writer
 
 type RowWriter = Callable[[str, Record, Path], None]
-"""Writes the result of the row of a key, its record, into a folder."""
+"""Writes the result of the row of a key, its record, into a new folder."""
 
 
-def every_output(client: Client) -> RowWriter:
+def by_writer(client: Client, writer: Writer = SCIPP_HDF5) -> RowWriter:
     """
-    Writes each output that a record returned as scipp HDF5
-    (:data:`ess.apps.writers.SCIPP_HDF5`), named by the key of its row.
+    Writes the result of a row with ``writer``, named by the key of the row;
+    a writer that writes the outputs chosen writes each output that the
+    record returned.
     """
     return lambda key, record, directory: writers.write(
         client,
         record,
-        writers.SCIPP_HDF5,
-        writers.About(name=key),
+        writer,
+        About(name=key),
         directory,
         client.readable([record])[0],
     )
@@ -47,7 +51,9 @@ def export_table(
 ) -> None:
     """
     Write the result of each row of ``table``, indexed by key, whose record
-    completed to ``directory / key`` with ``write``.
+    completed to ``directory / key`` with ``write``, replacing that folder
+    whole: each row is written into a temporary folder in ``directory``
+    first, so that a row that fails leaves the folder of its key as it was.
 
     Raises ``ValueError`` if the table has no ``record`` column, names a record
     that the workspace lacks, has a key twice, or a key that is not the name of
@@ -67,6 +73,12 @@ def export_table(
         raise ValueError(f'the workspace has no record {error.args[0]}') from None
     status = dict(zip((r.id for r in records), client.status(records), strict=True))
     by_id = {r.id: r for r in records if status[r.id] is Status.COMPLETED}
+    directory.mkdir(parents=True, exist_ok=True)
     for key, i in ids.items():
         if i in by_id:
-            write(key, by_id[i], directory / key)
+            with tempfile.TemporaryDirectory(dir=directory) as temporary:
+                written = Path(temporary) / key
+                write(key, by_id[i], written)
+                if (directory / key).exists():
+                    shutil.rmtree(directory / key)
+                written.rename(directory / key)

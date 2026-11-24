@@ -225,14 +225,17 @@ class Format(BaseModel):
 class OutputShown(BaseModel):
     """
     The tab "Output": the ``form`` of the batch, the ``formats`` it may pick,
-    the default first, the ``outputs`` of its spec that the form may name, and
-    whether a ``catalogue`` is given, to publish to.
+    the default first, the ``outputs`` of its spec that the form may name,
+    whether a ``catalogue`` is given, to publish to, and the ``problem`` of
+    the form in words: why nothing is written by it, such as a kept format
+    that is not among ``formats``; empty if none.
     """
 
     form: Form
     formats: list[Format]
     outputs: list[Output]
     catalogue: bool
+    problem: str
 
 
 class State(BaseModel):

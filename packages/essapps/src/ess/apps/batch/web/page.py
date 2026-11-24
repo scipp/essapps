@@ -97,8 +97,11 @@ The tab "Output" shows the form of the batch (:class:`~..writing.Writing`):
 the format its results are written in, and what is said of them. The browser
 holds a change of it until Apply (:meth:`Page.set_output_form`), and refuses
 a download meanwhile, so that the zip of :meth:`Page.results_file` is what the
-form shows. An application given a catalogue publishes by the same form
-(:meth:`Page.publish`).
+form shows. A kept form whose format the application lacks, such as one kept
+by the command line with other writers, writes nothing: the tab says why
+(:attr:`~.models.OutputShown.problem`) until a person applies a format that
+the application has. An application given a catalogue publishes by the same
+form (:meth:`Page.publish`).
 
 A batch follows from the time it is made, if a person chooses Follow in
 "New batch" (:meth:`Pages.create <.pages.Pages.create>`). Its page then has
@@ -609,17 +612,25 @@ class Page:
     def _output_shown(self) -> OutputShown:
         writing = self.pages.writing
         outputs = self.batch.spec.outputs.model_fields
+        form = writing.form(self.label)
+        formats = [
+            Format(
+                name=w.format, outputs=None if w.outputs is None else list(w.outputs)
+            )
+            for w in writing.writers(self.label)
+        ]
+        problem = (
+            ''
+            if any(f.name == form.format for f in formats)
+            else f'This application has no writer of the format {form.format} '
+            'that the form names: pick a format and apply.'
+        )
         return OutputShown(
-            form=writing.form(self.label),
-            formats=[
-                Format(
-                    name=w.format,
-                    outputs=None if w.outputs is None else list(w.outputs),
-                )
-                for w in writing.formats(self.label)
-            ],
+            form=form,
+            formats=formats,
             outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
             catalogue=self.pages.publisher is not None,
+            problem=problem,
         )
 
     def _said(self, errors: Sequence[FieldError]) -> str:
@@ -1257,7 +1268,7 @@ class Page:
                 batch.client, states, frame.loc[done], published=batch.published()
             )
             with refused('Not downloaded'):
-                write = self.pages.writing.by_form(self.label)
+                write, _ = self.pages.writing.by_form(self.label)
                 export_table(batch.client, table, folder, write)
             write_table(table, folder / 'results.csv')
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:

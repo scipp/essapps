@@ -26,7 +26,7 @@ def _nxcansas(outputs: Mapping[str, Any], about: About, directory: Path) -> None
     iofq = outputs['iofq']
     # NXcanSAS requires a run; a file without one, such as those of the LoKI
     # tutorial, gets an empty one. scippneutron's run_number_maybe_int raises
-    # TypeError on None, so None is not passed on.
+    # TypeError on None (scipp/scippneutron#747), so None is not passed on.
     run = '' if iofq.run is None else iofq.run
     save_background_subtracted_iofq(
         iofq=iofq.intensity,

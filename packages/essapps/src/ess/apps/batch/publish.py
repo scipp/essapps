@@ -67,19 +67,12 @@ class Publisher:
         If an upload fails, raises :class:`UploadFailed` that names the rows
         published before it, which are kept.
         """
-        form = self.writing.form(label)
-        if missing := [
-            what
-            for what, given in [
-                ('owner', form.owner),
-                ('contact email', form.contact_email),
-            ]
-            if not given
-        ]:
-            raise ValueError(f'the form names no {", no ".join(missing)}')
-        write = self.writing.by_form(label)
-        abouts = self.writing.abouts(label)
+        write, abouts = self.writing.by_form(label)
         records = self._results(label, keys)
+        for about in (abouts[key] for key in records):
+            given = [('owner', about.owner), ('contact email', about.contact_email)]
+            if missing := [what for what, text in given if not text]:
+                raise ValueError(f'the form names no {", no ".join(missing)}')
         pids: dict[str, str] = {}
         for key, record in records.items():
             try:
@@ -121,8 +114,9 @@ class Publisher:
         """Upload one result and keep that it was; its catalogue identifier."""
         client = self.writing.manager.client
         with tempfile.TemporaryDirectory() as folder:
-            write(key, record, Path(folder))
-            files = sorted(Path(folder).iterdir())
+            written = Path(folder) / key
+            write(key, record, written)
+            files = sorted(written.iterdir())
             pid = publish(self.catalogue, client, record, files, about)
         kept = self._kept(label)
         upload = Published(key=key, record=record.id, pid=pid)

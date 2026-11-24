@@ -161,7 +161,7 @@ from ..writers import Writer
 from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
-from .export import every_output, export_table
+from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
 from .manager import BatchManager
 from .reduction import Batch
@@ -589,7 +589,7 @@ def _export(given: _Given) -> pd.DataFrame:
     args = given.args
     if args.label is not None:
         table = _show(given)
-        write = _writing(given, _the_catalogue(given)).by_form(args.label)
+        write, _ = Writing(given.manager(), given.writers).by_form(args.label)
     else:
         table = read_text(args.table)
         if KEY not in table.columns:
@@ -597,7 +597,7 @@ def _export(given: _Given) -> pd.DataFrame:
                 f'{args.table}: no column {KEY}, so reduce did not write it'
             )
         table = table.set_index(KEY)
-        write = every_output(given.client)
+        write = by_writer(given.client)
     export_table(given.client, table, args.directory, write)
     return table
 
@@ -1316,8 +1316,8 @@ def _parser() -> argparse.ArgumentParser:
         '--catalogue',
         metavar='MODULE:NAME',
         help='a function from the proposal to the catalogue to publish to '
-        '(ess.apps.scicat.Catalogue), for publish; form and export -l take the '
-        'owner and contact of a form not set from it',
+        '(ess.apps.scicat.Catalogue), for publish; form takes the owner and '
+        'contact of a form not set from it',
     )
     parser.add_argument(
         '-W',

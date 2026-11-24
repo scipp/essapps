@@ -1084,11 +1084,11 @@ function renderResultFiles() {
   };
   $('n-results-selected').textContent = said(doneSelected);
   $('n-results-all').textContent = said(done);
-  const held = outputChanged();
+  const held = outputChanged() ? 'Apply or discard the changes of the output form first.' : view.state.output.problem;
   for (const [name, results] of [['results-selected', doneSelected], ['results-all', done]]) {
     const item = document.querySelector(`[data-file="${name}"]`);
-    item.disabled = held || results.length === 0;
-    item.title = held ? 'Apply or discard the changes of the output form first.' : '';
+    item.disabled = Boolean(held) || results.length === 0;
+    item.title = held;
   }
 }
 
@@ -1168,14 +1168,17 @@ function normal(form) {
 }
 
 // Whether the inputs hold a change of `form`, by default the form in force.
+// A format that the select lacks reads as none picked, as the select shows it.
 function outputChanged(form = view.state?.output.form) {
-  return Boolean(form) && normal(outputForm()) !== normal(form);
+  if (!form) return false;
+  const known = view.state.output.formats.some((f) => f.name === form.format);
+  return normal(outputForm()) !== normal(known ? form : {...form, format: ''});
 }
 
 // The bar of the form, and what waits for it. A format whose writer reads
 // outputs of its own takes none of the outputs chosen, so they are hidden.
 function renderOutputDraft() {
-  renderDraft($('output-draft'), outputChanged(), '', 'This form is in force.');
+  renderDraft($('output-draft'), outputChanged(), view.state.output.problem, 'This form is in force.');
   const format = view.state.output.formats.find((f) => f.name === $('output-format').value);
   $('output-outputs-field').hidden = format?.outputs != null;
   renderResultFiles();
@@ -1201,6 +1204,7 @@ function publishBlocked() {
   const {form} = view.state.output;
   if (view.publishing) return 'Publishing…';
   if (outputChanged()) return 'Apply or discard the changes of the form first.';
+  if (view.state.output.problem) return view.state.output.problem;
   const fields = [['owner', form.owner], ['contact email', form.contact_email]];
   const lacking = fields.filter(([, given]) => !given).map(([what]) => what);
   if (lacking.length) return `The form names no ${lacking.join(', no ')}: fill it in and apply it.`;

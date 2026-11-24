@@ -3,8 +3,9 @@
 """
 How the results of a batch are written: :class:`Writing` keeps the form of
 each batch (:class:`~.definition.Form`), and writes the result of a row by it
-with :func:`ess.apps.writers.write`. ``export -l`` and publishing
-(:mod:`.publish`) both write so, so that they give the same files.
+with :func:`ess.apps.writers.write`. The download of the page, ``export -l``
+and publishing (:mod:`.publish`) all write so, so that they give the same
+files.
 
 The form picks a writer by its format, among those the application gives for
 the spec of the batch and :data:`~ess.apps.writers.SCIPP_HDF5`, which every
@@ -86,7 +87,7 @@ class Writing:
         self._writers = writers
         self._contact = contact
 
-    def formats(self, label: str) -> list[Writer]:
+    def writers(self, label: str) -> list[Writer]:
         """The writers that the form of ``label`` may pick, the default first."""
         spec = self.manager.batch(label).spec
         return [*self._writers.get(spec.name, ()), SCIPP_HDF5]
@@ -94,7 +95,7 @@ class Writing:
     def form(self, label: str) -> Form:
         """
         The form of ``label``. Until set, its format is the first of
-        :meth:`formats`, it names every output of the spec, its description
+        :meth:`writers`, it names every output of the spec, its description
         is the batch's, and its owner and contact are the ``contact`` given.
         """
         spec = self.manager.batch(label).spec
@@ -103,7 +104,7 @@ class Writing:
             return kept
         contact = self._contact
         return Form(
-            format=self.formats(label)[0].format,
+            format=self.writers(label)[0].format,
             outputs=tuple(spec.outputs.model_fields),
             description=self.manager.headers()[label].description,
             owner='' if contact is None else contact.name,
@@ -113,7 +114,7 @@ class Writing:
     def set_form(self, label: str, form: Form) -> None:
         """
         Keep ``form`` for ``label``. Raises ``ValueError`` for a format that
-        :meth:`formats` lacks, an output that the spec of the batch lacks, or
+        :meth:`writers` lacks, an output that the spec of the batch lacks, or
         no output for a writer that writes the outputs chosen.
         """
         writer = self._writer(label, form.format)
@@ -124,9 +125,44 @@ class Writing:
             raise ValueError(f'{writer.format} writes the outputs chosen: choose one')
         self.manager.definitions.save(form_key(label), form_data(form))
 
-    def abouts(self, label: str) -> dict[str, About]:
-        """What the form of ``label`` says of the result of each row, by key."""
+    def by_form(self, label: str) -> tuple[RowWriter, dict[str, About]]:
+        """
+        What writes the result of a row of ``label`` into a folder, as the
+        form says (:func:`ess.apps.writers.write`), and what the form says of
+        the result of each row, by key, which the publisher also gives the
+        catalogue. Raises ``ValueError`` if this process lacks the format of
+        the form.
+        """
         form = self.form(label)
+        writer = self._writer(label, form.format)
+        abouts = self._abouts(label, form)
+        client = self.manager.client
+
+        def write(key: str, record: Record, directory: Path) -> None:
+            writers.write(client, record, writer, abouts[key], directory, form.outputs)
+
+        return write, abouts
+
+    def form_text(self, label: str) -> str:
+        """
+        The form of ``label`` as YAML (:meth:`form`), with a comment on what
+        its format, its outputs and its name may hold; :func:`load_form` reads
+        it back.
+        """
+        formats = ', '.join(w.format for w in self.writers(label))
+        outputs = ', '.join(self.manager.batch(label).spec.outputs.model_fields)
+        fields = self.form(label).model_dump(mode='json')
+        return (
+            f'# How the results of {label} are written, and what is said of them.\n'
+            f'# format: one of {formats}\n'
+            f'# outputs: some of {outputs}, for a format that writes those chosen\n'
+            '# name: may hold {title}, {name} and {key}: the title of the batch,\n'
+            '#   the name of the row, and its key\n'
+            + yaml.safe_dump(fields, sort_keys=False, allow_unicode=True)
+        )
+
+    def _abouts(self, label: str, form: Form) -> dict[str, About]:
+        """What ``form`` says of the result of each row of ``label``, by key."""
         batch = self.manager.batch(label)
         title = self.manager.headers()[label].title
         return {
@@ -140,43 +176,9 @@ class Writing:
             for key, name in names(batch.frame(), batch.parameter_columns).items()
         }
 
-    def by_form(self, label: str) -> RowWriter:
-        """
-        Writes the result of a row of ``label`` into a folder, as the form
-        says (:func:`ess.apps.writers.write`). Raises ``ValueError`` here if
-        this process lacks the format of the form.
-        """
-        form = self.form(label)
-        writer = self._writer(label, form.format)
-        abouts = self.abouts(label)
-        client = self.manager.client
-
-        def write(key: str, record: Record, directory: Path) -> None:
-            writers.write(client, record, writer, abouts[key], directory, form.outputs)
-
-        return write
-
-    def form_text(self, label: str) -> str:
-        """
-        The form of ``label`` as YAML (:meth:`form`), with a comment on what
-        its format, its outputs and its name may hold; :func:`load_form` reads
-        it back.
-        """
-        formats = ', '.join(w.format for w in self.formats(label))
-        outputs = ', '.join(self.manager.batch(label).spec.outputs.model_fields)
-        fields = self.form(label).model_dump(mode='json')
-        return (
-            f'# How the results of {label} are written, and what is said of them.\n'
-            f'# format: one of {formats}\n'
-            f'# outputs: some of {outputs}, for a format that writes those chosen\n'
-            '# name: may hold {title}, {name} and {key}: the title of the batch,\n'
-            '#   the name of the row, and its key\n'
-            + yaml.safe_dump(fields, sort_keys=False, allow_unicode=True)
-        )
-
     def _writer(self, label: str, format: str) -> Writer:
         """The writer of ``format`` for ``label``; ``ValueError`` if none."""
-        formats = self.formats(label)
+        formats = self.writers(label)
         for writer in formats:
             if writer.format == format:
                 return writer

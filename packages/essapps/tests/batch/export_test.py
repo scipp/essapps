@@ -12,7 +12,7 @@ import pytest
 import scipp as sc
 
 from ess.apps import Client, Record, Template, file, hdf5
-from ess.apps.batch.export import every_output, export_table
+from ess.apps.batch.export import by_writer, export_table
 from ess.apps.batch.frames import reduce_table
 from ess.apps.batch.table import KEY
 from ess.apps.folder import open_folder
@@ -83,7 +83,7 @@ def test_each_completed_row_is_exported_under_its_key_and_the_table_is_unchanged
     reduced = reduce_table(client, template, table, label='scan')
     before = reduced.copy()
 
-    export_table(client, reduced, out, every_output(client))
+    export_table(client, reduced, out, by_writer(client))
 
     pd.testing.assert_frame_equal(reduced, before)
     assert hdf5.read(float, out / 'b' / 'total.h5') == 1.0
@@ -97,7 +97,7 @@ def test_each_output_returned_is_a_file_and_an_output_left_out_has_none(
     record = run(client, MANY, n=2)
     table = pd.DataFrame({'record': [record.id]}, index=['a'])
 
-    export_table(client, table, tmp_path / 'out', every_output(client))
+    export_table(client, table, tmp_path / 'out', by_writer(client))
 
     assert sorted(p.name for p in (tmp_path / 'out' / 'a').iterdir()) == [
         '_record.json',
@@ -116,7 +116,7 @@ def test_a_row_that_failed_has_no_folder(
     out = tmp_path / 'export'
     reduced = reduce_table(client, template, table, label='scan')
 
-    export_table(client, reduced, out, every_output(client))
+    export_table(client, reduced, out, by_writer(client))
 
     assert sorted(p.name for p in out.iterdir()) == ['a']
 
@@ -124,7 +124,7 @@ def test_a_row_that_failed_has_no_folder(
 def test_a_table_without_records_is_refused(client: Client, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match='record'):
         export_table(
-            client, pd.DataFrame(index=['a']), tmp_path / 'export', every_output(client)
+            client, pd.DataFrame(index=['a']), tmp_path / 'export', by_writer(client)
         )
 
 
@@ -137,7 +137,7 @@ def test_a_key_that_is_not_a_folder_name_is_refused_and_nothing_is_written(
     out = tmp_path / 'parent' / 'export'
 
     with pytest.raises(ValueError, match='folder'):
-        export_table(client, reduced, out, every_output(client))
+        export_table(client, reduced, out, by_writer(client))
 
     assert not (tmp_path / 'parent').exists()
 
@@ -148,7 +148,7 @@ def test_a_table_exports_the_records_it_names_after_later_reductions(
     older = reduce_table(client, template, table, label='scan')
     newer = reduce_table(client, template, older, label='scan')
 
-    export_table(client, older, tmp_path / 'export', every_output(client))
+    export_table(client, older, tmp_path / 'export', by_writer(client))
 
     ids = [
         json.loads((tmp_path / 'export' / k / '_record.json').read_text())['id']
@@ -166,7 +166,7 @@ def test_a_record_that_the_workspace_lacks_is_refused_and_nothing_is_written(
     out = tmp_path / 'export'
 
     with pytest.raises(ValueError, match='no-such-record'):
-        export_table(client, reduced, out, every_output(client))
+        export_table(client, reduced, out, by_writer(client))
 
     assert not out.exists()
 
@@ -179,6 +179,6 @@ def test_a_key_that_two_rows_share_is_refused_and_nothing_is_written(
     out = tmp_path / 'export'
 
     with pytest.raises(ValueError, match='one key'):
-        export_table(client, reduced, out, every_output(client))
+        export_table(client, reduced, out, by_writer(client))
 
     assert not out.exists()

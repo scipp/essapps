@@ -36,6 +36,10 @@ def catalogue(proposal):
         pi_email='ada@example.org',
     )
     return Catalogue(client=SCICAT, instrument='toy')
+
+
+def unreachable(proposal):
+    raise ConnectionError('no catalogue')
 '''
 
 
@@ -125,6 +129,36 @@ def test_export_of_a_label_writes_by_the_first_writer_of_w(
         'total.txt',
     ]
     assert (out / 'row-0' / 'total.txt').read_text().startswith('x row-0: ')
+
+
+def test_export_of_a_label_again_after_a_format_change_leaves_only_the_new_files(
+    command: list[str], reduced_once: Path
+) -> None:
+    out = reduced_once / 'out'
+    writers = ['-W', 'cli_toys_batch_files:WRITERS']
+    path = reduced_once / 'form.yaml'
+    assert main([*command, *writers, 'export', '-l', 'x', str(out)]) == 0
+    assert main([*command, *writers, 'form', '-l', 'x', '-o', str(path)]) == 0
+    path.write_text(path.read_text().replace('format: text', 'format: scipp HDF5'))
+    assert main([*command, *writers, 'form', '-l', 'x', str(path)]) == 0
+
+    assert main([*command, *writers, 'export', '-l', 'x', str(out)]) == 0
+
+    assert sorted(p.name for p in (out / 'row-0').iterdir()) == [
+        '_record.json',
+        'total.h5',
+    ]
+
+
+def test_export_of_a_label_does_not_contact_the_catalogue(
+    command: list[str], reduced_once: Path, scicat: FakeClient
+) -> None:
+    unreachable = ['-c', 'cli_toys_catalogue:unreachable']
+    out = reduced_once / 'out'
+
+    assert main([*command, *unreachable, 'export', '-l', 'x', str(out)]) == 0
+
+    assert (out / 'row-0' / 'total.h5').is_file()
 
 
 def test_a_kept_form_of_a_format_that_w_lacks_is_refused_naming_it(
