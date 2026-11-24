@@ -411,7 +411,10 @@ def _table(client: Client, batch: Batch, keys: list[str] | None = None) -> pd.Da
         sys.stderr.write(f'the settings are refused: {SubmitError(refused)}\n')
     frame = batch.frame()
     return frames.with_results(
-        client, states, frame if keys is None else frame.loc[keys]
+        client,
+        states,
+        frame if keys is None else frame.loc[keys],
+        published=batch.published(),
     )
 
 
@@ -552,7 +555,7 @@ def _publish_form(given: _Given) -> str:
 def _publish(given: _Given) -> pd.DataFrame:
     """
     Keep the form given, then publish the rows of the keys given; those rows,
-    with the record and catalogue identifier of each.
+    as ``show`` writes them.
     """
     from .publish import load_form
 
@@ -562,16 +565,13 @@ def _publish(given: _Given) -> pd.DataFrame:
     if args.form is not None:
         publisher.set_form(label, load_form(args.form))
     try:
-        pids = publisher.publish(label, args.keys) if args.keys else {}
+        if args.keys:
+            publisher.publish(label, args.keys)
     except (ValueError, NotKept):  # refused before an upload, or not kept
         raise
     except Exception as error:  # the catalogue's client may raise anything
         raise _Failed(f'not published: {said(error)}') from None
-    record_of = {pid: record for record, pid in publisher.published(label).items()}
-    return pd.DataFrame(
-        {'record': [record_of[p] for p in pids.values()], 'pid': list(pids.values())},
-        index=pd.Index(list(pids), name=KEY),
-    )
+    return _table(given.client, publisher.manager.batch(label), args.keys)
 
 
 def _offered(given: _Given) -> pd.DataFrame:
@@ -1133,7 +1133,8 @@ _COMMANDS = {
     'show': _Command(
         _show,
         description='Write the batch table of LABEL, with the columns '
-        'status, record and failure, as reduce writes it. It reduces nothing.',
+        'status, record, failure and published, as reduce writes it. It reduces '
+        'nothing.',
         arguments=_show_arguments,
     ),
     'reduce': _Command(
@@ -1142,7 +1143,7 @@ _COMMANDS = {
         'settings and a new batch table; then reduce its rows, every one that '
         'can be reduced unless --remaining, and write its batch table with the '
         'columns '
-        'status, record and failure. Earlier records stay in the folder.',
+        'status, record, failure and published. Earlier records stay in the folder.',
         arguments=_reduce_arguments,
         check=_reduce_check,
         status=_reduced,
@@ -1170,8 +1171,9 @@ _COMMANDS = {
         _publish,
         description='Keep the form FILE for the batch of LABEL, if given; then '
         'publish the result of the row of each KEY to the catalogue as one '
-        'derived dataset, as the form says, and write those rows with the '
-        'record and catalogue identifier of each. A result is published once; '
+        'derived dataset, as the form says, and write those rows as show does, '
+        'with the catalogue identifier in the column published. A result is '
+        'published once; '
         'a new result of the row is a new dataset. If an upload fails, the '
         'rows published before it stay published, and the error names them.',
         arguments=_publish_arguments,

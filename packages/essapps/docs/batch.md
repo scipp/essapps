@@ -656,7 +656,7 @@ key,sample,thickness,binning,name
 
 - `table.write_table(table, path)` is the only writer, and `table.read_table(path, spec.params)` the only reader that gives a batch table. `export TABLE` reads its table file as text (`table.read_text`).
 - A list or a group is JSON text. Empty is the only missing marker, so `NA` in a note column is text.
-- `read_table` reads columns with their dtypes, and drops `status`, `record` and `failure`.
+- `read_table` reads columns with their dtypes, and drops `status`, `record`, `failure` and `published`.
 - A note column of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note column of a `.xlsx` file keeps the type of its cells.
 - A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row takes its setting, or the row is incomplete if there is none.
 
@@ -705,7 +705,7 @@ Each subcommand is a few calls of the batch layer:
 | `sources` | the names of `-s`, and the `fills` and `description` of each |
 | `rows NAME` | `intake.rows_of(NAME)` |
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
-| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame())` |
+| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame(), published=batch.published())` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
 | `export TABLE` or `export -l LABEL` | `export.export_table(client, table, directory)`, of the table file or of what `show` gives |
 | `publish-form -l LABEL` | `publish.Publisher(manager, catalogue).form_text(label)` |
@@ -720,7 +720,7 @@ Each subcommand is a few calls of the batch layer:
 Every parameter is commented out, one with a default showing it: the template as written is read by `load_template` and refused by `reduce`, naming each required parameter, and a parameter left commented takes the spec's default, not a copy of today's.
 A file in a group is written in its JSON form, `{'@ref': file, file: run:1}`, since `as_request` converts the value of a parameter, not of a field of a group.
 `batches` counts the rows whose newest result completed (`reduced`), without comparing requests, which would resolve every row of every batch; `show` gives the status of each row.
-The table written has the note columns `status` (the words of `RowState.text`), `record` and `failure`.
+The table written has the note columns `status` (the words of `RowState.text`), `record`, `failure` and `published` (the catalogue identifier of the row's result, read from `publish.json` by `Batch.published`, so `show` needs no `-c`).
 `--json` writes a table as JSON in place of CSV: a list of objects, one per row, with the key as a field, `null` for an empty cell, and a list of names as a list (a CSV holds the names separated by a space).
 For a label that exists, the template becomes the settings and the table file replaces the batch table.
 A value of the template at a parameter column of the batch table is the setting that each row with an empty cell takes.

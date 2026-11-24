@@ -431,6 +431,18 @@ class Batch:
             first.setdefault(to_json(cell), key)
         return {key: cells[key] for key in first.values()}
 
+    def published(self) -> dict[str, str]:
+        """
+        The catalogue identifier of each result of the batch published, by
+        record ID; empty if not kept. Only :class:`~.publish.Publisher` writes
+        what was published.
+        """
+        if self._definitions is None:
+            return {}
+        key = definition.publish_key(self.label)
+        kept = self._definitions.load(key, definition.publishing_of)
+        return {} if kept is None else {p.record: p.pid for p in kept.published}
+
     def _save(self, settings: Mapping[str, Any]) -> None:
         """
         Write ``settings`` as the settings of the label, if kept, with

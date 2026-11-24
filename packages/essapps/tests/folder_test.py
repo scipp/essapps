@@ -178,7 +178,7 @@ def _found(client: Client) -> Batch:
 
 def _table(client: Client) -> pd.DataFrame:
     batch = _found(client)
-    return with_results(client, batch.state(), batch.frame())
+    return with_results(client, batch.state(), batch.frame(), published={})
 
 
 def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_them(

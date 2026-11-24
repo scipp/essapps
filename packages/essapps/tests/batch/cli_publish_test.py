@@ -2,6 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The commands of ``essapps-batch`` that publish to a fake SciCat."""
 
+import json
 import sys
 from importlib import import_module
 from pathlib import Path
@@ -84,7 +85,7 @@ def test_publish_keeps_the_form_and_writes_each_row_with_its_dataset(
     [pid] = scicat.datasets
     written = read_text(out)
     assert list(written['key']) == ['row-0']
-    assert list(written['pid']) == [f'pid:{pid}']
+    assert list(written['published']) == [f'pid:{pid}']
     assert scicat.get_dataset(pid).name == 'x row-0'
     assert main([*publishing, 'publish', '-l', 'x', 'row-1']) == 0  # the form kept
     assert len(scicat.datasets) == 2
@@ -149,3 +150,23 @@ def test_publish_without_a_catalogue_or_anything_to_do_is_refused(
         main([*command, *arguments])
 
     assert said in capsys.readouterr().err
+
+
+def test_show_says_which_results_are_published_without_a_catalogue(
+    command: list[str],
+    publishing: list[str],
+    form: Path,
+    scicat: FakeClient,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main([*publishing, 'publish', '-l', 'x', '--form', str(form), 'row-0']) == 0
+    capsys.readouterr()
+
+    assert main([*command, '--json', 'show', '-l', 'x']) == 0
+
+    [pid] = scicat.datasets
+    rows = json.loads(capsys.readouterr().out)
+    assert {r['key']: r['published'] for r in rows} == {
+        'row-0': f'pid:{pid}',
+        'row-1': None,
+    }

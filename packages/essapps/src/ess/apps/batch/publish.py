@@ -115,7 +115,7 @@ class Publisher:
 
     def published(self, label: str) -> dict[str, str]:
         """The catalogue identifier of each published record of ``label``, by ID."""
-        return {p.record: p.pid for p in self._kept(label).published}
+        return self.manager.batch(label).published()
 
     def publish(self, label: str, keys: Sequence[str]) -> dict[str, str]:
         """
