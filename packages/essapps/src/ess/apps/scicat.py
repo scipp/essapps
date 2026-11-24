@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel
-from scitacean import PID, Dataset, RemotePath
+from scitacean import PID, Dataset, RemotePath, ScicatCommError
 from scitacean import Client as ScicatClient
 
 from .client import Client
@@ -74,6 +74,29 @@ class About(BaseModel, frozen=True):
     contact_email: str
     description: str = ''
     keywords: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Person:
+    """A person as the catalogue names one: a name and an email."""
+
+    name: str
+    email: str
+
+
+def principal_investigator(catalogue: Catalogue, proposal: str) -> Person | None:
+    """
+    The principal investigator of ``proposal``, as the catalogue says, whom
+    the ESS ingestor makes owner and contact of each raw dataset; ``None`` if
+    the catalogue cannot say, such as without a login or for a proposal it
+    lacks.
+    """
+    try:
+        found = catalogue.client.get_proposal(proposal)
+    except ScicatCommError:
+        return None
+    name = ' '.join(n for n in (found.pi_firstname, found.pi_lastname) if n)
+    return Person(name=name, email=found.pi_email or '')
 
 
 def installed_software() -> list[str]:

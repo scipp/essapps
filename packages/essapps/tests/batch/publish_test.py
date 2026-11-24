@@ -3,6 +3,7 @@
 """Publishing results of a batch to a fake SciCat."""
 
 import pytest
+from scitacean import model
 from scitacean.testing.client import FakeClient
 from scitacean.testing.transfer import FakeFileTransfer
 
@@ -20,9 +21,20 @@ FORM = Form(outputs=('total',), owner='Anna', contact_email='anna@example.org')
 
 @pytest.fixture
 def scicat() -> FakeClient:
-    return FakeClient.without_login(
+    """A catalogue that lists the proposal of the workspace, p1."""
+    scicat = FakeClient.without_login(
         url='https://scicat.example.org/api/v3', file_transfer=FakeFileTransfer()
     )
+    scicat.proposals['p1'] = model.DownloadProposal(
+        proposalId='p1',
+        title='Micelles',
+        email='office@example.org',
+        ownerGroup='p1',
+        pi_firstname='Ada',
+        pi_lastname='Lovelace',
+        pi_email='ada@example.org',
+    )
+    return scicat
 
 
 @pytest.fixture
@@ -114,9 +126,19 @@ def test_a_row_without_a_completed_result_is_refused(
         publisher.publish(batch.label, {'1': 'water', '3': 'B'})
 
 
-def test_until_set_the_form_has_the_description_of_the_batch(
+def test_until_set_the_form_has_the_description_of_the_batch_and_the_pi_as_owner(
     publisher: Publisher, batch: Batch
 ) -> None:
+    assert publisher.form(batch.label) == Form(
+        description='2 mm cells', owner='Ada Lovelace', contact_email='ada@example.org'
+    )
+
+
+def test_a_proposal_the_catalogue_lacks_leaves_owner_and_contact_empty(
+    publisher: Publisher, batch: Batch, scicat: FakeClient
+) -> None:
+    del scicat.proposals['p1']
+
     assert publisher.form(batch.label) == Form(description='2 mm cells')
 
 
@@ -130,9 +152,11 @@ def test_until_set_the_form_has_the_description_of_the_batch(
 def test_a_form_of_another_output_or_field_is_refused(
     publisher: Publisher, batch: Batch, form: Form, match: str
 ) -> None:
+    before = publisher.form(batch.label)
+
     with pytest.raises(ValueError, match=match):
         publisher.set_form(batch.label, form)
-    assert publisher.form(batch.label) == Form(description='2 mm cells')
+    assert publisher.form(batch.label) == before
 
 
 def test_removing_the_batch_forgets_what_was_published(

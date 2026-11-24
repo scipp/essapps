@@ -222,6 +222,7 @@ The page then shows `/` in place of the batch in the history of the browser: the
 An application given a publisher (`Pages(..., publisher=Publisher(manager, catalogue))`, `ess.apps.batch.publish`) has the tab **Publish**, and the grid a column **Published**; without one, neither shows.
 The result of a row is published as one derived dataset of SciCat (`ess.apps.scicat.publish`).
 The tab holds a form, kept per batch, which **Save** sends to `POST api/publish/form` (`Publisher.set_form`): the outputs that each dataset holds, the pattern of its name (`{title}`, `{name}`, `{key}`), its description, keywords, owner and contact email.
+Until a person applies the form, its description is the batch's, and its owner and contact email are those of the principal investigator of the proposal, as the catalogue says (`ess.apps.scicat.principal_investigator`): the ESS ingestor makes the same person owner and contact of each raw dataset.
 The rest is read from the result: the files it read with a catalogue identifier are its inputs, the proposal is the workspace's, and the software is that of the server now.
 **Publish N selected** publishes the selected rows that are done and not published, with the form as saved (`POST api/publish`, `Publisher.publish`); the column **Published** then shows the identifier of each dataset.
 A result is published once; a row reduced again may be published again, as a new dataset.

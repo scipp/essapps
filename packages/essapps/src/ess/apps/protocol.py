@@ -112,6 +112,11 @@ class WorkspaceProtocol(Protocol):
     of that request.
     """
 
+    @property
+    def proposal(self) -> str:
+        """The proposal of the workspace."""
+        ...
+
     # Specs
 
     def specs(self) -> list[WorkflowSpec[Any, Any]]:

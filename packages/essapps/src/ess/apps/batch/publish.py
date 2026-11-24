@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Mapping
+from functools import cached_property
 from pathlib import Path
 
 from ..records import Record, Status
-from ..scicat import About, Catalogue, publish
+from ..scicat import About, Catalogue, Person, principal_investigator, publish
 from .definition import (
     Form,
     Published,
@@ -53,11 +54,26 @@ class Publisher:
         self.catalogue = catalogue
 
     def form(self, label: str) -> Form:
-        """The form of ``label``; until set, its description is the batch's."""
+        """
+        The form of ``label``. Until set, its description is the batch's, and
+        its owner and contact email are those of the principal investigator
+        of the proposal, as for a raw dataset; empty if the catalogue cannot
+        say who that is.
+        """
         form = self._kept(label).form
         if form is not None:
             return form
-        return Form(description=self.manager.headers()[label].description)
+        pi = self._principal_investigator
+        return Form(
+            description=self.manager.headers()[label].description,
+            owner='' if pi is None else pi.name,
+            contact_email='' if pi is None else pi.email,
+        )
+
+    @cached_property
+    def _principal_investigator(self) -> Person | None:
+        """Asked of the catalogue once: a page reads the form at each poll."""
+        return principal_investigator(self.catalogue, self.manager.client.proposal)
 
     def set_form(self, label: str, form: Form) -> None:
         """

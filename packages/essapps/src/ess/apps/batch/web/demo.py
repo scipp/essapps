@@ -380,8 +380,13 @@ def build(
     return create_app(pages)
 
 
-def fake_catalogue() -> Catalogue:
-    """A SciCat in memory (scitacean's fakes); it forgets all at a restart."""
+def fake_catalogue(proposal: str = 'local') -> Catalogue:
+    """
+    A SciCat in memory (scitacean's fakes), which lists ``proposal``, that of
+    the demo's workspace, with a principal investigator; it forgets the
+    datasets published at a restart.
+    """
+    from scitacean import model
     from scitacean.testing.client import FakeClient
     from scitacean.testing.transfer import FakeFileTransfer
 
@@ -389,6 +394,15 @@ def fake_catalogue() -> Catalogue:
 
     scicat = FakeClient.without_login(
         url='https://scicat.invalid/api/v3', file_transfer=FakeFileTransfer()
+    )
+    scicat.proposals[proposal] = model.DownloadProposal(
+        proposalId=proposal,
+        title='Micelles and nanoparticles in solution',
+        email='useroffice@example.org',
+        ownerGroup=proposal,
+        pi_firstname='Ada',
+        pi_lastname='Lovelace',
+        pi_email='ada.lovelace@example.org',
     )
     return Catalogue(client=scicat, instrument='demo')
 
