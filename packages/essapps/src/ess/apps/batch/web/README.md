@@ -237,6 +237,26 @@ The web layer follows eight rules. Each says where a reader finds a kind of thin
 7. **The browser draws from the state and sends its actions in one queue** ([How the page asks](#how-the-page-asks)).
 8. **The settings form is a draft.** Only **Apply** and **Make this a setting** write settings. While the form holds a change, the page refuses to reduce, to change which parameters are columns, and to give the settings as a file.
 
+## Server and browser
+
+```mermaid
+flowchart LR
+    subgraph browser["Browser: static/, no build step"]
+        direction TB
+        js["app.js, tables.js, form.js, dom.js<br/>(ES modules)"]
+        libs["Tabulator (grid), Plotly (plots)<br/>static/vendor/"]
+        js --- libs
+    end
+    server["One Python process: uvicorn + FastAPI<br/>holds the workspace, the batches and all state"]
+    browser -->|"POST: an action"| server
+    server -->|"the State, as JSON"| browser
+    browser -->|"GET api/state, every 1 s"| server
+```
+
+The server holds all state.
+The browser draws the `State` that the server sends and sends what a person does; it keeps only what it shows (selection, filter, view, sort).
+There are no websockets: each action answers with the new `State`, and the page polls to see results arrive ([How the page learns of changes](#how-the-page-learns-of-changes)).
+
 ## Layers
 
 The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version` and `files_version` (see [How the page learns of changes](#how-the-page-learns-of-changes)):
