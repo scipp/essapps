@@ -5,8 +5,9 @@ A toy reduction: a row is a sample run and its transmission run.
 """
 
 import threading
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Annotated, Any
 
 import pandas as pd
@@ -25,6 +26,7 @@ from ess.apps.batch import (
 from ess.apps.batch.definition import Key
 from ess.apps.batch.table import KEY
 from ess.apps.testing import FakeFiles
+from ess.apps.writers import About, Writer
 from ess.spec import FileRef, Referenced, RunFile, WorkflowSpec
 
 
@@ -74,6 +76,15 @@ STAGED = WorkflowSpec(
     params=Params,
     outputs=Outputs,
 )
+
+
+def _text(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
+    (directory / 'total.txt').write_text(f'{about.name}: {outputs["total"]}')
+
+
+TEXT = Writer('text', ('total',), _text)
+"""A format of fixed outputs: the name and the total, in ``total.txt``."""
+
 PLAIN = WorkflowSpec(
     name='plain',
     version=1,

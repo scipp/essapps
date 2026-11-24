@@ -262,7 +262,7 @@ function render(state) {
   $('files-problem').textContent = $('files-problem').title = state.files_problem ?? '';
   renderSettings(state);
   renderBatch(state);
-  renderPublish(state);
+  renderOutput(state);
   renderSelection();
   if (view.tab === 'row') loadRow();
 }
@@ -286,7 +286,7 @@ function gridColumns(state) {
     menu: (column) => (column.waits ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
-    columns: [named, ...notes, ...cells, statusColumn, ...(state.publish ? [publishedColumn] : [])],
+    columns: [named, ...notes, ...cells, statusColumn, ...(state.output.catalogue ? [publishedColumn] : [])],
     edits: Object.fromEntries(state.columns.map((c) => [`cells.${c.name}.value`, c])),
   };
 }
@@ -564,8 +564,8 @@ async function show(url, page, how) {
   $('toast').hidden = true;
   $('batch-form').shown = null;
   $('batch-problem').textContent = '';
-  $('publish-form').shown = null;
-  $('publish-problem').textContent = '';
+  $('output-form').shown = null;
+  $('output-problem').textContent = '';
   if (page) showPage(page);
   drawBatches();
   if (shownLabel()) poll();
@@ -1064,11 +1064,19 @@ function selectedRows() {
 
 function renderSelection() {
   const n = view.selected.length;
-  const done = view.state.rows.filter((row) => row.result);
   $('selection').textContent = n ? `${n} selected` : '';
   $('remove').hidden = n === 0;
   $('n-selected').textContent = n;
   document.querySelector('[data-reduce="selected"]').disabled = n === 0 || Boolean(view.state.action.blocked);
+  renderResultFiles();
+  renderPublishButton();
+  renderPlot();
+}
+
+// The downloads of results: how many each takes, and whether it may. They
+// write by the form of the tab "Output", so they wait while it holds a change.
+function renderResultFiles() {
+  const done = view.state.rows.filter((row) => row.result);
   const doneSelected = selectedRows().filter((row) => row.result);
   const said = (rows) => {
     const old = rows.filter((row) => row.result === 'outdated').length;
@@ -1076,13 +1084,15 @@ function renderSelection() {
   };
   $('n-results-selected').textContent = said(doneSelected);
   $('n-results-all').textContent = said(done);
-  document.querySelector('[data-file="results-selected"]').disabled = doneSelected.length === 0;
-  document.querySelector('[data-file="results-all"]').disabled = done.length === 0;
-  renderPublishButton();
-  renderPlot();
+  const held = outputChanged();
+  for (const [name, results] of [['results-selected', doneSelected], ['results-all', done]]) {
+    const item = document.querySelector(`[data-file="${name}"]`);
+    item.disabled = held || results.length === 0;
+    item.title = held ? 'Apply or discard the changes of the output form first.' : '';
+  }
 }
 
-// The publishing
+// The output
 
 const publishedColumn = {
   title: 'Published',
@@ -1092,48 +1102,47 @@ const publishedColumn = {
   tooltip: (event, cell) => cell.getValue(),
 };
 
-// The tab "Publish", if the application publishes to a catalogue. The form
-// holds changes until Apply, as the settings form does, but in the browser:
-// one page of a batch serves every person, so a draft on the server would be
-// shared. A form of the server that changed refills it only if the person
-// holds no change, so that what they type and have not applied stays.
-function renderPublish(state) {
-  $('tab-publish-label').hidden = !state.publish;
-  if (!state.publish) {
-    if (view.tab === 'publish') showTab('result');
-    return;
-  }
-  const form = $('publish-form');
-  const shown = JSON.stringify(state.publish);
+// The tab "Output": the form by which the results are downloaded and, with a
+// catalogue, published. The form holds changes until Apply, as the settings
+// form does, but in the browser: one page of a batch serves every person, so
+// a draft on the server would be shared. A form of the server that changed
+// refills it only if the person holds no change, so that what they type and
+// have not applied stays.
+function renderOutput(state) {
+  $('publishing').hidden = !state.output.catalogue;
+  const form = $('output-form');
+  const shown = JSON.stringify(state.output);
   if (shown === form.shown) {
-    renderPublishDraft();
+    renderOutputDraft();
     return;
   }
-  const held = form.shown != null && publishChanged(JSON.parse(form.shown).form);
+  const held = form.shown != null && outputChanged(JSON.parse(form.shown).form);
   form.shown = shown;
-  if (!held) fillPublish(state.publish);
-  else renderPublishDraft();
+  if (!held) fillOutput(state.output);
+  else renderOutputDraft();
 }
 
-function fillPublish({form: given, outputs}) {
-  $('publish-outputs').replaceChildren(
+function fillOutput({form: given, formats, outputs}) {
+  $('output-format').replaceChildren(...formats.map((f) => h('option', {value: f.name}, f.name)));
+  $('output-outputs').replaceChildren(
     ...outputs.map((o) => h('label', {}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`)),
   );
-  const {elements} = $('publish-form');
+  const {elements} = $('output-form');
+  elements.format.value = given.format;
   elements.name.value = given.name;
   elements.description.value = given.description;
   elements.keywords.value = given.keywords.join(', ');
   elements.owner.value = given.owner;
   elements.contact_email.value = given.contact_email;
-  renderPublishDraft();
+  renderOutputDraft();
 }
 
-// The form of the tab "Publish" as the server takes it.
-function publishForm() {
-  const {elements} = $('publish-form');
+// The form of the tab "Output" as the server takes it.
+function outputForm() {
+  const {elements} = $('output-form');
   return {
-    format: view.state.publish.form.format,
-    outputs: [...document.querySelectorAll('#publish-outputs input:checked')].map((i) => i.value),
+    format: elements.format.value,
+    outputs: [...document.querySelectorAll('#output-outputs input:checked')].map((i) => i.value),
     name: elements.name.value,
     description: elements.description.value,
     keywords: elements.keywords.value.split(','),
@@ -1148,6 +1157,7 @@ function publishForm() {
 function normal(form) {
   const text = (value) => value.replace(/\r\n/g, '\n').trim();
   return JSON.stringify([
+    form.format,
     [...form.outputs].sort(),
     text(form.name),
     text(form.description),
@@ -1158,17 +1168,22 @@ function normal(form) {
 }
 
 // Whether the inputs hold a change of `form`, by default the form in force.
-function publishChanged(form = view.state?.publish?.form) {
-  return Boolean(form) && normal(publishForm()) !== normal(form);
+function outputChanged(form = view.state?.output.form) {
+  return Boolean(form) && normal(outputForm()) !== normal(form);
 }
 
-function renderPublishDraft() {
-  renderDraft($('publish-draft'), publishChanged(), '', 'This form is in force.');
+// The bar of the form, and what waits for it. A format whose writer reads
+// outputs of its own takes none of the outputs chosen, so they are hidden.
+function renderOutputDraft() {
+  renderDraft($('output-draft'), outputChanged(), '', 'This form is in force.');
+  const format = view.state.output.formats.find((f) => f.name === $('output-format').value);
+  $('output-outputs-field').hidden = format?.outputs != null;
+  renderResultFiles();
   renderPublishButton();
 }
 
 // The bar over a form that holds changes until Apply, in the tabs "Settings"
-// and "Publish": whether the form holds a change not applied, and `said`,
+// and "Output": whether the form holds a change not applied, and `said`,
 // such as why the form is refused, else `idle`.
 function renderDraft(bar, changed, said, idle) {
   bar.classList.toggle('changed', changed);
@@ -1183,10 +1198,10 @@ function toPublish() {
 
 // What the button "Publish" waits for, in words; nothing if it may publish.
 function publishBlocked() {
-  const {form} = view.state.publish;
+  const {form} = view.state.output;
   if (view.publishing) return 'Publishing…';
-  if (publishChanged()) return 'Apply or discard the changes of the form first.';
-  const fields = [['output', form.outputs.length], ['owner', form.owner], ['contact email', form.contact_email]];
+  if (outputChanged()) return 'Apply or discard the changes of the form first.';
+  const fields = [['owner', form.owner], ['contact email', form.contact_email]];
   const lacking = fields.filter(([, given]) => !given).map(([what]) => what);
   if (lacking.length) return `The form names no ${lacking.join(', no ')}: fill it in and apply it.`;
   if (!toPublish().length) return 'Select rows that are done or earlier and not published.';
@@ -1194,7 +1209,7 @@ function publishBlocked() {
 }
 
 function renderPublishButton() {
-  if (!view.state.publish) return;
+  if (!view.state.output.catalogue) return;
   const n = toPublish().length;
   const blocked = publishBlocked();
   $('publish').disabled = Boolean(blocked);
@@ -1202,21 +1217,21 @@ function renderPublishButton() {
   $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or earlier and not published, with the form in force.';
 }
 
-function sayPublish(text) {
-  $('publish-problem').textContent = text;
+function sayOutput(text) {
+  $('output-problem').textContent = text;
 }
 
-// Apply the form of the tab "Publish"; a refusal shows at the form.
-function applyPublish(event) {
+// Apply the form of the tab "Output"; a refusal shows at the form.
+function applyOutput(event) {
   event.preventDefault();
-  sayPublish('');
-  act('publish/form', publishForm(), sayPublish);
+  sayOutput('');
+  act('output/form', outputForm(), sayOutput);
 }
 
 // Show the batch's form again, without the changes.
-function discardPublish() {
-  sayPublish('');
-  fillPublish(view.state.publish);
+function discardOutput() {
+  sayOutput('');
+  fillOutput(view.state.output);
 }
 
 // Publish the rows of `toPublish`; the button waits until the answer, so that
@@ -1422,7 +1437,7 @@ function showTab(tab) {
   view.tab = tab;
   remember();
   document.querySelectorAll('[data-tab]').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-  for (const name of ['result', 'settings', 'row', 'batch', 'publish']) $(`tab-${name}`).hidden = name !== tab;
+  for (const name of ['result', 'settings', 'row', 'batch', 'output']) $(`tab-${name}`).hidden = name !== tab;
   if (tab === 'row' && view.state) loadRow();
   if (tab === 'result' && !$('plot').hidden) Plotly.Plots.resize($('plot'));
 }
@@ -1470,12 +1485,12 @@ function wire() {
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;
-  $('publish-form').onsubmit = applyPublish;
-  $('publish-form').oninput = () => {
-    sayPublish('');
-    renderPublishDraft();
+  $('output-form').onsubmit = applyOutput;
+  $('output-form').oninput = () => {
+    sayOutput('');
+    renderOutputDraft();
   };
-  $('publish-discard').onclick = discardPublish;
+  $('output-discard').onclick = discardOutput;
   $('publish').onclick = publish;
   $('remove-batch').onclick = removeBatch;
   $('remove').onclick = () => act('rows/remove', {keys: view.selected});

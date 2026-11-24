@@ -65,6 +65,7 @@ from .. import (
     RowSource,
 )
 from ..table import KEY, cell_of
+from ..writing import Writing
 from . import Pages, create_app, plots
 from .api import STATIC, every
 from .page import Shown
@@ -339,7 +340,7 @@ def build(
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows, and the tab "Publish"
+    every ``interval`` seconds while a batch follows, and the button "Publish"
     if given a ``catalogue``. If no batch is listed,
     a batch of the samples there are is made, with a column of thickness, so
     also at a start after a person removed the last one.
@@ -362,14 +363,11 @@ def build(
         ]
         return plots.figure(curves, quantity='I(Q)')
 
-    publisher = None
+    contact = None
     if catalogue is not None:
         from ...scicat import principal_investigator
-        from ..publish import Publisher
-        from ..writing import Writing
 
         contact = principal_investigator(catalogue, client.proposal)
-        publisher = Publisher(Writing(intake.manager, {}, contact), catalogue)
     pages = Pages(
         intake,
         interval=interval,
@@ -378,7 +376,8 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
-        publisher=publisher,
+        writing=Writing(intake.manager, {}, contact),
+        catalogue=catalogue,
     )
     return create_app(pages)
 

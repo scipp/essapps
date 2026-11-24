@@ -24,16 +24,19 @@ from .specs import IOFQ
 
 def _nxcansas(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
     iofq = outputs['iofq']
-    if iofq.run is None:
-        raise ValueError('NXcanSAS needs a run number; the sample file has none')
+    # NXcanSAS requires a run; a file without one, such as those of the LoKI
+    # tutorial, gets an empty one. scippneutron's run_number_maybe_int raises
+    # TypeError on None, so None is not passed on.
+    run = '' if iofq.run is None else iofq.run
     save_background_subtracted_iofq(
         iofq=iofq.intensity,
         out_filename=directory / 'iofq.h5',
-        measurement=Measurement[SampleRun](title=iofq.title, run_number=iofq.run),
+        measurement=Measurement[SampleRun](title=iofq.title, run_number=run),
     )
 
 
 NXCANSAS = Writer('NXcanSAS', ('iofq',), _nxcansas)
-"""I(Q) as ``iofq.h5``, an NXcanSAS file with the title and run of the sample."""
+"""I(Q) as ``iofq.h5``, an NXcanSAS file with the title and run of the sample,
+an empty run if its file has none."""
 
 WRITERS = {IOFQ.name: [NXCANSAS]}

@@ -358,7 +358,7 @@ class Form(BaseModel, frozen=True):
     without a format. Another field in braces, or a name of only spaces,
     raises ``ValueError``. The other fields are those of
     :class:`ess.apps.writers.About`. It is also the body of
-    ``POST api/publish/form`` of the page.
+    ``POST api/output/form`` of the page.
     """
 
     model_config = ConfigDict(extra='forbid')

@@ -5,7 +5,6 @@
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -13,15 +12,9 @@ from ess.apps import Client
 from ess.apps.batch import Batch, BatchManager, FolderDefinitions
 from ess.apps.batch.definition import Form
 from ess.apps.batch.writing import Writing, load_form
-from ess.apps.writers import About, Person, Writer
+from ess.apps.writers import Person, Writer
 
-
-def _text(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
-    (directory / 'total.txt').write_text(f'{about.name}: {outputs["total"]}')
-
-
-TEXT = Writer('text', ('total',), _text)
-"""A format of fixed outputs: the name and the total, in ``total.txt``."""
+from .toys import TEXT
 
 ADA = Person(name='Ada Lovelace', email='ada@example.org')
 
@@ -131,7 +124,7 @@ def test_a_kept_form_of_a_format_this_process_lacks_is_refused_naming_it(
 @pytest.mark.parametrize(
     ('writers', 'match'),
     [
-        ({'plain': [Writer('text', ('iofq',), _text)]}, 'reads iofq'),
+        ({'plain': [Writer('text', ('iofq',), TEXT.write)]}, 'reads iofq'),
         ({'nope': [TEXT]}, 'nope'),
         ({'plain': [TEXT, TEXT]}, 'one format'),
     ],

@@ -5,7 +5,6 @@
 from pathlib import Path
 
 import numpy as np
-import pytest
 import scipp as sc
 import scippnexus as snx
 from ess.instruments.loki.specs import IofQ
@@ -41,6 +40,7 @@ def test_nxcansas_writes_intensity_title_and_run(tmp_path: Path) -> None:
     np.testing.assert_allclose(data.variances, [0.5, 0.4, 0.3, 0.2, 0.1])
 
 
-def test_nxcansas_without_run_raises(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match='run number'):
-        NXCANSAS.write({'iofq': _iofq(None)}, ABOUT, tmp_path)
+def test_nxcansas_without_run_writes_an_empty_run(tmp_path: Path) -> None:
+    NXCANSAS.write({'iofq': _iofq(None)}, ABOUT, tmp_path)
+    with snx.File(tmp_path / 'iofq.h5') as f:
+        assert str(f['sasentry']['run'][()]) == ''
