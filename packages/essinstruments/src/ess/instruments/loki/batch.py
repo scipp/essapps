@@ -25,6 +25,7 @@ ess.instruments.loki.batch:SOURCES``, and a source by its name, such as
 """
 
 import sys
+from collections import Counter
 from collections.abc import Sequence
 
 import pandas as pd
@@ -73,15 +74,23 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
 
 def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:
     """
-    A row for each raw run, in the order measured, keyed by its run. The cell
-    ``run`` names the file. The note ``name``, which names the row on the page
-    and in the plot, is the ``title`` of the file, and the note ``sample`` its
-    sample, as the file source gives them. A run needs no role, so this serves
-    runs that no person has marked yet.
+    A row for each raw run, in the order measured, keyed by its run, or, for a
+    run that two files give, such as a run ingested twice, by the identity of
+    the file, so that each has a row. The cell ``run`` names the file. The
+    note ``name``, which names the row on the page and in the plot, is the
+    ``title`` of the file, and the note ``sample`` its sample, as the file
+    source gives them. A run needs no role, so this serves runs that no person
+    has marked yet.
     """
+    runs = Counter(str(f.metadata['run']) for f in files if 'run' in f.metadata)
+
+    def key(f: FileInfo) -> str:
+        run = str(f.metadata.get('run'))
+        return run if runs[run] == 1 else f.ref.file
+
     rows = [
         {
-            KEY: str(f.metadata.get('run', f.ref.file)),
+            KEY: key(f),
             NAME: f.metadata.get('title'),
             'sample': f.metadata.get('sample'),
             'run': cell_of(f.ref),

@@ -79,6 +79,16 @@ def test_a_row_per_raw_run_in_the_order_measured() -> None:
     assert rows['sample'].isna().tolist() == [False, True]
 
 
+def test_a_run_of_two_files_is_a_row_per_file_keyed_by_its_identity() -> None:
+    files = [
+        FileInfo(FileRef(file='pid:p/a'), {'run': '1'}),
+        FileInfo(FileRef(file='pid:p/b'), {'run': '1'}),
+        FileInfo(FileRef(file='pid:p/c'), {'run': '2'}),
+    ]
+
+    assert per_run(files).index.tolist() == ['pid:p/a', 'pid:p/b', '2']
+
+
 def test_the_page_of_raw_runs_draws_a_histogram_per_run(tmp_path: Path) -> None:
     (tmp_path / 'raw').mkdir()
     for r in (1, 2):

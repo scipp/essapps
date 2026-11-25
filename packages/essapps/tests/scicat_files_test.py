@@ -102,7 +102,14 @@ def catalogue() -> Catalogue:
 
 @pytest.fixture
 def files(catalogue: Catalogue) -> ScicatFiles:
-    return ScicatFiles(catalogue, PROPOSAL)
+    """A file source that asks again at each call: ``max_age`` 0."""
+    return ScicatFiles(catalogue, PROPOSAL, max_age=0)
+
+
+@pytest.fixture
+def patient(catalogue: Catalogue) -> ScicatFiles:
+    """A file source that asks nothing again within a test: ``max_age`` 60 s."""
+    return ScicatFiles(catalogue, PROPOSAL, max_age=60)
 
 
 def run(number: int) -> FileRef:
@@ -213,35 +220,49 @@ def test_a_catalogue_that_does_not_answer_raises_oserror(
         ScicatFiles(catalogue, PROPOSAL).list(Selector())
 
 
-def test_a_name_not_listed_is_asked_for_once_until_the_next_listing(
-    catalogue: Catalogue, files: ScicatFiles
+def test_within_max_age_names_not_listed_are_not_asked_for(
+    catalogue: Catalogue, patient: ScicatFiles
 ) -> None:
     catalogue.add(1, minutes=0)
-    files.list(Selector())
-    for _ in range(3):
-        with pytest.raises(KeyError):
-            files.resolve(run(9))
-    once = len(catalogue.asked)
-    files.list(Selector())
-    with pytest.raises(KeyError):
-        files.resolve(run(9))
+    patient.list(Selector())
+    for _ in range(3):  # polls of a page with rows of two runs not listed
+        for missing in (run(8), run(9)):
+            with pytest.raises(KeyError):
+                patient.resolve(missing)
 
-    assert (once, len(catalogue.asked)) == (2, 4)
+    assert catalogue.asked == ['datasets']
 
 
-def test_a_dataset_without_one_nexus_file_is_asked_for_once_until_the_next_listing(
-    catalogue: Catalogue, files: ScicatFiles
+def test_within_max_age_a_dataset_without_one_nexus_file_is_asked_for_once(
+    catalogue: Catalogue, patient: ScicatFiles
 ) -> None:
     ref = catalogue.add(1, minutes=0, files=('run.log',))
-    files.list(Selector())
     for _ in range(3):
         with pytest.raises(OSError, match='0 NeXus files'):
-            files.path(ref)
-    files.list(Selector())
-    with pytest.raises(OSError, match='0 NeXus files'):
-        files.path(ref)
+            patient.path(ref)
 
-    assert catalogue.asked.count(f'files of {ref.file[4:]}') == 2
+    assert catalogue.asked == ['datasets', f'files of {ref.file[4:]}']
+
+
+def test_within_max_age_a_catalogue_that_did_not_answer_is_not_asked(
+    catalogue: Catalogue, patient: ScicatFiles
+) -> None:
+    catalogue.disabled['query_datasets'] = ScicatCommError('timed out')
+    for _ in range(3):
+        with pytest.raises(OSError, match='timed out'):
+            patient.list(Selector())
+
+    assert catalogue.asked == ['datasets']
+
+
+def test_an_expired_login_raises_oserror(
+    catalogue: Catalogue, files: ScicatFiles
+) -> None:
+    # scitacean raises RuntimeError once the token expired
+    catalogue.disabled['query_datasets'] = RuntimeError('SciCat login has expired.')
+
+    with pytest.raises(OSError, match='login has expired'):
+        files.list(Selector())
 
 
 def test_a_file_list_that_the_catalogue_did_not_give_is_asked_for_again(

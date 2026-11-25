@@ -34,15 +34,17 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import math
+import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 try:
     import httpx
-    from scitacean import PID, Dataset, RemotePath, ScicatCommError
+    from scitacean import PID, Dataset, RemotePath
     from scitacean import Client as ScicatClient
     from scitacean.model import DownloadDataset
 except ModuleNotFoundError as error:
@@ -178,19 +180,22 @@ _NEXUS_SUFFIXES = frozenset({'.hdf', '.h5', '.nxs'})
 
 @dataclass(frozen=True)
 class _Listing:
-    """
-    The raw datasets of a proposal as one query found them, and what was
-    found missing since, kept until the next query.
-    """
+    """The raw datasets of a proposal as one query found them, at ``time``."""
 
     datasets: dict[FileRef, DownloadDataset]
     """By identity, in the order measured."""
     names: dict[FileRef, FileRef]
     """The identity of the file of each name: itself, and ``run:<run>``."""
-    unknown: set[FileRef] = field(default_factory=set)
-    """Names that neither this listing nor a query for them knew."""
-    broken: dict[FileRef, str] = field(default_factory=dict)
-    """Why the dataset of a file gives no path to it."""
+    time: float
+    """When the query was answered, by ``time.monotonic``."""
+
+
+@dataclass(frozen=True)
+class _Failure:
+    """Why a question to the catalogue failed, and when."""
+
+    reason: str
+    time: float
 
 
 class ScicatFiles:
@@ -218,46 +223,58 @@ class ScicatFiles:
 
     :meth:`list` asks the catalogue each time, so that a run ingested since is
     listed. :meth:`resolve` and :meth:`metadata` answer from the last listing,
-    and ask again for a file not in it, once until the next listing: a page
-    asks for the files of its rows every second, and a row that names a file
-    no longer listed must not query the catalogue at each. :meth:`path` asks
-    once per file for the file list of its dataset, and gives the path that the
-    ingestor recorded, such as ``/ess/raw/loki/<proposal>/raw/<file>.hdf``; a
-    file list without one NeXus file is not asked for again until the next
-    listing either. A catalogue that did not answer is asked again at the next
-    call. Nothing is downloaded, so a workflow reads the file only on a machine
-    where that path is mounted; elsewhere the workflow fails, not the listing.
+    and ask again for a file not in it. :meth:`path` asks once per file for the
+    file list of its dataset, and gives the path that the ingestor recorded,
+    such as ``/ess/raw/loki/<proposal>/raw/<file>.hdf``. Nothing is
+    downloaded, so a workflow reads the file only on a machine where that path
+    is mounted; elsewhere the workflow fails, not the listing.
 
-    Raises ``OSError`` if the catalogue cannot be reached or refuses a query, as
-    :class:`~ess.apps.protocol.FileSource` requires, and from :meth:`path` if
-    the dataset does not list exactly one NeXus file.
+    A page asks for the files of all its rows every second. So what the
+    catalogue said no to, or did not answer, is not asked again for
+    ``max_age`` seconds: a name the listing lacks is looked for in a listing
+    older than that only; a file list without one NeXus file is kept as
+    such; and after a query that was not answered, such as at a timeout or
+    once the login expired, the catalogue is not asked at all. The load is
+    then a few queries per ``max_age``, however many rows a page has.
+
+    Raises ``OSError`` if the catalogue cannot be reached, refuses a query, or
+    the login expired, as :class:`~ess.apps.protocol.FileSource` requires, and
+    from :meth:`path` if the dataset does not list exactly one NeXus file.
     """
 
-    def __init__(self, client: ScicatClient, proposal: str) -> None:
+    def __init__(
+        self, client: ScicatClient, proposal: str, *, max_age: float = 10.0
+    ) -> None:
         self._client = client
         self._proposal = proposal
-        self._listing = _Listing(datasets={}, names={})
+        self._max_age = max_age
+        self._listing = _Listing(datasets={}, names={}, time=-math.inf)
         self._paths: dict[FileRef, Path] = {}
+        self._failed: dict[FileRef, _Failure] = {}
+        self._unanswered: _Failure | None = None
 
     def resolve(self, name: FileRef) -> FileRef:
         return self._lookup(name, lambda listing: listing.names)
 
     def path(self, ref: FileRef) -> Path:
         self._lookup(ref, lambda listing: listing.datasets)
-        if ref in self._paths:
-            return self._paths[ref]
-        listing = self._listing
-        if (reason := listing.broken.get(ref)) is None:
-            pid = PID.parse(ref.file.removeprefix(_PID_PREFIX))
-            dataset = self._ask(
-                lambda: self._client.scicat.get_dataset_model(pid, datablocks=True)
+        if (path := self._paths.get(ref)) is not None:
+            return path
+        if (failed := self._failed.get(ref)) is not None and self._recent(failed.time):
+            raise OSError(failed.reason)
+        pid = PID.parse(ref.file.removeprefix(_PID_PREFIX))
+        try:
+            path = _nexus_file(
+                self._ask(
+                    lambda: self._client.scicat.get_dataset_model(pid, datablocks=True)
+                )
             )
-            try:
-                self._paths[ref] = _nexus_file(dataset)
-                return self._paths[ref]
-            except ValueError as error:
-                reason = listing.broken[ref] = str(error)
-        raise OSError(reason)
+        except (OSError, ValueError) as error:
+            self._failed[ref] = _Failure(str(error), time.monotonic())
+            raise OSError(str(error)) from None
+        self._failed.pop(ref, None)
+        self._paths[ref] = path
+        return path
 
     def metadata(self, ref: FileRef) -> dict[str, Any]:
         return self._metadata(self._lookup(ref, lambda listing: listing.datasets))
@@ -271,15 +288,12 @@ class ScicatFiles:
     ) -> T:
         """
         What ``table`` holds of ``name``, asking the catalogue again if the
-        listing lacks it, unless a query since the listing did not find it.
+        listing lacks it and is older than ``max_age``.
         """
-        listing = self._listing
-        found = table(listing).get(name)
-        if found is None and name not in listing.unknown:
-            listing = self._read()
-            found = table(listing).get(name)
+        found = table(self._listing).get(name)
+        if found is None and not self._recent(self._listing.time):
+            found = table(self._read()).get(name)
         if found is None:
-            listing.unknown.add(name)
             raise KeyError(
                 f'proposal {self._proposal} has no raw dataset of the file {name.file}'
             )
@@ -308,7 +322,7 @@ class ScicatFiles:
                     run.file,
                     ', '.join(r.file for r in refs),
                 )
-        self._listing = _Listing(datasets=datasets, names=names)
+        self._listing = _Listing(datasets=datasets, names=names, time=time.monotonic())
         return self._listing
 
     def _metadata(self, dataset: DownloadDataset) -> dict[str, Any]:
@@ -334,10 +348,26 @@ class ScicatFiles:
         return None if name is None else name.removesuffix(added)
 
     def _ask[T](self, query: Callable[[], T]) -> T:
+        """
+        The answer to ``query``; raises ``OSError`` if it is not answered, and
+        for ``max_age`` from then on without asking.
+        """
+        if (failed := self._unanswered) is not None and self._recent(failed.time):
+            raise OSError(failed.reason)
         try:
-            return query()
-        except (ScicatCommError, httpx.HTTPError) as error:
-            raise OSError(f'SciCat did not answer: {error}') from error
+            answer = query()
+        # scitacean raises RuntimeError once the login expired, and its own
+        # errors, such as ScicatCommError, derive from it.
+        except (RuntimeError, httpx.HTTPError) as error:
+            self._unanswered = _Failure(
+                f'SciCat did not answer: {error}', time.monotonic()
+            )
+            raise OSError(self._unanswered.reason) from error
+        self._unanswered = None
+        return answer
+
+    def _recent(self, then: float) -> bool:
+        return time.monotonic() - then < self._max_age
 
 
 def _nexus_file(dataset: DownloadDataset) -> Path:
