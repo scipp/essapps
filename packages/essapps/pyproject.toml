@@ -36,7 +36,7 @@ panel = ["panel>=1.10", "pandas", "plopp"]
 files = ["essspec[scipp]", "h5py", "openpyxl", "pandas", "pyyaml"]
 scicat = ["essapps[files]", "scitacean>=26.10"]
 test = [
-    "essapps[files,panel]",
+    "essapps[files,panel,scicat]",
     "essspec[scipp,sciline]",
     "pytest>=9.0",
     "pytest-xdist>=3.6",
