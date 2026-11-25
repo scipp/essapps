@@ -33,10 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 loki = [
-    "esssans>=26.10.0",
-    # essreduce 26.11.1 refuses Position[NXsource], which esssans 26.10.0 and
-    # the bindings of LoKI ask for; lifted by the next esssans release (#275).
-    "essreduce<26.11.1",
+    "esssans>=26.11.0",
     "ipywidgets",  # ess.loki imports it (bank_viewer) but esssans does not declare it
     "essspec[sciline]",
     "scippnexus>=25.06.0",

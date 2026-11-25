@@ -84,7 +84,7 @@ def test_mask_files_with_the_same_name_are_refused(
     files = [tmp_path / 'a' / 'm.xml', tmp_path / 'b' / 'm.xml']
     for path in files:
         shutil.copy(mask_file, path)
-    with pytest.raises(ValueError, match='the same name'):
+    with pytest.raises(ValueError, match='Several mask files'):
         bindings.masks_binding.compute(MasksParams(detector=detector, mask_files=files))
 
 
