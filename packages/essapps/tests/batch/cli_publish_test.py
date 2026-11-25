@@ -77,10 +77,10 @@ def test_form_says_the_formats_and_outputs_and_names_no_owner_without_a_catalogu
     assert main([*command, 'form', '-l', 'x']) == 0
 
     text = capsys.readouterr().out
-    assert '# format: one of scipp HDF5' in text
+    assert '# format: one of scipp-hdf5' in text
     assert '# outputs: some of total' in text
     fields = yaml.safe_load(text)
-    assert fields['format'] == 'scipp HDF5'
+    assert fields['format'] == 'scipp-hdf5'
     assert fields['outputs'] == ['total']
     assert fields['owner'] == ''
 
@@ -109,7 +109,7 @@ def test_a_form_file_that_is_not_a_form_is_refused(
     command: list[str], reduced_once: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = reduced_once / 'form.yaml'
-    path.write_text('format: scipp HDF5\ncolour: blue\n')
+    path.write_text('format: scipp-hdf5\ncolour: blue\n')
 
     assert main([*command, 'form', '-l', 'x', str(path)]) == 2
 
@@ -139,7 +139,7 @@ def test_export_of_a_label_again_after_a_format_change_leaves_only_the_new_files
     path = reduced_once / 'form.yaml'
     assert main([*command, *writers, 'export', '-l', 'x', str(out)]) == 0
     assert main([*command, *writers, 'form', '-l', 'x', '-o', str(path)]) == 0
-    path.write_text(path.read_text().replace('format: text', 'format: scipp HDF5'))
+    path.write_text(path.read_text().replace('format: text', 'format: scipp-hdf5'))
     assert main([*command, *writers, 'form', '-l', 'x', str(path)]) == 0
 
     assert main([*command, *writers, 'export', '-l', 'x', str(out)]) == 0

@@ -214,11 +214,14 @@ class Output(BaseModel):
 
 class Format(BaseModel):
     """
-    A format that the form may pick: its ``name``, and the ``outputs`` that its
-    writer reads, or ``None`` if it writes the outputs chosen in the form.
+    A format that the form may pick: its ``name``, which the form keeps, its
+    ``title`` and ``description``, shown to a person, and the ``outputs`` that
+    its writer reads, or ``None`` if it writes the outputs chosen in the form.
     """
 
     name: str
+    title: str
+    description: str
     outputs: list[str] | None
 
 

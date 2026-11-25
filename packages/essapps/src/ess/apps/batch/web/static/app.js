@@ -1123,7 +1123,7 @@ function renderOutput(state) {
 }
 
 function fillOutput({form: given, formats, outputs}) {
-  $('output-format').replaceChildren(...formats.map((f) => h('option', {value: f.name}, f.name)));
+  $('output-format').replaceChildren(...formats.map((f) => h('option', {value: f.name}, f.title)));
   $('output-outputs').replaceChildren(
     ...outputs.map((o) => h('label', {}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`)),
   );
@@ -1177,10 +1177,12 @@ function outputChanged(form = view.state?.output.form) {
 
 // The bar of the form, and what waits for it. A format whose writer reads
 // outputs of its own takes none of the outputs chosen, so they are hidden.
+// The description of the format picked is shown under the select.
 function renderOutputDraft() {
   renderDraft($('output-draft'), outputChanged(), view.state.output.problem, 'This form is in force.');
   const format = view.state.output.formats.find((f) => f.name === $('output-format').value);
   $('output-outputs-field').hidden = format?.outputs != null;
+  $('output-format-description').textContent = format?.description ?? '';
   renderResultFiles();
   renderPublishButton();
 }

@@ -18,10 +18,10 @@ same files. :data:`SCIPP_HDF5` writes each output as scipp HDF5
 (:mod:`ess.apps.hdf5`), for a spec that has no writer of its own, and for
 ``export TABLE``, which names no batch.
 
-A writer is a plain function with the name of its format and the outputs it
-reads. The writers of a technique call the save functions of its workflow
-package, and are given by the application as a mapping of spec name to
-writers, as bindings are.
+A writer is a plain function with the name of its format, a title and a
+description to show a person, and the outputs it reads. The writers of a
+technique call the save functions of its workflow package, and are given by
+the application as a mapping of spec name to writers, as bindings are.
 """
 
 from __future__ import annotations
@@ -69,9 +69,14 @@ class Writer:
 
     Parameters
     ----------
-    format:
-        The name of the format, shown to a person and kept in a form, such as
-        ``'NXcanSAS'``.
+    name:
+        The name of the format, kept in a form, such as ``'nxcansas'``. A form
+        names its writer by it, so a title may change and a kept form still
+        finds its writer.
+    title:
+        What the format is called, shown to a person, such as ``'NXcanSAS'``.
+    description:
+        What files the writer writes, shown to a person.
     outputs:
         The outputs of the spec that the writer reads, or ``None`` if a person
         picks them.
@@ -81,7 +86,9 @@ class Writer:
         uploads the files of the folder.
     """
 
-    format: str
+    name: str
+    title: str
+    description: str
     outputs: tuple[str, ...] | None
     write: Callable[[Mapping[str, Any], About, Path], None]
 
@@ -91,7 +98,13 @@ def _write_hdf5(outputs: Mapping[str, Any], about: About, directory: Path) -> No
         hdf5.write(value, directory / f'{name}.h5')
 
 
-SCIPP_HDF5 = Writer('scipp HDF5', None, _write_hdf5)
+SCIPP_HDF5 = Writer(
+    name='scipp-hdf5',
+    title='scipp HDF5',
+    description='Each output as <name>.h5, which scipp.io.load_hdf5 reads.',
+    outputs=None,
+    write=_write_hdf5,
+)
 """Each output as ``<name>.h5``, which ``scipp.io.load_hdf5`` reads."""
 
 
@@ -112,7 +125,7 @@ def write(
     """
     names = writer.outputs if writer.outputs is not None else tuple(chosen)
     if not names:
-        raise ValueError(f'{writer.format}: no output to write')
+        raise ValueError(f'{writer.title}: no output to write')
     outputs = {name: client.output(record, name) for name in names}
     directory.mkdir(parents=True)
     (directory / RECORD_FILE).write_text(record.model_dump_json(indent=2))

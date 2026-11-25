@@ -7,19 +7,20 @@ with :func:`ess.apps.writers.write`. The download of the page, ``export -l``
 and publishing (:mod:`.publish`) all write so, so that they give the same
 files.
 
-The form picks a writer by its format, among those the application gives for
+The form picks a writer by the name of its format, among those the application gives for
 the spec of the batch and :data:`~ess.apps.writers.SCIPP_HDF5`, which every
 spec has, and names what a person says of the results
 (:class:`~ess.apps.writers.About`). A batch keeps its form in the entry
 ``form`` of the definitions, which only :class:`Writing` writes::
 
-    {'format': 'NXcanSAS', 'outputs': ['iofq'], 'name': '{title} {name}',
+    {'format': 'nxcansas', 'outputs': ['iofq'], 'name': '{title} {name}',
      'description': '', 'keywords': [], 'owner': 'Ada Lovelace',
      'contact_email': 'ada@example.org'}
 
-A form names its format by name, so a format renamed is one that a kept form
-lacks. A kept form whose format this process lacks, such as a command run
-without the writers, is refused when writing, never written in another format.
+A form names its format by the writer's name, not its title, so a title may
+change, but a name changed is one that a kept form lacks. A kept form whose
+format this process lacks, such as a command run without the writers, is
+refused when writing, never written in another format.
 
 The command line gives the form as a YAML file of its fields, which
 :meth:`Writing.form_text` writes and :func:`load_form` reads.
@@ -77,10 +78,10 @@ class Writing:
             for writer in given:
                 if unknown := sorted(set(writer.outputs or ()) - outputs.keys()):
                     raise ValueError(
-                        f'{writer.format} reads {", ".join(unknown)}, '
+                        f'{writer.name} reads {", ".join(unknown)}, '
                         f'which {name} does not output'
                     )
-            formats = [w.format for w in (*given, SCIPP_HDF5)]
+            formats = [w.name for w in (*given, SCIPP_HDF5)]
             if len(set(formats)) < len(formats):
                 raise ValueError(f'two writers of {name} have one format')
         self.manager = manager
@@ -104,7 +105,7 @@ class Writing:
             return kept
         contact = self._contact
         return Form(
-            format=self.writers(label)[0].format,
+            format=self.writers(label)[0].name,
             outputs=tuple(spec.outputs.model_fields),
             description=self.manager.headers()[label].description,
             owner='' if contact is None else contact.name,
@@ -122,7 +123,7 @@ class Writing:
         if unknown := sorted(set(form.outputs) - spec.outputs.model_fields.keys()):
             raise ValueError(f'{spec.name} has no output {", ".join(unknown)}')
         if writer.outputs is None and not form.outputs:
-            raise ValueError(f'{writer.format} writes the outputs chosen: choose one')
+            raise ValueError(f'{writer.title} writes the outputs chosen: choose one')
         self.manager.definitions.save(form_key(label), form_data(form))
 
     def by_form(self, label: str) -> tuple[RowWriter, dict[str, About]]:
@@ -149,7 +150,7 @@ class Writing:
         its format, its outputs and its name may hold; :func:`load_form` reads
         it back.
         """
-        formats = ', '.join(w.format for w in self.writers(label))
+        formats = ', '.join(w.name for w in self.writers(label))
         outputs = ', '.join(self.manager.batch(label).spec.outputs.model_fields)
         fields = self.form(label).model_dump(mode='json')
         return (
@@ -177,12 +178,12 @@ class Writing:
         }
 
     def _writer(self, label: str, format: str) -> Writer:
-        """The writer of ``format`` for ``label``; ``ValueError`` if none."""
+        """The writer named ``format`` for ``label``; ``ValueError`` if none."""
         formats = self.writers(label)
         for writer in formats:
-            if writer.format == format:
+            if writer.name == format:
                 return writer
-        known = ', '.join(w.format for w in formats)
+        known = ', '.join(w.name for w in formats)
         raise ValueError(f'{label} has no writer of the format {format}, only {known}')
 
 

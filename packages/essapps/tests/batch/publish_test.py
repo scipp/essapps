@@ -19,7 +19,7 @@ from ess.apps.writers import Person
 from . import toys
 
 FORM = Form(
-    format='scipp HDF5',
+    format='scipp-hdf5',
     outputs=('total',),
     owner='Anna',
     contact_email='anna@example.org',

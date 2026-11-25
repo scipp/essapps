@@ -70,8 +70,8 @@ def test_the_output_tab_offers_nxcansas_first(tmp_path: Path) -> None:
         http = TestClient(app, base_url=str(TestClient(app).get('/').url))
         output = http.get('/api/state').json()['output']
 
-    assert output['formats'] == [
-        {'name': 'NXcanSAS', 'outputs': ['iofq']},
-        {'name': 'scipp HDF5', 'outputs': None},
+    assert [(f['name'], f['outputs']) for f in output['formats']] == [
+        ('nxcansas', ['iofq']),
+        ('scipp-hdf5', None),
     ]
-    assert output['form']['format'] == 'NXcanSAS'
+    assert output['form']['format'] == 'nxcansas'

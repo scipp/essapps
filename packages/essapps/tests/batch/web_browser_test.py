@@ -34,6 +34,7 @@ from ess.apps.batch.definition import rows_key
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
 from ess.apps.batch.writing import Writing
+from ess.apps.writers import SCIPP_HDF5
 
 from . import toys
 from .toys import SOURCES, STAGED, TEXT, Gate, Measure, Refusing
@@ -1918,7 +1919,7 @@ def test_outputs_hide_for_a_format_of_its_own_and_publishing_without_a_catalogue
     page = output
     fixed = page.is_hidden('#output-outputs-field')
 
-    page.select_option('#output-format', 'scipp HDF5')
+    page.select_option('#output-format', 'scipp-hdf5')
 
     page.wait_for_selector('#output-outputs-field', state='visible')
     assert fixed
@@ -1926,11 +1927,25 @@ def test_outputs_hide_for_a_format_of_its_own_and_publishing_without_a_catalogue
     assert page.locator('#rows [tabulator-field=published]').count() == 0
 
 
+def test_the_format_select_shows_titles_and_the_description_of_the_format_picked(
+    output: Any,
+) -> None:
+    page = output
+    titles = page.locator('#output-format option').all_inner_texts()
+    first = page.inner_text('#output-format-description')
+
+    page.select_option('#output-format', 'scipp-hdf5')
+
+    assert titles == [TEXT.title, SCIPP_HDF5.title]
+    assert first == TEXT.description
+    assert page.inner_text('#output-format-description') == SCIPP_HDF5.description
+
+
 def test_a_download_of_results_waits_for_the_output_form_and_writes_by_it(
     output: Any,
 ) -> None:
     page = output
-    page.select_option('#output-format', 'scipp HDF5')
+    page.select_option('#output-format', 'scipp-hdf5')
     page.wait_for_selector('#output-draft.changed')
     held = page.is_disabled('[data-file="results-all"]')
 
@@ -1961,7 +1976,7 @@ def test_a_kept_format_the_page_lacks_says_why_until_a_format_is_applied(
         held = page.is_disabled('[data-file="results-all"]')
         unchanged = page.locator('#output-draft.changed').count() == 0
 
-        page.select_option('#output-format', 'scipp HDF5')
+        page.select_option('#output-format', 'scipp-hdf5')
         page.click('#output-draft button.primary')
         page.wait_for_selector('[data-file="results-all"]:enabled', state='attached')
 

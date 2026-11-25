@@ -38,6 +38,7 @@ from ess.apps.batch.web.models import NewBatch
 from ess.apps.batch.web.refusals import Missing, Problem
 from ess.apps.batch.writing import Writing
 from ess.apps.testing import CountingClient, FakeFiles
+from ess.apps.writers import SCIPP_HDF5
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
 from . import toys
@@ -2836,7 +2837,7 @@ def written(intake: Intake, label: str, sample: Measure, client: Client) -> Test
 
 
 FORM = {
-    'format': 'scipp HDF5',
+    'format': 'scipp-hdf5',
     'outputs': ['total'],
     'owner': 'Anna',
     'contact_email': 'anna@example.org',
@@ -2855,8 +2856,8 @@ def test_without_a_catalogue_the_output_tab_has_the_form_but_no_publishing(
     output = state(http)['output']
     applied = http.post('/api/output/form', json=FORM).json()
 
-    assert (output['formats'], output['catalogue']) == (
-        [{'name': 'scipp HDF5', 'outputs': None}],
+    assert ([f['name'] for f in output['formats']], output['catalogue']) == (
+        ['scipp-hdf5'],
         False,
     )
     assert output['outputs'] == [{'name': 'total', 'title': 'total'}]
@@ -2871,8 +2872,13 @@ def test_the_formats_are_those_given_and_scipp_hdf5_the_default_first(
     output = state(written)['output']
 
     assert output['formats'] == [
-        {'name': 'text', 'outputs': ['total']},
-        {'name': 'scipp HDF5', 'outputs': None},
+        {
+            'name': w.name,
+            'title': w.title,
+            'description': w.description,
+            'outputs': None if w.outputs is None else list(w.outputs),
+        }
+        for w in (TEXT, SCIPP_HDF5)
     ]
     assert output['form']['format'] == 'text'
 

@@ -4,6 +4,7 @@
 
 import json
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -34,9 +35,9 @@ def test_until_set_the_form_is_of_the_first_writer_every_output_and_the_contact(
         owner='Ada Lovelace',
         contact_email='ada@example.org',
     )
-    assert [w.format for w in writing.writers(done_batch.label)] == [
+    assert [w.name for w in writing.writers(done_batch.label)] == [
         'text',
-        'scipp HDF5',
+        'scipp-hdf5',
     ]
 
 
@@ -45,13 +46,13 @@ def test_without_writers_or_contact_the_form_is_scipp_hdf5_and_names_no_owner(
 ) -> None:
     form = Writing(manager, {}).form(done_batch.label)
 
-    assert (form.format, form.owner, form.contact_email) == ('scipp HDF5', '', '')
+    assert (form.format, form.owner, form.contact_email) == ('scipp-hdf5', '', '')
 
 
 def test_a_form_set_is_kept_with_the_batch(
     writing: Writing, done_batch: Batch, client: Client, definitions: FolderDefinitions
 ) -> None:
-    form = Form(format='scipp HDF5', outputs=('total',), name='{key}')
+    form = Form(format='scipp-hdf5', outputs=('total',), name='{key}')
 
     writing.set_form(done_batch.label, form)
 
@@ -64,7 +65,7 @@ def test_a_form_set_is_kept_with_the_batch(
     [
         (Form(format='xye', outputs=('total',)), 'no writer of the format xye'),
         (Form(format='text', outputs=('iofq',)), 'plain has no output iofq'),
-        (Form(format='scipp HDF5'), 'scipp HDF5 writes the outputs chosen'),
+        (Form(format='scipp-hdf5'), 'scipp HDF5 writes the outputs chosen'),
     ],
 )
 def test_a_form_of_another_format_or_output_or_none_chosen_is_refused(
@@ -124,7 +125,7 @@ def test_a_kept_form_of_a_format_this_process_lacks_is_refused_naming_it(
 @pytest.mark.parametrize(
     ('writers', 'match'),
     [
-        ({'plain': [Writer('text', ('iofq',), TEXT.write)]}, 'reads iofq'),
+        ({'plain': [replace(TEXT, outputs=('iofq',))]}, 'reads iofq'),
         ({'nope': [TEXT]}, 'nope'),
         ({'plain': [TEXT, TEXT]}, 'one format'),
     ],

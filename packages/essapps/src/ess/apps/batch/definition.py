@@ -46,7 +46,7 @@ The plain data of each entry, as the functions below give and read it::
     rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
     source        {'source': 'sample-runs', 'considered': ['60337', '60338'],
                    'follows': True}
-    form          {'format': 'scipp HDF5', 'outputs': ['iofq'],
+    form          {'format': 'scipp-hdf5', 'outputs': ['iofq'],
                    'name': '{title} {name}', ...}
     publish       {'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
 
@@ -350,7 +350,7 @@ class Form(BaseModel, frozen=True):
     How the results of a batch are written, once for all its rows, and what a
     person says of them (see :mod:`.writing`).
 
-    ``format`` names the writer (:class:`ess.apps.writers.Writer`).
+    ``format`` is the name of the writer (:class:`ess.apps.writers.Writer`).
     ``outputs`` are the outputs of the spec that a writer which writes the
     outputs chosen writes; a writer of fixed outputs ignores them. ``name``
     names the result of a row; it may hold ``{title}``, the title of the

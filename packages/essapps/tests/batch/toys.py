@@ -82,7 +82,13 @@ def _text(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
     (directory / 'total.txt').write_text(f'{about.name}: {outputs["total"]}')
 
 
-TEXT = Writer('text', ('total',), _text)
+TEXT = Writer(
+    name='text',
+    title='Text',
+    description='The name and the total in total.txt.',
+    outputs=('total',),
+    write=_text,
+)
 """A format of fixed outputs: the name and the total, in ``total.txt``."""
 
 PLAIN = WorkflowSpec(

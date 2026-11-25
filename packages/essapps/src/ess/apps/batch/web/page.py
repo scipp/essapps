@@ -615,7 +615,10 @@ class Page:
         form = writing.form(self.label)
         formats = [
             Format(
-                name=w.format, outputs=None if w.outputs is None else list(w.outputs)
+                name=w.name,
+                title=w.title,
+                description=w.description,
+                outputs=None if w.outputs is None else list(w.outputs),
             )
             for w in writing.writers(self.label)
         ]

@@ -35,7 +35,14 @@ def _nxcansas(outputs: Mapping[str, Any], about: About, directory: Path) -> None
     )
 
 
-NXCANSAS = Writer('NXcanSAS', ('iofq',), _nxcansas)
+NXCANSAS = Writer(
+    name='nxcansas',
+    title='NXcanSAS',
+    description='I(Q) as iofq.h5, an NXcanSAS file with the title and run of the '
+    'sample.',
+    outputs=('iofq',),
+    write=_nxcansas,
+)
 """I(Q) as ``iofq.h5``, an NXcanSAS file with the title and run of the sample,
 an empty run if its file has none."""
 
