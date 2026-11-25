@@ -50,8 +50,11 @@ With ``--scicat``, the runs are the raw datasets of ``PROPOSAL`` in SciCat
 start logs in to SciCat (``scitacean.Client.login``): it opens a browser on
 this machine, or, with ``SCITACEAN_OAUTH_FLOW=device``, prints a URL to open
 on any. The catalogue gives no role, so the Runs view shows the runs
-without one until a person gives it. A run is read from where SciCat says
-it lies, such as ``/ess/raw/...``, so reducing works only where that is mounted.
+without one until a person gives it, and a start at which no batch is listed
+makes a batch of the bank histogram (:data:`~.specs.BANK_HISTOGRAM`) with a row
+per raw run instead of the batch of sample runs. A run is read from where
+SciCat says it lies, such as ``/ess/raw/...``, so reducing works only where
+that is mounted.
 
 "List runs again" lists the files again, for the Runs view and the choices of
 a cell, and changes no row. A person makes a batch that follows the source
@@ -72,6 +75,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
+import scipp as sc
 from ess.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
 from ess.batch.web import Pages, Shown, create_app, plots
 from ess.batch.web.api import STATIC
@@ -84,7 +88,7 @@ from ess.apps.protocol import FileSource
 
 from .batch import SOURCES, STAGED
 from .bindings import BINDINGS
-from .specs import IOFQ
+from .specs import BANK_HISTOGRAM, IOFQ
 from .writers import WRITERS
 
 
@@ -114,15 +118,29 @@ def open_loki(
     return client, files, definitions
 
 
-def _draw(client: Client) -> Callable[[Sequence[Shown]], dict[str, object]]:
+FIRST_BATCHES = {
+    'sample-runs': (IOFQ, 'Sample runs'),
+    'raw-runs': (BANK_HISTOGRAM, 'Raw runs'),
+}
+"""The spec and title of the batch that a start makes, by the name of its source."""
+
+
+def _draw(
+    client: Client,
+    output: str,
+    quantity: str,
+    curve: Callable[[Any], sc.DataArray] = lambda value: value,
+) -> Callable[[Sequence[Shown]], dict[str, object]]:
+    """Draws the curve that ``curve`` takes of ``output`` of each record shown."""
+
     def draw(shown: Sequence[Shown]) -> dict[str, object]:
         curves = [
             plots.Curve(
-                s.name, client.output(s.record, 'iofq').intensity, s.color, s.outdated
+                s.name, curve(client.output(s.record, output)), s.color, s.outdated
             )
             for s in shown
         ]
-        return plots.figure(curves, quantity='I(Q)')
+        return plots.figure(curves, quantity=quantity)
 
     return draw
 
@@ -136,14 +154,15 @@ def build(
     settings: Mapping[str, Any] | None = None,
     interval: float = 5.0,
     follow: bool = False,
+    first: str = 'sample-runs',
 ) -> FastAPI:
     """
     The pages of the batches of ``client``, kept in ``definitions``, with a
     step of Follow every ``interval`` seconds while a batch follows. A new
     batch of I(Q) starts with ``settings``. If no batch is listed, a batch is
-    made from the source of sample runs, with the rows it has filled now, so also
-    at a start after a person removed the last one; it follows from the start
-    if ``follow``. A folder with only the
+    made from the source ``first`` (:data:`FIRST_BATCHES`), with the rows it has
+    filled now, so also at a start after a person removed the last one; it
+    follows from the start if ``follow``. A folder with only the
     detector and the masks that the command reduced has batches, so a person
     makes the batch of I(Q) with "New batch".
     """
@@ -155,14 +174,16 @@ def build(
     )
     intake = Intake(manager, sources=SOURCES)
     if not manager.headers():
-        intake.create(
-            IOFQ.name, title='Sample runs', source='sample-runs', follow=follow
-        )
+        spec, title = FIRST_BATCHES[first]
+        intake.create(spec.name, title=title, source=first, follow=follow)
     pages = Pages(
         intake,
         interval=interval,
         title='LoKI I(Q)',
-        draw={IOFQ.name: _draw(client)},
+        draw={
+            IOFQ.name: _draw(client, 'iofq', 'I(Q)', lambda iofq: iofq.intensity),
+            BANK_HISTOGRAM.name: _draw(client, 'histogram', 'Counts'),
+        },
         files=files,
         marks=Marks,
         folder=folder,
@@ -202,8 +223,14 @@ def main() -> None:
     except ValueError as error:  # such as definitions of another format
         parser.exit(1, f'{error}\n')
     with client:
-        folder = args.folder.resolve().name
-        app = build(client, files, definitions, folder=folder, interval=args.interval)
+        app = build(
+            client,
+            files,
+            definitions,
+            folder=args.folder.resolve().name,
+            interval=args.interval,
+            first='sample-runs' if source is None else 'raw-runs',
+        )
         uvicorn.run(app, host='localhost', port=args.port)
 
 

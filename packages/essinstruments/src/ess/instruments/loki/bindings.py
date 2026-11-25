@@ -9,6 +9,9 @@ that read the detector give esssans what the detector holds in place of the file
 I(Q) is a pipeline, so that it serves stages. Its masks are a value given to the
 pipeline, which replaces the provider of esssans that reads them from a file and the
 sample run.
+
+The bank histogram is no reduction: it reads the events of a raw file of ESS
+with h5py, so that it serves files that esssans does not read yet.
 """
 
 from collections.abc import Mapping
@@ -17,6 +20,8 @@ from operator import or_
 from pathlib import Path
 from typing import Any
 
+import h5py
+import numpy as np
 import sciline
 import scipp as sc
 import scippnexus as snx
@@ -54,11 +59,14 @@ from ess.spec.parameters import QEdges, WavelengthEdges
 from ess.spec.pipeline import PipelineBinding
 
 from .specs import (
+    BANK_HISTOGRAM,
     BEAM_CENTRE,
     CALIBRATED_DETECTOR,
     CREATE_MASK,
     IOFQ,
     MASKS,
+    BankHistogramOutputs,
+    BankHistogramParams,
     BeamCentre,
     BeamCentreOutputs,
     BeamCentreParams,
@@ -240,10 +248,37 @@ def _iofq_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     return pipeline
 
 
+def histogram_bank(params: BankHistogramParams) -> BankHistogramOutputs:
+    """
+    The events of ``loki_detector_<bank>`` counted by ``event_time_offset``,
+    in ``bins`` equal bins from the earliest to the latest event, with the
+    variance of each count equal to the count. Raises ``ValueError`` for a
+    file without the bank and for a bank without events.
+    """
+    name = 'event_time_offset'
+    path = f'entry/instrument/loki_detector_{params.bank}/detector_events/{name}'
+    with h5py.File(params.run) as f:
+        if path not in f:
+            raise ValueError(f'{params.run.name} has no {path}')
+        offsets = f[path][()]
+        unit = f[path].attrs.get('units', '')
+    if not offsets.size:
+        raise ValueError(f'bank {params.bank} of {params.run.name} holds no events')
+    counts, edges = np.histogram(offsets, bins=params.bins)
+    counts = counts.astype(np.float64)
+    unit = unit.decode() if isinstance(unit, bytes) else str(unit)
+    histogram = sc.DataArray(
+        sc.array(dims=[name], values=counts, variances=counts, unit='counts'),
+        coords={name: sc.array(dims=[name], values=edges, unit=unit or None)},
+    )
+    return BankHistogramOutputs(histogram=histogram)
+
+
 detector_binding = function_binding(CALIBRATED_DETECTOR, load_detector)
 masks_binding = function_binding(MASKS, compute_masks)
 beam_centre_binding = function_binding(BEAM_CENTRE, find_beam_centre)
 create_mask_binding = function_binding(CREATE_MASK, create_mask)
+bank_histogram_binding = function_binding(BANK_HISTOGRAM, histogram_bank)
 iofq_binding = PipelineBinding(
     IOFQ,
     _iofq_pipeline,
@@ -263,4 +298,5 @@ BINDINGS = [
     beam_centre_binding,
     create_mask_binding,
     iofq_binding,
+    bank_histogram_binding,
 ]
