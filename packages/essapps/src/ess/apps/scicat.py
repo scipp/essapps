@@ -35,7 +35,7 @@ from __future__ import annotations
 import importlib.metadata
 import logging
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -178,12 +178,19 @@ _NEXUS_SUFFIXES = frozenset({'.hdf', '.h5', '.nxs'})
 
 @dataclass(frozen=True)
 class _Listing:
-    """The raw datasets of a proposal as one query found them."""
+    """
+    The raw datasets of a proposal as one query found them, and what was
+    found missing since, kept until the next query.
+    """
 
     datasets: dict[FileRef, DownloadDataset]
     """By identity, in the order measured."""
     names: dict[FileRef, FileRef]
     """The identity of the file of each name: itself, and ``run:<run>``."""
+    unknown: set[FileRef] = field(default_factory=set)
+    """Names that neither this listing nor a query for them knew."""
+    broken: dict[FileRef, str] = field(default_factory=dict)
+    """Why the dataset of a file gives no path to it."""
 
 
 class ScicatFiles:
@@ -202,7 +209,8 @@ class ScicatFiles:
         pid       the PID
         proposal  the proposal
         sample    sample_name of the scientific metadata, if given
-        name      datasetName
+        title     datasetName, without the end that the ingestor adds,
+                  ' - Proposal:<proposal> - Run: <run>'
 
     The catalogue does not say what a run is for, so no file has a ``role``;
     :class:`~ess.batch.CorrectedFiles` lets a person give one. A run number
@@ -210,11 +218,15 @@ class ScicatFiles:
 
     :meth:`list` asks the catalogue each time, so that a run ingested since is
     listed. :meth:`resolve` and :meth:`metadata` answer from the last listing,
-    and ask again for a file not in it. :meth:`path` asks once per file for the
-    file list of its dataset, and gives the path that the ingestor recorded,
-    such as ``/ess/raw/loki/<proposal>/raw/<file>.hdf``. It downloads nothing,
-    so a workflow reads the file only on a machine where that path is mounted;
-    elsewhere the workflow fails, not the listing.
+    and ask again for a file not in it, once until the next listing: a page
+    asks for the files of its rows every second, and a row that names a file
+    no longer listed must not query the catalogue at each. :meth:`path` asks
+    once per file for the file list of its dataset, and gives the path that the
+    ingestor recorded, such as ``/ess/raw/loki/<proposal>/raw/<file>.hdf``; a
+    file list without one NeXus file is not asked for again until the next
+    listing either. A catalogue that did not answer is asked again at the next
+    call. Nothing is downloaded, so a workflow reads the file only on a machine
+    where that path is mounted; elsewhere the workflow fails, not the listing.
 
     Raises ``OSError`` if the catalogue cannot be reached or refuses a query, as
     :class:`~ess.apps.protocol.FileSource` requires, and from :meth:`path` if
@@ -232,9 +244,20 @@ class ScicatFiles:
 
     def path(self, ref: FileRef) -> Path:
         self._lookup(ref, lambda listing: listing.datasets)
-        if ref not in self._paths:
-            self._paths[ref] = self._nexus_file(ref)
-        return self._paths[ref]
+        if ref in self._paths:
+            return self._paths[ref]
+        listing = self._listing
+        if (reason := listing.broken.get(ref)) is None:
+            pid = PID.parse(ref.file.removeprefix(_PID_PREFIX))
+            dataset = self._ask(
+                lambda: self._client.scicat.get_dataset_model(pid, datablocks=True)
+            )
+            try:
+                self._paths[ref] = _nexus_file(dataset)
+                return self._paths[ref]
+            except ValueError as error:
+                reason = listing.broken[ref] = str(error)
+        raise OSError(reason)
 
     def metadata(self, ref: FileRef) -> dict[str, Any]:
         return self._metadata(self._lookup(ref, lambda listing: listing.datasets))
@@ -246,10 +269,17 @@ class ScicatFiles:
     def _lookup[T](
         self, name: FileRef, table: Callable[[_Listing], Mapping[FileRef, T]]
     ) -> T:
-        """What ``table`` holds of ``name``, asking the catalogue again if needed."""
-        if (found := table(self._listing).get(name)) is None:
-            found = table(self._read()).get(name)
+        """
+        What ``table`` holds of ``name``, asking the catalogue again if the
+        listing lacks it, unless a query since the listing did not find it.
+        """
+        listing = self._listing
+        found = table(listing).get(name)
+        if found is None and name not in listing.unknown:
+            listing = self._read()
+            found = table(listing).get(name)
         if found is None:
+            listing.unknown.add(name)
             raise KeyError(
                 f'proposal {self._proposal} has no raw dataset of the file {name.file}'
             )
@@ -289,37 +319,45 @@ class ScicatFiles:
             'pid': str(dataset.pid),
             'proposal': self._proposal,
             'sample': sample.get('value') if isinstance(sample, dict) else sample,
-            'name': dataset.datasetName,
+            'title': self._title(dataset),
         }
         return {k: v for k, v in found.items() if v is not None}
 
-    def _nexus_file(self, ref: FileRef) -> Path:
-        """The path of the one NeXus file that the dataset of ``ref`` lists."""
-        pid = PID.parse(ref.file.removeprefix(_PID_PREFIX))
-        dataset = self._ask(
-            lambda: self._client.scicat.get_dataset_model(pid, datablocks=True)
-        )
-        listed = [
-            PurePosixPath(f.path)
-            for block in dataset.origdatablocks or []
-            for f in block.dataFileList or []
-        ]
-        nexus = [p for p in listed if p.suffix in _NEXUS_SUFFIXES]
-        if len(nexus) != 1:
-            raise OSError(
-                f'the dataset {pid} lists {len(nexus)} NeXus files, not one: '
-                f'{[str(p) for p in listed]}'
-            )
-        folder = PurePosixPath(
-            dataset.sourceFolder.posix if dataset.sourceFolder else '/'
-        )
-        return Path(folder / nexus[0])  # a path that is absolute stays as it is
+    def _title(self, dataset: DownloadDataset) -> str | None:
+        """
+        The name of ``dataset`` without the end the ingestor adds, which holds
+        what the metadata hold anyway: only that exact end is cut, so a name
+        of another form stays whole.
+        """
+        added = f' - Proposal:{self._proposal} - Run: {dataset.runNumber}'
+        name = dataset.datasetName
+        return None if name is None else name.removesuffix(added)
 
     def _ask[T](self, query: Callable[[], T]) -> T:
         try:
             return query()
         except (ScicatCommError, httpx.HTTPError) as error:
             raise OSError(f'SciCat did not answer: {error}') from error
+
+
+def _nexus_file(dataset: DownloadDataset) -> Path:
+    """
+    The path of the one NeXus file that ``dataset``, with its file list,
+    lists; raises ``ValueError`` if it lists none or several.
+    """
+    listed = [
+        PurePosixPath(f.path)
+        for block in dataset.origdatablocks or []
+        for f in block.dataFileList or []
+    ]
+    nexus = [p for p in listed if p.suffix in _NEXUS_SUFFIXES]
+    if len(nexus) != 1:
+        raise ValueError(
+            f'the dataset {dataset.pid} lists {len(nexus)} NeXus files, not one: '
+            f'{[str(p) for p in listed]}'
+        )
+    folder = PurePosixPath(dataset.sourceFolder.posix if dataset.sourceFolder else '/')
+    return Path(folder / nexus[0])  # a path that is absolute stays as it is
 
 
 def _measured(dataset: DownloadDataset) -> tuple[bool, datetime, str]:

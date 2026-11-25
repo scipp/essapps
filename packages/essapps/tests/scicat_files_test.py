@@ -17,11 +17,17 @@ START = datetime(2026, 11, 25, 10, tzinfo=UTC)
 
 
 class QueryingScicat(FakeScicatClient):
-    """scitacean's fake, answering ``query_datasets`` by equal fields."""
+    """
+    scitacean's fake, answering ``query_datasets`` by equal fields, and
+    counting the queries in ``main.asked``.
+    """
+
+    main: 'Catalogue'
 
     def query_datasets(
         self, fields: dict[str, Any], **kwargs: Any
     ) -> list[model.DownloadDataset]:
+        self.main.asked.append('datasets')
         if 'query_datasets' in self.main.disabled:
             raise self.main.disabled['query_datasets']
         return [
@@ -30,9 +36,19 @@ class QueryingScicat(FakeScicatClient):
             if all(getattr(d, k) == v for k, v in fields.items())
         ]
 
+    def get_dataset_model(
+        self, pid: PID, *args: Any, **kwargs: Any
+    ) -> model.DownloadDataset:
+        self.main.asked.append(f'files of {pid}')
+        return super().get_dataset_model(pid, *args, **kwargs)
+
 
 class Catalogue(FakeClient):
-    """A SciCat in memory that answers queries."""
+    """A SciCat in memory that answers queries, and lists those it was asked."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.asked: list[str] = []
 
     @property
     def scicat(self) -> QueryingScicat:
@@ -46,15 +62,19 @@ class Catalogue(FakeClient):
         proposal: str = PROPOSAL,
         files: tuple[str, ...] = ('loki_{run}.hdf',),
         sample: str | None = None,
+        name: str = 'title {run} - Proposal:{proposal} - Run: {run}',
     ) -> FileRef:
-        """A raw dataset of ``run``, started ``minutes`` after ``START``."""
+        """
+        A raw dataset of ``run``, started ``minutes`` after ``START``, named as
+        the ingestor names it unless ``name`` is given.
+        """
         pid = PID(prefix='20.500.12269', pid=f'{proposal}-{run}-{len(self.datasets)}')
         self.datasets[pid] = model.DownloadDataset(
             pid=pid,
             type='raw',
             proposalIds=[proposal],
             runNumber=None if run is None else str(run),
-            datasetName=f'run {run}',
+            datasetName=name.format(run=run, proposal=proposal),
             startTime=None if minutes is None else START + timedelta(minutes=minutes),
             sourceFolder=f'/ess/data/loki/{proposal}',
             scientificMetadata=(
@@ -111,10 +131,18 @@ def test_metadata_come_from_the_record(
         'pid': ref.file.removeprefix('pid:'),
         'proposal': PROPOSAL,
         'sample': 'water',
-        'name': 'run 385',
+        'title': 'title 385',
     }
     assert files.list(Selector(sample='water')) == [ref]
     assert files.list(Selector(kind='mask')) == []
+
+
+def test_a_name_of_another_form_than_the_ingestors_stays_whole(
+    catalogue: Catalogue, files: ScicatFiles
+) -> None:
+    ref = catalogue.add(385, name='title 385 - Proposal:other - Run: 385')
+
+    assert files.metadata(ref)['title'] == 'title 385 - Proposal:other - Run: 385'
 
 
 def test_resolves_a_run_and_an_identity(
@@ -183,3 +211,46 @@ def test_a_catalogue_that_does_not_answer_raises_oserror(
 
     with pytest.raises(OSError, match='timed out'):
         ScicatFiles(catalogue, PROPOSAL).list(Selector())
+
+
+def test_a_name_not_listed_is_asked_for_once_until_the_next_listing(
+    catalogue: Catalogue, files: ScicatFiles
+) -> None:
+    catalogue.add(1, minutes=0)
+    files.list(Selector())
+    for _ in range(3):
+        with pytest.raises(KeyError):
+            files.resolve(run(9))
+    once = len(catalogue.asked)
+    files.list(Selector())
+    with pytest.raises(KeyError):
+        files.resolve(run(9))
+
+    assert (once, len(catalogue.asked)) == (2, 4)
+
+
+def test_a_dataset_without_one_nexus_file_is_asked_for_once_until_the_next_listing(
+    catalogue: Catalogue, files: ScicatFiles
+) -> None:
+    ref = catalogue.add(1, minutes=0, files=('run.log',))
+    files.list(Selector())
+    for _ in range(3):
+        with pytest.raises(OSError, match='0 NeXus files'):
+            files.path(ref)
+    files.list(Selector())
+    with pytest.raises(OSError, match='0 NeXus files'):
+        files.path(ref)
+
+    assert catalogue.asked.count(f'files of {ref.file[4:]}') == 2
+
+
+def test_a_file_list_that_the_catalogue_did_not_give_is_asked_for_again(
+    catalogue: Catalogue, files: ScicatFiles
+) -> None:
+    ref = catalogue.add(1, minutes=0, files=('/ess/raw/run.hdf',))
+    catalogue.disabled['get_dataset_model'] = ScicatCommError('timed out')
+    with pytest.raises(OSError, match='timed out'):
+        files.path(ref)
+    del catalogue.disabled['get_dataset_model']
+
+    assert files.path(ref) == Path('/ess/raw/run.hdf')

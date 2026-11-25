@@ -29,7 +29,7 @@ from collections.abc import Sequence
 
 import pandas as pd
 from ess.batch import FileInfo, RowSource
-from ess.batch.table import KEY, cell_of
+from ess.batch.table import KEY, NAME, cell_of
 
 from .specs import IOFQ
 
@@ -74,22 +74,23 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
 def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:
     """
     A row for each raw run, in the order measured, keyed by its run. The cell
-    ``run`` names the file; the notes are ``name`` and ``sample``, as the file
-    source gives them. A run needs no role, so this serves runs that no person
-    has marked yet.
+    ``run`` names the file. The note ``name``, which names the row on the page
+    and in the plot, is the ``title`` of the file, and the note ``sample`` its
+    sample, as the file source gives them. A run needs no role, so this serves
+    runs that no person has marked yet.
     """
     rows = [
         {
             KEY: str(f.metadata.get('run', f.ref.file)),
-            'name': f.metadata.get('name'),
+            NAME: f.metadata.get('title'),
             'sample': f.metadata.get('sample'),
             'run': cell_of(f.ref),
         }
         for f in sorted(files, key=_measured)
     ]
-    columns = [KEY, 'name', 'sample', 'run']
+    columns = [KEY, NAME, 'sample', 'run']
     frame = pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
-    return frame.astype({'name': 'string', 'sample': 'string'})
+    return frame.astype({NAME: 'string', 'sample': 'string'})
 
 
 def _run_number(f: FileInfo) -> int | None:

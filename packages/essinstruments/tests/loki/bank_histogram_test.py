@@ -71,7 +71,7 @@ def test_a_row_per_raw_run_in_the_order_measured() -> None:
     def info(run: int, **metadata: object) -> FileInfo:
         return FileInfo(FileRef(file=f'pid:p/{run}'), {'run': str(run), **metadata})
 
-    rows = per_run([info(2, name='second'), info(1, name='first', sample='water')])
+    rows = per_run([info(2, title='second'), info(1, title='first', sample='water')])
 
     assert rows.index.tolist() == ['1', '2']
     assert rows['run'].tolist() == ['pid:p/1', 'pid:p/2']
