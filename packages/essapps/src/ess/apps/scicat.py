@@ -6,6 +6,7 @@ extra ``scicat`` (scitacean).
 
 :class:`ScicatFiles` lists the raw datasets of a proposal as files, from the
 catalogue's records alone, so listing runs downloads nothing.
+:func:`scan_catalogue` writes them as the table of a workspace folder.
 
 :func:`publish` makes one derived dataset of one completed record: its files
 are the outputs written beforehand, and the rest is read from the record and
@@ -36,6 +37,7 @@ import importlib.metadata
 import logging
 import math
 import time
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -394,3 +396,29 @@ def _measured(dataset: DownloadDataset) -> tuple[bool, datetime, str]:
     """The order measured: by start time; a dataset without one last, by PID."""
     start = dataset.startTime or datetime.min.replace(tzinfo=UTC)
     return (dataset.startTime is None, start, str(dataset.pid))
+
+
+def scan_catalogue(files: ScicatFiles) -> list[dict[str, Any]]:
+    """
+    A row of ``files.csv`` for each raw file that ``files`` lists, in the order
+    measured, as :func:`ess.apps.folder.scan_folder` gives for the files of a
+    folder: ``file``, the path that the ingestor recorded, and the metadata
+    (see :class:`ScicatFiles`). A folder with this table identifies each file
+    by its ``pid``, as ``files`` does, so records name the same files either
+    way. The table opens only where the paths are mounted, since
+    :class:`~ess.apps.FolderFiles` refuses a file that does not exist.
+
+    It asks the catalogue for the file list of each dataset. A dataset whose
+    path cannot be given is left out, with a warning, as ``scan_folder`` leaves
+    out a file it cannot read. Raises ``OSError`` if the catalogue does not
+    answer the listing.
+    """
+    rows = []
+    for ref in files.list(Selector()):
+        try:
+            path = files.path(ref)
+        except OSError as error:
+            warnings.warn(f'{ref.file} is left out: {error}', stacklevel=2)
+            continue
+        rows.append({'file': str(path), **files.metadata(ref)})
+    return rows

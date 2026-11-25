@@ -2,11 +2,17 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """The command ``essbatch files``, and a ``files.csv`` in error."""
 
+import sys
+from importlib import import_module
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from ess.batch.cli import main
+
+from ess.apps.folder import folder_files
+from ess.apps.scicat_testing import FakeCatalogue
+from ess.spec import FileRef
 
 from .conftest import (
     SOURCES,
@@ -141,3 +147,74 @@ def test_main_writes_the_table_of_files_that_a_later_command_opens_the_folder_wi
     reduced = main([*command, 'reduce', str(cli_template), str(table), '-l', 'scan'])
 
     assert (scanned, reduced) == (0, 0)
+
+
+CATALOGUE = '''
+from ess.apps.scicat import Catalogue
+from ess.apps.scicat_testing import FakeCatalogue
+
+SCICAT = FakeCatalogue()
+
+
+def catalogue(proposal):
+    return Catalogue(client=SCICAT, instrument='toy')
+'''
+
+
+@pytest.fixture
+def scicat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeCatalogue:
+    """The fake behind ``-c cli_toys_scicat:catalogue``, new for each test."""
+    (tmp_path / 'cli_toys_scicat.py').write_text(CATALOGUE)
+    monkeypatch.syspath_prepend(tmp_path)
+    monkeypatch.delitem(sys.modules, 'cli_toys_scicat', raising=False)
+    return import_module('cli_toys_scicat').SCICAT
+
+
+def test_main_writes_the_raw_files_of_a_proposal_in_the_catalogue_with_a_run_table(
+    tmp_path: Path, scicat: FakeCatalogue
+) -> None:
+    raw = tmp_path / 'raw'
+    raw.mkdir()
+    for run in (1, 2):
+        (raw / f'run-{run}.hdf').touch()
+        scicat.add(run, minutes=run, proposal='p', files=(str(raw / f'run-{run}.hdf'),))
+    (tmp_path / 'runs.csv').write_text('run,role\n1,sample\n')
+    folder = tmp_path / 'ws'
+    folder.mkdir()
+    given = ['-w', str(folder), '-c', 'cli_toys_scicat:catalogue', '--proposal', 'p']
+
+    code = main(
+        [
+            *given,
+            'files',
+            '--with',
+            str(tmp_path / 'runs.csv'),
+            '-o',
+            str(folder / 'files.csv'),
+        ]
+    )
+
+    assert code == 0
+    files = folder_files(folder)
+    sample = files.resolve(FileRef(file='run:1'))
+    assert sample.file.startswith('pid:20.500.12269/')
+    assert files.path(sample) == raw / 'run-1.hdf'
+    assert files.metadata(sample)['role'] == 'sample'
+    assert files.metadata(sample)['proposal'] == 'p'
+    assert 'role' not in files.metadata(files.resolve(FileRef(file='run:2')))
+
+
+@pytest.mark.parametrize(
+    'given',
+    [
+        ['files'],  # neither READ nor a catalogue
+        ['-c', 'cli_toys_scicat:catalogue', 'files'],  # no proposal
+    ],
+)
+def test_main_returns_2_without_read_unless_a_catalogue_and_proposal_are_given(
+    tmp_path: Path, scicat: FakeCatalogue, given: list[str]
+) -> None:
+    with pytest.raises(SystemExit) as exit_:
+        main(['-w', str(tmp_path), *given])
+
+    assert exit_.value.code == 2

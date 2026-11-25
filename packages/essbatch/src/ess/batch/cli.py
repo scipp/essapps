@@ -21,6 +21,8 @@ A first session, in this order; each command has its own --help:
     cd FOLDER; essbatch files package.module:read --with runs.xlsx -o files.csv
                                   # the files of the folder; --with adds the role
                                   # and sample of each run from a run table
+    essbatch -c package.module:CATALOGUE --proposal P files -o files.csv
+                                  # or the raw files of proposal P in SciCat
     $B specs                      # the reductions: name, version, title, outputs
     $B template SPEC -o t.yaml    # a template of SPEC: what each parameter takes
     $B sources                    # the row sources: what each fills, and how
@@ -364,20 +366,44 @@ status of a command that said what it did as it ran.
 
 
 def _files(given: _Given) -> pd.DataFrame:
-    """The files table of the folder (``files.csv``)."""
+    """
+    The files table of the folder (``files.csv``): of the files of the folder
+    that READ knows, or, without READ, of the raw files of the proposal in the
+    catalogue of ``-c``.
+    """
     args = given.args
-    read = _named(args.read)
-    if not callable(read):
-        raise _Wrong(
-            f'{args.read} is a {type(read).__name__}, not a function from the '
-            'path of a file to its metadata'
-        )
     if args.run_table is None and args.output is not None and args.output.exists():
         raise _Wrong(f'{args.output} exists, and may hold what a person added')
-    files = pd.DataFrame(scan_folder(args.workspace, read), dtype=str).fillna('')
+    if args.read is None:
+        rows = _catalogue_files(given)
+    else:
+        read = _named(args.read)
+        if not callable(read):
+            raise _Wrong(
+                f'{args.read} is a {type(read).__name__}, not a function from the '
+                'path of a file to its metadata'
+            )
+        rows = scan_folder(args.workspace, read)
+    files = pd.DataFrame(rows, dtype=str).fillna('')
     if args.run_table is None:
         return files
     return described(files, read_text(args.run_table))
+
+
+def _catalogue_files(given: _Given) -> list[dict[str, Any]]:
+    """The rows of the raw files of ``--proposal`` in the catalogue of ``-c``."""
+    args = given.args
+    if args.catalogue is None:
+        raise _Wrong('give READ, or the catalogue with -c to list its files')
+    if args.proposal == 'local':
+        raise _Wrong('give --proposal, whose files the catalogue lists')
+    catalogue = _the_catalogue(given)
+    from ess.apps.scicat import ScicatFiles, scan_catalogue  # the extra scicat
+
+    try:
+        return scan_catalogue(ScicatFiles(catalogue.client, args.proposal))
+    except OSError as error:
+        raise _Failed(f'{args.catalogue}: {said(error)}') from None
 
 
 def _names(given: _Given, names: Iterable[str]) -> list[str] | str:
@@ -919,8 +945,9 @@ def _files_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         'read',
         metavar='READ',
+        nargs='?',
         help='package.module:NAME of a function from the path of a file to its '
-        'metadata',
+        'metadata; without it, the raw files of --proposal in the catalogue of -c',
     )
     command.add_argument(
         '--with',
@@ -1139,8 +1166,12 @@ _COMMANDS = {
     'files': _Command(
         _files,
         description='Write the files table of the folder (files.csv), '
-        'a row per file that READ knows. It refuses to overwrite an -o that '
-        'exists, as a person may have added to it, unless --with is given. It '
+        'a row per file that READ knows, or, without READ, per raw file of '
+        '--proposal in the catalogue of -c (SciCat), at the path its dataset '
+        'names, such as /ess/raw/...; the folder then opens only where that is '
+        'mounted, and every command on it needs the same --proposal. It refuses '
+        'to overwrite an -o that exists, as a person may have added to it, '
+        'unless --with is given. It '
         'replaces -o at once and does not open the folder, so it runs while '
         'follow holds the folder, and follow then sees the runs it adds.',
         arguments=_files_arguments,

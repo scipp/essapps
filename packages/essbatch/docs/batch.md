@@ -670,6 +670,8 @@ B="essbatch -w FOLDER -b package.module:BINDINGS -s package.module:SOURCES"
 $B files package.module:read -o files.csv      # the files table: a row per file that read knows
 $B files package.module:read --with runs.xlsx -o files.csv
                                                # with the role, sample, ... of each run from a run table
+$B -c package.module:CATALOGUE --proposal P files -o files.csv
+                                               # the raw files of proposal P in SciCat (ess.apps.scicat.scan_catalogue)
 $B specs                                       # name, version, title, outputs of each spec bound
 $B template loki-iofq -o iofq.yaml             # a template to fill in: each parameter, with what it takes
 $B sources                                     # the row sources by name: what each fills, and its description
