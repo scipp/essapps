@@ -133,5 +133,5 @@ flowchart TD
 | loaded | a spec reads the file and gives the value as an output |
 
 The inputs that instrument scientists prepare for later proposals, such as masks and calibrations, take the same path.
-Parts of the path exist: a writer for HDF5 (`ess.apps.batch.export`), a file source that lists such files (`ess.instruments.loki.files`), and a spec that loads mask files (`MASKS`).
+Parts of the path exist: a writer for HDF5 (`ess.apps.writers.SCIPP_HDF5`), a file source that lists such files (`ess.instruments.loki.files`), and a spec that loads mask files (`MASKS`).
 No value takes the whole path yet, and the path has no design ([README, open question 11](README.md#open-questions)).

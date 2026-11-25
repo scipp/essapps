@@ -93,6 +93,16 @@ description with the manager (:meth:`Page.change`). Removing a batch is
 :meth:`Pages.remove <.pages.Pages.remove>`; a request to a page of a batch
 removed answers :class:`~.refusals.Missing`.
 
+The tab "Output" shows the form of the batch (:class:`~..writing.Writing`):
+the format its results are written in, and what is said of them. The browser
+holds a change of it until Apply (:meth:`Page.set_output_form`), and refuses
+a download meanwhile, so that the zip of :meth:`Page.results_file` is what the
+form shows. A kept form whose format the application lacks, such as one kept
+by the command line with other writers, writes nothing: the tab says why
+(:attr:`~.models.OutputShown.problem`) until a person applies a format that
+the application has. An application given a catalogue publishes by the same
+form (:meth:`Page.publish`).
+
 A batch follows from the time it is made, if a person chooses Follow in
 "New batch" (:meth:`Pages.create <.pages.Pages.create>`). Its page then has
 the action "Stop following" (:meth:`Page.stop_following`); the page offers
@@ -160,12 +170,13 @@ from .models import (
     CellEdit,
     Column,
     Edit,
+    Format,
     HeaderEdit,
     HeaderShown,
     MakeSetting,
     Output,
+    OutputShown,
     Plot,
-    PublishShown,
     Reduce,
     Refused,
     Row,
@@ -178,7 +189,6 @@ from .models import (
 from .refusals import Problem, kept, refused, say, why
 
 if TYPE_CHECKING:
-    from ..publish import Publisher
     from .pages import Pages
 
 
@@ -595,18 +605,35 @@ class Page:
             refused=[self._refused(e, named) for e in self.refused],
             follow=self.pages.follow_shown(self.label),
             files_problem=self.pages.listing.failure,
-            publish=self._publish_shown(),
+            output=self._output_shown(),
             notice=notice,
         )
 
-    def _publish_shown(self) -> PublishShown | None:
-        publisher = self.pages.publisher
-        if publisher is None:
-            return None
+    def _output_shown(self) -> OutputShown:
+        writing = self.pages.writing
         outputs = self.batch.spec.outputs.model_fields
-        return PublishShown(
-            form=publisher.form(self.label),
+        form = writing.form(self.label)
+        formats = [
+            Format(
+                name=w.name,
+                title=w.title,
+                description=w.description,
+                outputs=None if w.outputs is None else list(w.outputs),
+            )
+            for w in writing.writers(self.label)
+        ]
+        problem = (
+            ''
+            if any(f.name == form.format for f in formats)
+            else f'This application has no writer of the format {form.format} '
+            'that the form names: pick a format and apply.'
+        )
+        return OutputShown(
+            form=form,
+            formats=formats,
             outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
+            catalogue=self.pages.publisher is not None,
+            problem=problem,
         )
 
     def _said(self, errors: Sequence[FieldError]) -> str:
@@ -1061,35 +1088,32 @@ class Page:
             raise Problem(f'The batch was not changed: {why(error)}.') from None
         return 'Saved.'
 
-    # The catalogue
-
-    def _publisher(self) -> Publisher:
-        if (publisher := self.pages.publisher) is None:
-            raise Problem('This application publishes to no catalogue.')
-        return publisher
+    # The output
 
     @_action
-    def set_publish_form(self, fields: Mapping[str, Any]) -> str:
+    def set_output_form(self, fields: Mapping[str, Any]) -> str:
         """
-        Keep the form of the tab "Publish", given as its fields
-        (:meth:`Publisher.set_form`).
+        Keep the form of the tab "Output", given as its fields
+        (:meth:`~..writing.Writing.set_form`).
         """
         with refused('Not applied'):
-            self._publisher().set_form(self.label, Form.model_validate(fields))
+            self.pages.writing.set_form(self.label, Form.model_validate(fields))
         return 'Applied the form.'
 
     @_action
     def publish(self, keys: Sequence[str]) -> str:
         """
         Publish the result of each row of ``keys``, as the form says
-        (:meth:`Publisher.publish`). A refusal publishes nothing; an upload
-        that fails keeps those before it, which its message names and the rows
-        then show.
+        (:meth:`~..publish.Publisher.publish`). A refusal publishes nothing;
+        an upload that fails keeps those before it, which its message names
+        and the rows then show.
         """
+        if (publisher := self.pages.publisher) is None:
+            raise Problem('This application publishes to no catalogue.')
         if not keys:
             raise Problem('Select the rows to publish.')
         with refused('Not published'):
-            pids = self._publisher().publish(self.label, keys)
+            pids = publisher.publish(self.label, keys)
         return f'Published {_rows(len(pids))}: {", ".join(pids.values())}.'
 
     # One row
@@ -1228,7 +1252,12 @@ class Page:
 
     @_locked
     def results_file(self, keys: Sequence[str]) -> bytes:
-        """A zip of the outputs of the done rows among ``keys``, or of all."""
+        """
+        A zip of the results of the done rows among ``keys``, or of all,
+        written as the form of the tab "Output" says
+        (:meth:`~..writing.Writing.by_form`), with the rows as
+        ``results.csv``.
+        """
         batch = self.batch
         frame = batch.frame()
         known = [k for k in keys if k in frame.index]
@@ -1241,8 +1270,10 @@ class Page:
             table = frames.with_results(
                 batch.client, states, frame.loc[done], published=batch.published()
             )
-            exported = export_table(batch.client, table, folder)
-            write_table(exported, folder / 'results.csv')
+            with refused('Not downloaded'):
+                write, _ = self.pages.writing.by_form(self.label)
+                export_table(batch.client, table, folder, write)
+            write_table(table, folder / 'results.csv')
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted(folder.rglob('*')):
                     if path.is_file():

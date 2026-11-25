@@ -134,7 +134,7 @@
         <button type="button" role="tab" data-tab="settings" aria-selected="false">Settings <span class="badge" id="settings-badge" hidden>!</span><span class="badge earlier" id="earlier-badge" hidden></span></button>
         <button type="button" role="tab" data-tab="row" aria-selected="false" id="tab-row-label">Row</button>
         <button type="button" role="tab" data-tab="batch" aria-selected="false">Batch</button>
-        <button type="button" role="tab" data-tab="publish" aria-selected="false" id="tab-publish-label" hidden>Publish</button>
+        <button type="button" role="tab" data-tab="output" aria-selected="false">Output</button>
       </div>
       <div class="tab" id="tab-result">
         <div class="plot-head">
@@ -183,25 +183,27 @@
           <button type="button" id="remove-batch">Remove this batch</button>
         </section>
       </div>
-      <div class="tab" id="tab-publish" hidden>
-        <div class="settings-bar draft" id="publish-draft">
+      <div class="tab" id="tab-output" hidden>
+        <div class="settings-bar draft" id="output-draft">
           <span class="settings-bar-state"></span>
-          <button type="submit" form="publish-form" class="primary">Apply</button>
-          <button type="button" id="publish-discard">Discard</button>
+          <button type="submit" form="output-form" class="primary">Apply</button>
+          <button type="button" id="output-discard">Discard</button>
         </div>
-        <form class="param header-form" id="publish-form">
-          <h3>The datasets of this batch</h3>
-          <p class="hint">Each row is published as one derived dataset of the catalogue, with the outputs chosen here. Its inputs, proposal and software are filled in from its result.</p>
-          <fieldset class="field"><legend>Outputs</legend><div id="publish-outputs"></div></fieldset>
-          <div class="field"><label for="publish-name">Dataset name</label><input type="text" id="publish-name" name="name"><small class="hint">{title}: the batch's title, {name}: the row's name, {key}: its key</small></div>
-          <div class="field"><label for="publish-description">Description</label><textarea id="publish-description" name="description" rows="3"></textarea></div>
-          <div class="field"><label for="publish-keywords">Keywords</label><input type="text" id="publish-keywords" name="keywords"><small class="hint">Separated by commas</small></div>
-          <div class="field"><label for="publish-owner">Owner</label><input type="text" id="publish-owner" name="owner"></div>
-          <div class="field"><label for="publish-email">Contact email</label><input type="email" id="publish-email" name="contact_email"></div>
-          <p class="problem" id="publish-problem"></p>
+        <form class="param header-form" id="output-form">
+          <h3>The results of this batch</h3>
+          <p class="hint">Download writes each row's result in this format, in a folder named by its key.</p>
+          <div class="field"><label for="output-format">Format</label><select id="output-format" name="format"></select><small class="hint" id="output-format-description"></small></div>
+          <fieldset class="field" id="output-outputs-field"><legend>Outputs</legend><div id="output-outputs"></div></fieldset>
+          <div class="field"><label for="output-name">Name</label><input type="text" id="output-name" name="name"><small class="hint">{title}: the batch's title, {name}: the row's name, {key}: its key</small></div>
+          <div class="field"><label for="output-description">Description</label><textarea id="output-description" name="description" rows="3"></textarea></div>
+          <div class="field"><label for="output-keywords">Keywords</label><input type="text" id="output-keywords" name="keywords"><small class="hint">Separated by commas</small></div>
+          <div class="field"><label for="output-owner">Owner</label><input type="text" id="output-owner" name="owner"></div>
+          <div class="field"><label for="output-email">Contact email</label><input type="email" id="output-email" name="contact_email"></div>
+          <p class="problem" id="output-problem"></p>
         </form>
-        <section class="param">
+        <section class="param" id="publishing" hidden>
           <h3>Publish</h3>
+          <p class="hint">Each row is published as one derived dataset of the catalogue, with the files of the form. Its inputs, proposal and software are filled in from its result.</p>
           <p class="hint" id="publish-hint"></p>
           <button type="button" class="primary" id="publish">Publish</button>
         </section>

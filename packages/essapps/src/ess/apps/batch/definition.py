@@ -14,8 +14,10 @@ rows of a batch are written by its ``Batch``, which the manager makes:
     source        the row source a batch was made from, the  Intake
                   keys of it that the batch has considered,
                   and whether the batch follows
-    publish       the form of its datasets in the catalogue,  Publisher
-                  and the records published
+    form          the format of the files that its results    Writing
+                  are written as, and what a person says of
+                  them
+    publish       the records published to the catalogue      Publisher
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
@@ -28,6 +30,7 @@ definitions*, keeps each entry as plain data under a key::
     ('labels', label, 'settings')
     ('labels', label, 'rows')
     ('labels', label, 'source')
+    ('labels', label, 'form')
     ('labels', label, 'publish')
 
 and its writer saves it whole at each change. It can forget an entry
@@ -43,8 +46,9 @@ The plain data of each entry, as the functions below give and read it::
     rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
     source        {'source': 'sample-runs', 'considered': ['60337', '60338'],
                    'follows': True}
-    publish       {'form': {'outputs': ['iofq'], 'name': '{title} {name}', ...},
-                   'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
+    form          {'format': 'scipp-hdf5', 'outputs': ['iofq'],
+                   'name': '{title} {name}', ...}
+    publish       {'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
 
 The settings are a template in the format of the file that a person saves
 from a page: its params are the settings of the batch, also those at the
@@ -105,6 +109,10 @@ def source_key(label: str) -> Key:
     return ('labels', label, 'source')
 
 
+def form_key(label: str) -> Key:
+    return ('labels', label, 'form')
+
+
 def publish_key(label: str) -> Key:
     return ('labels', label, 'publish')
 
@@ -116,6 +124,7 @@ def label_keys(label: str) -> tuple[Key, ...]:
         source_key(label),
         rows_key(label),
         settings_key(label),
+        form_key(label),
         publish_key(label),
     )
 
@@ -338,18 +347,23 @@ class FromSource:
 
 class Form(BaseModel, frozen=True):
     """
-    What a person says of the datasets that the results of a batch are
-    published as, once for all its rows (see :mod:`.publish`).
+    How the results of a batch are written, once for all its rows, and what a
+    person says of them (see :mod:`.writing`).
 
-    ``outputs`` are the outputs of the spec that each dataset holds. ``name``
-    names a dataset; it may hold ``{title}``, the title of the batch, ``{name}``,
-    the name of the row, and ``{key}``, its key, each without a format.
-    Another field in braces, or a name of only spaces, raises ``ValueError``.
-    It is also the body of ``POST api/publish/form`` of the page.
+    ``format`` is the name of the writer (:class:`ess.apps.writers.Writer`).
+    ``outputs`` are the outputs of the spec that a writer which writes the
+    outputs chosen writes; a writer of fixed outputs ignores them. ``name``
+    names the result of a row; it may hold ``{title}``, the title of the
+    batch, ``{name}``, the name of the row, and ``{key}``, its key, each
+    without a format. Another field in braces, or a name of only spaces,
+    raises ``ValueError``. The other fields are those of
+    :class:`ess.apps.writers.About`. It is also the body of
+    ``POST api/output/form`` of the page.
     """
 
     model_config = ConfigDict(extra='forbid')
 
+    format: str
     outputs: tuple[str, ...] = ()
     name: str = '{title} {name}'
     description: str = ''
@@ -393,18 +407,15 @@ class Published(BaseModel, frozen=True):
 
 
 class Publishing(BaseModel, frozen=True):
-    """
-    What a batch keeps of the catalogue: the form, ``None`` until a person
-    sets it, and each upload, in order.
-    """
+    """What a batch keeps of the catalogue: each upload, in order."""
 
     model_config = ConfigDict(extra='forbid')
 
-    form: Form | None = None
     published: tuple[Published, ...] = ()
 
 
 _HEADER = TypeAdapter(Header)
+_FORM = TypeAdapter(Form)
 _PUBLISHING = TypeAdapter(Publishing)
 _FROM_SOURCE = TypeAdapter(FromSource)
 _CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
@@ -460,6 +471,16 @@ def source_data(made: FromSource) -> dict[str, Any]:
 def source_of(data: Any) -> FromSource:
     """The source of :func:`source_data`; ``ValueError`` names a field."""
     return _checked(_FROM_SOURCE, data)
+
+
+def form_data(form: Form) -> dict[str, Any]:
+    """The form, as plain data."""
+    return _FORM.dump_python(form, mode='json')
+
+
+def form_of(data: Any) -> Form:
+    """The form of :func:`form_data`; ``ValueError`` names a field."""
+    return _checked(_FORM, data)
 
 
 def publishing_data(publishing: Publishing) -> dict[str, Any]:

@@ -16,6 +16,7 @@ import shutil
 import socket
 import threading
 import time
+import zipfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -32,9 +33,11 @@ from ess.apps.batch import Batch, BatchManager, CorrectedFiles, Header, Intake
 from ess.apps.batch.definition import rows_key
 from ess.apps.batch.web import Pages, Shown, create_app
 from ess.apps.batch.web.api import STATIC
+from ess.apps.batch.writing import Writing
+from ess.apps.writers import SCIPP_HDF5
 
 from . import toys
-from .toys import SOURCES, STAGED, Gate, Measure, Refusing
+from .toys import SOURCES, STAGED, TEXT, Gate, Measure, Refusing
 
 
 def unavailable(reason: str) -> NoReturn:
@@ -1883,6 +1886,105 @@ def test_another_page_of_a_removed_batch_shows_why_and_the_list(
     page.errors.clear()
 
 
+@contextmanager
+def output_tab(browser: Any, pages: Pages, label: str) -> Iterator[Any]:
+    """The page of ``label`` of ``pages``, at the tab "Output"."""
+    with serve(create_app(pages)) as root:
+        page = watched(browser)
+        page.goto(f'{root}batches/{label}/')
+        page.wait_for_selector('#rows .tabulator-row')
+        page.click('[data-tab=output]')
+        yield page
+        page.close()
+        assert page.errors == []
+
+
+@pytest.fixture
+def output(
+    browser: Any, intake: Intake, url: str, batch: Batch, client: Client
+) -> Iterator[Any]:
+    """
+    The page of ``url`` with the format ``text`` and no catalogue, rows 1 and
+    2 reduced, at the tab "Output".
+    """
+    client.wait(list(batch.reduce(['1', '2']).values()))
+    pages = Pages(intake, writers={STAGED.name: [TEXT]})
+    with output_tab(browser, pages, batch.label) as page:
+        yield page
+
+
+def test_outputs_hide_for_a_format_of_its_own_and_publishing_without_a_catalogue(
+    output: Any,
+) -> None:
+    page = output
+    fixed = page.is_hidden('#output-outputs-field')
+
+    page.select_option('#output-format', 'scipp-hdf5')
+
+    page.wait_for_selector('#output-outputs-field', state='visible')
+    assert fixed
+    assert page.is_hidden('#publishing')
+    assert page.locator('#rows [tabulator-field=published]').count() == 0
+
+
+def test_the_format_select_shows_titles_and_the_description_of_the_format_picked(
+    output: Any,
+) -> None:
+    page = output
+    titles = page.locator('#output-format option').all_inner_texts()
+    first = page.inner_text('#output-format-description')
+
+    page.select_option('#output-format', 'scipp-hdf5')
+
+    assert titles == [TEXT.title, SCIPP_HDF5.title]
+    assert first == TEXT.description
+    assert page.inner_text('#output-format-description') == SCIPP_HDF5.description
+
+
+def test_a_download_of_results_waits_for_the_output_form_and_writes_by_it(
+    output: Any,
+) -> None:
+    page = output
+    page.select_option('#output-format', 'scipp-hdf5')
+    page.wait_for_selector('#output-draft.changed')
+    held = page.is_disabled('[data-file="results-all"]')
+
+    page.click('#output-draft button.primary')
+    page.wait_for_selector('#output-draft:not(.changed)')
+    page.click('#files .menu-button')
+    with page.expect_download() as saved:
+        page.click('[data-file="results-all"]')
+
+    assert held
+    assert sorted(zipfile.ZipFile(saved.value.path()).namelist()) == [
+        'results/1/_record.json',
+        'results/1/total.h5',
+        'results/2/_record.json',
+        'results/2/total.h5',
+        'results/results.csv',
+    ]
+
+
+def test_a_kept_format_the_page_lacks_says_why_until_a_format_is_applied(
+    browser: Any, intake: Intake, url: str, batch: Batch, client: Client
+) -> None:
+    writing = Writing(intake.manager, {STAGED.name: [TEXT]})
+    writing.set_form(batch.label, writing.form(batch.label))
+    client.wait(list(batch.reduce(['1', '2']).values()))
+    with output_tab(browser, Pages(intake), batch.label) as page:
+        said = page.inner_text('#output-draft .settings-bar-state')
+        held = page.is_disabled('[data-file="results-all"]')
+        unchanged = page.locator('#output-draft.changed').count() == 0
+
+        page.select_option('#output-format', 'scipp-hdf5')
+        page.click('#output-draft button.primary')
+        page.wait_for_selector('[data-file="results-all"]:enabled', state='attached')
+
+    assert 'no writer of the format text' in said
+    assert held
+    assert unchanged
+
+
 @pytest.fixture
 def publishing(
     browser: Any, intake: Intake, url: str, batch: Batch, client: Client
@@ -1891,44 +1993,37 @@ def publishing(
     from scitacean.testing.client import FakeClient
     from scitacean.testing.transfer import FakeFileTransfer
 
-    from ess.apps.batch.publish import Publisher
     from ess.apps.scicat import Catalogue
 
     scicat = FakeClient.without_login(
         url='https://scicat.invalid/api/v3', file_transfer=FakeFileTransfer()
     )
-    publisher = Publisher(intake.manager, Catalogue(client=scicat, instrument='loki'))
+    catalogue = Catalogue(client=scicat, instrument='loki')
     client.wait(list(batch.reduce(['1', '2']).values()))
-    with serve(create_app(Pages(intake, publisher=publisher))) as root:
-        page = watched(browser)
-        page.goto(f'{root}batches/{batch.label}/')
-        page.wait_for_selector('#rows .tabulator-row')
-        page.click('[data-tab=publish]')
+    with output_tab(browser, Pages(intake, catalogue=catalogue), batch.label) as page:
         yield page
-        page.close()
-        assert page.errors == []
 
 
-def test_the_publish_form_is_in_force_after_apply_and_holds_publishing_back_till_then(
+def test_the_output_form_is_in_force_after_apply_and_holds_publishing_back_till_then(
     publishing: Any,
 ) -> None:
     page = publishing
     select(page, 'water')
     page.wait_for_selector('#publish:disabled')
     unfilled = page.inner_text('#publish-hint')
-    page.check('#publish-outputs input[value=total]')
-    page.fill('#publish-owner', 'Anna')
-    page.fill('#publish-email', 'anna@example.org')
-    page.wait_for_selector('#publish-draft.changed')
+    page.check('#output-outputs input[value=total]')
+    page.fill('#output-owner', 'Anna')
+    page.fill('#output-email', 'anna@example.org')
+    page.wait_for_selector('#output-draft.changed')
     held = page.is_disabled('#publish')
 
-    page.click('#publish-draft button.primary')
-    page.wait_for_selector('#publish-draft:not(.changed)')
-    page.fill('#publish-owner', 'Bob')
-    page.wait_for_selector('#publish-draft.changed')
-    page.click('#publish-discard')
-    page.wait_for_selector('#publish-draft:not(.changed)')
-    owner = page.input_value('#publish-owner')
+    page.click('#output-draft button.primary')
+    page.wait_for_selector('#output-draft:not(.changed)')
+    page.fill('#output-owner', 'Bob')
+    page.wait_for_selector('#output-draft.changed')
+    page.click('#output-discard')
+    page.wait_for_selector('#output-draft:not(.changed)')
+    owner = page.input_value('#output-owner')
     page.once('dialog', lambda dialog: dialog.accept())
     page.click('#publish')
     published = page.locator('#rows .tabulator-row', has_text='water').locator(
@@ -1936,6 +2031,6 @@ def test_the_publish_form_is_in_force_after_apply_and_holds_publishing_back_till
     )
     published.filter(has_text='pid:').wait_for()
 
-    assert unfilled.startswith('The form names no output, no owner, no contact email')
+    assert unfilled.startswith('The form names no owner, no contact email')
     assert held
     assert owner == 'Anna'

@@ -212,14 +212,33 @@ class Output(BaseModel):
     title: str
 
 
-class PublishShown(BaseModel):
+class Format(BaseModel):
     """
-    The tab "Publish": the ``form`` of the batch, and the ``outputs`` of its
-    spec that the form may name.
+    A format that the form may pick: its ``name``, which the form keeps, its
+    ``title`` and ``description``, shown to a person, and the ``outputs`` that
+    its writer reads, or ``None`` if it writes the outputs chosen in the form.
+    """
+
+    name: str
+    title: str
+    description: str
+    outputs: list[str] | None
+
+
+class OutputShown(BaseModel):
+    """
+    The tab "Output": the ``form`` of the batch, the ``formats`` it may pick,
+    the default first, the ``outputs`` of its spec that the form may name,
+    whether a ``catalogue`` is given, to publish to, and the ``problem`` of
+    the form in words: why nothing is written by it, such as a kept format
+    that is not among ``formats``; empty if none.
     """
 
     form: Form
+    formats: list[Format]
     outputs: list[Output]
+    catalogue: bool
+    problem: str
 
 
 class State(BaseModel):
@@ -240,7 +259,7 @@ class State(BaseModel):
     form shows them; it has a field per parameter, a column's for its setting.
     ``may_be_columns`` names the parameters that "Make this a column" offers:
     those that are no column and whose cell the page edits.
-    ``publish`` is the tab "Publish", ``None`` without a catalogue.
+    ``output`` is the tab "Output".
     ``files_problem`` says why the files cannot be listed,
     if the file source raises: the pickers then offer none. ``notice`` says
     what the action that answers with this state did.
@@ -267,7 +286,7 @@ class State(BaseModel):
     refused: list[Refused]
     follow: Following
     files_problem: str | None
-    publish: PublishShown | None = None
+    output: OutputShown
     notice: str = ''
 
 

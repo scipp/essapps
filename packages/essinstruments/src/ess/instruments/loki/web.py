@@ -14,7 +14,8 @@ a batch from the source of sample runs, with the rows that have both runs
 then; it does not follow (but see :mod:`.arrivals`). The
 batches with their batch tables and settings, the batch that follows, and the
 corrections of runs are kept in ``FOLDER/definitions/``, the results in
-``FOLDER/store/``.
+``FOLDER/store/``. The tab "Output" writes I(Q) as NXcanSAS, or any output
+as scipp HDF5 (:mod:`.writers`).
 
 The settings name the masks by a record, so reduce the detector and the masks
 first, on the same folder, while no page runs on it. With the run of the can
@@ -73,6 +74,7 @@ from ess.apps.folder import ArrivingFiles, open_folder
 from .batch import SOURCES, STAGED
 from .bindings import BINDINGS
 from .specs import IOFQ
+from .writers import WRITERS
 
 
 class Marks(BaseModel):
@@ -148,6 +150,7 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
+        writers=WRITERS,
     )
     return create_app(pages)
 

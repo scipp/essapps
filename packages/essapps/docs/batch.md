@@ -61,7 +61,8 @@ Nothing in the batch layer imports the page or the command.
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
 | `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
-| publisher | `publish.py`: `Publisher` | the results of a batch into SciCat, one derived dataset per row (`ess.apps.scicat`): the form of a batch's datasets, which results may be published, and what was published |
+| writing | `writing.py`: `Writing` | how the results of a batch are written: the form of a batch (a format, outputs, and what a person says of them, `ess.apps.writers.About`), and the writers of each spec (`ess.apps.writers.Writer`); the download of the page, `export -l` and publishing write by it |
+| publisher | `publish.py`: `Publisher` | the results of a batch into SciCat, one derived dataset per row (`ess.apps.scicat`) with the files that `Writing` writes: which results may be published, and what was published |
 
 ### Terms
 
@@ -149,7 +150,8 @@ Other tables are always named with what they are of:
 | `definitions/labels/<label>/settings.json` | a template: the spec; the settings in `params`, also those of a parameter that has a column; `batch.fills` as its `blanks` | `Batch` |
 | `definitions/labels/<label>/rows.json` | the batch table: `{"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}]}` | `Batch.put` |
 | `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
-| `definitions/labels/<label>/publish.json` | `{"form": {"outputs": ["iofq"], ...}, "published": [{"key": "60339", "record": ..., "pid": ...}]}`; only for a batch published from (`ess.apps.batch.publish`) | `Publisher` |
+| `definitions/labels/<label>/form.json` | `{"format": "nxcansas", "outputs": ["iofq"], "name": "{title} {name}", ...}`; only for a batch whose form is set (`ess.apps.batch.writing`) | `Writing` |
+| `definitions/labels/<label>/publish.json` | `{"published": [{"key": "60339", "record": ..., "pid": ...}]}`; only for a batch published from (`ess.apps.batch.publish`) | `Publisher` |
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
 | `definitions/format.json` | `{"format": 1}`: the format of the files above | `FolderDefinitions`, before its first write |
 | `store/`, the log | the records | the workspace |
@@ -682,11 +684,11 @@ $B show -l water -o done.csv                   # the batch table with results; r
 $B reduce -l water -o done.csv                 # reduces every ready row again; writes the batch table with results
 $B reduce iofq.yaml done.csv -l water          # iofq.yaml becomes the settings, done.csv the batch table; reduces
 $B template -l water -o now.yaml               # the settings of water, as the page's "settings as a file"
-$B export -l water results                     # the outputs of the done rows of water, by key
-$B -c package.module:catalogue publish-form -l water -o form.yaml
-                                               # the form of water's datasets in SciCat, as YAML
-$B -c package.module:catalogue publish -l water --form form.yaml 60339 60340
-                                               # keep the form, publish the results of 60339, 60340
+$B form -l water -o form.yaml                  # how the results of water are written, as YAML
+$B form -l water form.yaml                     # keep the form edited
+$B export -l water results                     # the results of the done rows of water by the form, by key
+$B -c package.module:catalogue publish -l water 60339 60340
+                                               # publish the results of 60339, 60340 by the form
 $B offered -l water2                           # the rows of the row source that the batch table lacks
 $B take -l water2 60337 60338                  # put them into the batch table; reduces nothing
 $B follow -l water2                            # follow, a step every 5 s until Ctrl-C
@@ -707,9 +709,10 @@ Each subcommand is a few calls of the batch layer:
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
 | `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame(), published=batch.published())` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
-| `export TABLE` or `export -l LABEL` | `export.export_table(client, table, directory)`, of the table file or of what `show` gives |
-| `publish-form -l LABEL` | `publish.Publisher(manager, catalogue).form_text(label)` |
-| `publish -l LABEL [--form FILE] KEY...` | `publisher.set_form(label, publish.load_form(FILE))`, then `publisher.publish(label, keys)` |
+| `export TABLE` | `export.export_table(client, table, directory, export.by_writer(client))`, of the table file |
+| `export -l LABEL` | `export.export_table(client, table, directory, writing.by_form(label)[0])`, of what `show` gives |
+| `form -l LABEL [FILE]` | `writing.set_form(label, writing.load_form(FILE))` if FILE is given, then `writing.form_text(label)`, with `writing = Writing(manager, writers, contact)`, `contact` the principal investigator with `-c` |
+| `publish -l LABEL KEY...` | `publish.Publisher(writing, catalogue).publish(label, keys)` |
 | `offered -l LABEL` | `intake.offered(label)` |
 | `take -l LABEL KEY...` | `intake.take(label, keys)`, then the rows taken as `show` gives them |
 | `follow -l LABEL` | `intake.follow(label)`, then `cli.follow(intake, ...)`: `intake.step()` every `--interval` seconds |
@@ -734,8 +737,14 @@ A command is a function of `_Given` and an item of `_COMMANDS` in `cli.py`.
 The command opens the folder with `ArrivingFiles`, so `follow` finds the files that arrive while it runs; it reads `files.csv` once at the opening too, so that a files table in error is refused before anything runs.
 A table file or a files table that the command or the page writes replaces the file at once (`files.replace_at_once`, also used by `folder.write_files_table`): `files -o files.csv` does not open the folder, so it runs while `follow` holds the folder, and `follow` never reads half a files table.
 
-`publish-form` and `publish` make the catalogue with the function that `-c package.module:NAME` names, called with `--proposal`, as `fake_catalogue` of `ess.apps.batch.web.demo` is.
-They are the page's tab Publish: the same `Publisher`, so the form, which rows may be published, and what was published are one per batch whoever publishes. The form file holds the fields of `definition.Form`, read with `Form.model_validate` as the page's body is.
+`-W package.module:NAME` names the writers of the specs, a mapping of spec name to a list of `ess.apps.writers.Writer`, as `-b` and `-s` name bindings and row sources; `Writing` adds scipp HDF5 for every spec.
+`form`, `export -l` and `publish` write by the form of the batch, as the page does: the same `Writing`, so the form is one per batch whoever writes. The form file holds the fields of `definition.Form`, read with `Form.model_validate` as the page's body is.
+Until a form is kept, its format is the first writer that `-W` gives for the spec, else scipp HDF5.
+A kept form of a format that `-W` lacks is refused (exit 2), naming the format; it is never written in another format.
+`export TABLE` writes each output that a row's record returned as scipp HDF5: a table file names no batch, so it has no form.
+`export` replaces the folder of each key whole: a row is written into a temporary folder in DIRECTORY, then moved in place of the folder of its key, so an earlier export in another format or of other outputs leaves no files behind.
+`-c package.module:NAME` makes the catalogue with the function it names, called with `--proposal`, as `fake_catalogue` of `ess.apps.batch.web.demo` is; `publish` needs it.
+With `-c`, the owner and contact of a form not set are the principal investigator of the proposal (`scicat.principal_investigator`), for `form` and `publish`; `export -l` does not contact the catalogue.
 `publish` refuses (exit 2) what `Publisher.publish` refuses before any upload; an upload that fails exits with 1, and the rows published before it stay published.
 
 `follow` is the second way to run Follow, after the page: whoever runs the loop owns the timer, and one process works on a folder, so the two never run on one folder at once.

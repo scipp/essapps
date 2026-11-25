@@ -60,3 +60,18 @@ def test_a_run_registered_while_the_page_runs_is_added_by_a_step_of_follow(
         stepped = names(http.get('/api/state').json())
 
     assert (before, relisted, stepped) == (['a'], ['a'], ['a', 'b'])
+
+
+def test_the_output_tab_offers_nxcansas_first(tmp_path: Path) -> None:
+    register(tmp_path, (1, 'sample', 'a'), (2, 'transmission', 'a'))
+    client, files, definitions = open_loki(tmp_path)
+    with client:
+        app = build(client, files, definitions)
+        http = TestClient(app, base_url=str(TestClient(app).get('/').url))
+        output = http.get('/api/state').json()['output']
+
+    assert [(f['name'], f['outputs']) for f in output['formats']] == [
+        ('nxcansas', ['iofq']),
+        ('scipp-hdf5', None),
+    ]
+    assert output['form']['format'] == 'nxcansas'

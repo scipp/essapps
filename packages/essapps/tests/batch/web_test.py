@@ -36,7 +36,9 @@ from ess.apps.batch.definition import Key, NotKept, rows_key, settings_key
 from ess.apps.batch.web import Pages, Shown, create_app, demo, plots
 from ess.apps.batch.web.models import NewBatch
 from ess.apps.batch.web.refusals import Missing, Problem
+from ess.apps.batch.writing import Writing
 from ess.apps.testing import CountingClient, FakeFiles
+from ess.apps.writers import SCIPP_HDF5
 from ess.spec import FileRef, SampleRunFile, WorkflowSpec, function_binding
 
 from . import toys
@@ -45,6 +47,7 @@ from .toys import (
     SOURCES,
     STAGED,
     STAGED_NAMES,
+    TEXT,
     Gate,
     Measure,
     Outputs,
@@ -2791,7 +2794,18 @@ def test_a_batch_made_again_under_a_removed_label_gets_a_new_page(
     assert state(http)['title'] == 'Again'
 
 
-# Publishing
+# Output
+
+
+def with_rows(pages: Pages, label: str, sample: Measure, client: Client) -> TestClient:
+    """The page of ``label`` of ``pages``, rows 1 and 2 done, 3 incomplete."""
+    http = opened(pages, label)
+    sample(1, 'water')
+    sample(2, 'sds')
+    sample(3, 'oil', partner=False)
+    pages.intake.manager.batch(label).put(toys.rows(client))
+    reduced(http, client)
+    return http
 
 
 @pytest.fixture
@@ -2809,45 +2823,105 @@ def publishing(
     intake: Intake, scicat: Any, label: str, sample: Measure, client: Client
 ) -> TestClient:
     """The page of ``label`` with a catalogue, rows 1 and 2 done, 3 incomplete."""
-    from ess.apps.batch.publish import Publisher
     from ess.apps.scicat import Catalogue
 
-    publisher = Publisher(intake.manager, Catalogue(client=scicat, instrument='loki'))
-    http = opened(Pages(intake, publisher=publisher), label)
-    sample(1, 'water')
-    sample(2, 'sds')
-    sample(3, 'oil', partner=False)
-    intake.manager.batch(label).put(toys.rows(client))
-    reduced(http, client)
-    return http
+    catalogue = Catalogue(client=scicat, instrument='loki')
+    return with_rows(Pages(intake, catalogue=catalogue), label, sample, client)
 
 
-FORM = {'outputs': ['total'], 'owner': 'Anna', 'contact_email': 'anna@example.org'}
+@pytest.fixture
+def written(intake: Intake, label: str, sample: Measure, client: Client) -> TestClient:
+    """The page of ``label`` with the format ``text``, rows 1 and 2 done."""
+    pages = Pages(intake, writers={STAGED.name: [TEXT]})
+    return with_rows(pages, label, sample, client)
 
 
-def test_without_a_catalogue_the_page_has_no_publishing(http: TestClient) -> None:
-    assert state(http)['publish'] is None
+FORM = {
+    'format': 'scipp-hdf5',
+    'outputs': ['total'],
+    'owner': 'Anna',
+    'contact_email': 'anna@example.org',
+}
+
+
+def zipped(http: TestClient, keys: list[str]) -> list[str]:
+    """The names in the zip of the results of the rows ``keys``."""
+    content = http.post('/api/results.zip', json={'keys': keys}).content
+    return sorted(zipfile.ZipFile(io.BytesIO(content)).namelist())
+
+
+def test_without_a_catalogue_the_output_tab_has_the_form_but_no_publishing(
+    http: TestClient,
+) -> None:
+    output = state(http)['output']
+    applied = http.post('/api/output/form', json=FORM).json()
+
+    assert ([f['name'] for f in output['formats']], output['catalogue']) == (
+        ['scipp-hdf5'],
+        False,
+    )
+    assert output['outputs'] == [{'name': 'total', 'title': 'total'}]
+    assert applied['notice'] == 'Applied the form.'
+    assert state(http)['output']['form']['owner'] == 'Anna'
     assert http.post('/api/publish', json={'keys': ['1']}).status_code == 422
 
 
-def test_the_form_offers_the_outputs_of_the_spec_and_is_kept(
-    publishing: TestClient,
+def test_the_formats_are_those_given_and_scipp_hdf5_the_default_first(
+    written: TestClient,
 ) -> None:
-    assert state(publishing)['publish']['outputs'] == [
-        {'name': 'total', 'title': 'total'}
+    output = state(written)['output']
+
+    assert output['formats'] == [
+        {
+            'name': w.name,
+            'title': w.title,
+            'description': w.description,
+            'outputs': None if w.outputs is None else list(w.outputs),
+        }
+        for w in (TEXT, SCIPP_HDF5)
     ]
+    assert output['form']['format'] == 'text'
 
-    saved = publishing.post('/api/publish/form', json=FORM).json()
 
-    assert saved['notice'] == 'Applied the form.'
-    assert saved['publish']['form']['outputs'] == ['total']
-    assert state(publishing)['publish']['form']['owner'] == 'Anna'
+def test_a_kept_format_the_page_lacks_is_a_problem_until_one_it_has_is_applied(
+    intake: Intake, label: str, sample: Measure, client: Client
+) -> None:
+    writing = Writing(intake.manager, {STAGED.name: [TEXT]})
+    writing.set_form(label, writing.form(label))
+    http = with_rows(Pages(intake), label, sample, client)
+    kept = state(http)['output']
+    refused = http.post('/api/results.zip', json={'keys': ['1']})
+
+    http.post('/api/output/form', json=FORM)
+
+    assert kept['form']['format'] == 'text'
+    assert 'no writer of the format text' in kept['problem']
+    assert refused.status_code == 422
+    assert state(http)['output']['problem'] == ''
+
+
+def test_the_results_download_as_the_form_says(written: TestClient) -> None:
+    as_text = zipped(written, ['1', '3'])
+    written.post('/api/output/form', json=FORM)
+    as_hdf5 = zipped(written, ['1', '3'])
+
+    assert as_text == [
+        'results/1/_record.json',
+        'results/1/total.txt',
+        'results/results.csv',
+    ]
+    assert as_hdf5 == [
+        'results/1/_record.json',
+        'results/1/total.h5',
+        'results/results.csv',
+    ]
 
 
 def test_a_published_row_shows_the_identifier_of_its_dataset(
     publishing: TestClient, scicat: Any
 ) -> None:
-    publishing.post('/api/publish/form', json=FORM)
+    assert state(publishing)['output']['catalogue']
+    publishing.post('/api/output/form', json=FORM)
 
     done = publishing.post('/api/publish', json={'keys': ['2']}).json()
 
@@ -2861,14 +2935,14 @@ def test_a_published_row_shows_the_identifier_of_its_dataset(
 @pytest.mark.parametrize(
     ('form', 'message'),
     [
-        ({'outputs': ['nope']}, 'Not applied: staged has no output nope'),
-        ({'name': '{sample}'}, 'Not applied: name: a name may hold {title}, {name}'),
+        (FORM | {'outputs': ['nope']}, 'Not applied: staged has no output nope'),
+        (FORM | {'name': '{sample}'}, 'Not applied: name: a name may hold {title}'),
     ],
 )
 def test_a_form_refused_says_why(
-    publishing: TestClient, form: dict[str, Any], message: str
+    http: TestClient, form: dict[str, Any], message: str
 ) -> None:
-    refused = publishing.post('/api/publish/form', json=form)
+    refused = http.post('/api/output/form', json=form)
 
     assert refused.status_code == 422
     assert message in refused.json()['message']
@@ -2879,7 +2953,7 @@ def test_a_form_refused_says_why(
     [
         (FORM, ['3'], 'Not published: no result to publish, done and not outdated: 3'),
         (FORM, [], 'Select the rows to publish'),
-        ({}, ['1'], 'Not published: the form names no output'),
+        (FORM | {'owner': ''}, ['1'], 'Not published: the form names no owner'),
     ],
 )
 def test_a_refused_publication_says_why_and_publishes_nothing(
@@ -2889,7 +2963,7 @@ def test_a_refused_publication_says_why_and_publishes_nothing(
     keys: list[str],
     message: str,
 ) -> None:
-    publishing.post('/api/publish/form', json=form)
+    publishing.post('/api/output/form', json=form)
 
     refused = publishing.post('/api/publish', json={'keys': keys})
 

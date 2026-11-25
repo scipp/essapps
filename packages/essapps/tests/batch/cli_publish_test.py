@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The commands of ``essapps-batch`` that publish to a fake SciCat."""
+"""
+The commands of ``essapps-batch`` that write results by the form of a batch:
+form, export -l, and publish to a fake SciCat.
+"""
 
 import json
 import sys
@@ -33,6 +36,10 @@ def catalogue(proposal):
         pi_email='ada@example.org',
     )
     return Catalogue(client=SCICAT, instrument='toy')
+
+
+def unreachable(proposal):
+    raise ConnectionError('no catalogue')
 '''
 
 
@@ -52,43 +59,144 @@ def publishing(command: list[str], reduced_once: Path, scicat: FakeClient) -> li
 
 
 @pytest.fixture
-def form(publishing: list[str], folder: Path) -> Path:
-    """The form that publish-form writes, with the output total chosen."""
-    path = folder / 'form.yaml'
-    assert main([*publishing, 'publish-form', '-l', 'x', '-o', str(path)]) == 0
+def form(command: list[str], reduced_once: Path) -> Path:
+    """The form of x, kept, with an owner and a contact."""
+    path = reduced_once / 'form.yaml'
+    assert main([*command, 'form', '-l', 'x', '-o', str(path)]) == 0
     fields = yaml.safe_load(path.read_text())
-    path.write_text(yaml.safe_dump(fields | {'outputs': ['total']}))
+    path.write_text(
+        yaml.safe_dump(fields | {'owner': 'Anna', 'contact_email': 'anna@example.org'})
+    )
+    assert main([*command, 'form', '-l', 'x', str(path)]) == 0
     return path
 
 
-def test_publish_form_says_the_outputs_and_defaults_to_the_principal_investigator(
-    publishing: list[str], capsys: pytest.CaptureFixture[str]
+def test_form_says_the_formats_and_outputs_and_names_no_owner_without_a_catalogue(
+    command: list[str], reduced_once: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main([*publishing, 'publish-form', '-l', 'x']) == 0
+    assert main([*command, 'form', '-l', 'x']) == 0
 
     text = capsys.readouterr().out
+    assert '# format: one of scipp-hdf5' in text
     assert '# outputs: some of total' in text
     fields = yaml.safe_load(text)
+    assert fields['format'] == 'scipp-hdf5'
+    assert fields['outputs'] == ['total']
+    assert fields['owner'] == ''
+
+
+def test_form_with_a_catalogue_defaults_to_the_principal_investigator(
+    publishing: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([*publishing, 'form', '-l', 'x']) == 0
+
+    fields = yaml.safe_load(capsys.readouterr().out)
     assert fields['owner'] == 'Ada Lovelace'
     assert fields['contact_email'] == 'ada@example.org'
-    assert fields['outputs'] == []
 
 
-def test_publish_keeps_the_form_and_writes_each_row_with_its_dataset(
+def test_form_keeps_the_form_of_a_file_and_says_it(
+    command: list[str], form: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    capsys.readouterr()
+
+    assert main([*command, 'form', '-l', 'x']) == 0
+
+    assert yaml.safe_load(capsys.readouterr().out) == yaml.safe_load(form.read_text())
+
+
+def test_a_form_file_that_is_not_a_form_is_refused(
+    command: list[str], reduced_once: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = reduced_once / 'form.yaml'
+    path.write_text('format: scipp-hdf5\ncolour: blue\n')
+
+    assert main([*command, 'form', '-l', 'x', str(path)]) == 2
+
+    assert f'{path}:' in capsys.readouterr().err
+
+
+def test_export_of_a_label_writes_by_the_first_writer_of_w(
+    command: list[str], reduced_once: Path
+) -> None:
+    out = reduced_once / 'out'
+    writers = ['-W', 'cli_toys_batch_files:WRITERS']
+
+    assert main([*command, *writers, 'export', '-l', 'x', str(out)]) == 0
+
+    assert sorted(p.name for p in (out / 'row-0').iterdir()) == [
+        '_record.json',
+        'total.txt',
+    ]
+    assert (out / 'row-0' / 'total.txt').read_text().startswith('x row-0: ')
+
+
+def test_export_of_a_label_again_after_a_format_change_leaves_only_the_new_files(
+    command: list[str], reduced_once: Path
+) -> None:
+    out = reduced_once / 'out'
+    writers = ['-W', 'cli_toys_batch_files:WRITERS']
+    path = reduced_once / 'form.yaml'
+    assert main([*command, *writers, 'export', '-l', 'x', str(out)]) == 0
+    assert main([*command, *writers, 'form', '-l', 'x', '-o', str(path)]) == 0
+    path.write_text(path.read_text().replace('format: text', 'format: scipp-hdf5'))
+    assert main([*command, *writers, 'form', '-l', 'x', str(path)]) == 0
+
+    assert main([*command, *writers, 'export', '-l', 'x', str(out)]) == 0
+
+    assert sorted(p.name for p in (out / 'row-0').iterdir()) == [
+        '_record.json',
+        'total.h5',
+    ]
+
+
+def test_export_of_a_label_does_not_contact_the_catalogue(
+    command: list[str], reduced_once: Path, scicat: FakeClient
+) -> None:
+    unreachable = ['-c', 'cli_toys_catalogue:unreachable']
+    out = reduced_once / 'out'
+
+    assert main([*command, *unreachable, 'export', '-l', 'x', str(out)]) == 0
+
+    assert (out / 'row-0' / 'total.h5').is_file()
+
+
+def test_a_kept_form_of_a_format_that_w_lacks_is_refused_naming_it(
+    command: list[str], reduced_once: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    writers = ['-W', 'cli_toys_batch_files:WRITERS']
+    path = reduced_once / 'form.yaml'
+    assert main([*command, *writers, 'form', '-l', 'x', '-o', str(path)]) == 0
+    assert main([*command, *writers, 'form', '-l', 'x', str(path)]) == 0
+
+    assert main([*command, 'export', '-l', 'x', str(reduced_once / 'out')]) == 2
+
+    assert 'no writer of the format text' in capsys.readouterr().err
+    assert not (reduced_once / 'out').exists()
+
+
+def test_w_that_names_no_writers_is_refused(
+    command: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit):
+        main([*command, '-W', 'cli_toys_batch_files:SOURCES', 'form', '-l', 'x'])
+
+    assert 'not a mapping of spec names' in capsys.readouterr().err
+
+
+def test_publish_writes_each_row_with_its_dataset(
     publishing: list[str], form: Path, folder: Path, scicat: FakeClient
 ) -> None:
     out = folder / 'published.csv'
-    publish = ['publish', '-l', 'x', '--form', str(form), 'row-0', '-o', str(out)]
 
-    assert main([*publishing, *publish]) == 0
+    assert main([*publishing, 'publish', '-l', 'x', 'row-0', '-o', str(out)]) == 0
 
     [pid] = scicat.datasets
     written = read_text(out)
     assert list(written['key']) == ['row-0']
     assert list(written['published']) == [f'pid:{pid}']
     assert scicat.get_dataset(pid).name == 'x row-0'
-    assert main([*publishing, 'publish', '-l', 'x', 'row-1']) == 0  # the form kept
-    assert len(scicat.datasets) == 2
+    assert scicat.get_dataset(pid).owner == 'Anna'
 
 
 def test_a_result_published_already_is_refused_and_uploads_nothing(
@@ -97,7 +205,7 @@ def test_a_result_published_already_is_refused_and_uploads_nothing(
     scicat: FakeClient,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    publish = [*publishing, 'publish', '-l', 'x', '--form', str(form), 'row-0']
+    publish = [*publishing, 'publish', '-l', 'x', 'row-0']
     assert main(publish) == 0
 
     assert main([*publish, 'row-1']) == 2
@@ -106,24 +214,13 @@ def test_a_result_published_already_is_refused_and_uploads_nothing(
     assert len(scicat.datasets) == 1
 
 
-def test_a_form_file_that_is_not_a_form_is_refused(
-    publishing: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    path = folder / 'form.yaml'
-    path.write_text('outputs: [total]\ncolour: blue\n')
-
-    assert main([*publishing, 'publish', '-l', 'x', '--form', str(path)]) == 2
-
-    assert f'{path}:' in capsys.readouterr().err
-
-
 def test_an_upload_that_fails_exits_with_1_and_is_not_kept_as_published(
     publishing: list[str],
     form: Path,
     scicat: FakeClient,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    publish = [*publishing, 'publish', '-l', 'x', '--form', str(form), 'row-0']
+    publish = [*publishing, 'publish', '-l', 'x', 'row-0']
     scicat.disabled['create_dataset_model'] = RuntimeError('SciCat is down')
 
     assert main(publish) == 1
@@ -137,7 +234,7 @@ def test_an_upload_that_fails_exits_with_1_and_is_not_kept_as_published(
     ('arguments', 'said'),
     [
         (['publish', '-l', 'x', 'row-0'], 'publish needs -c/--catalogue'),
-        (['-c', 'm:f', 'publish', '-l', 'x'], 'give a KEY to publish, or --form'),
+        (['-c', 'm:f', 'publish', '-l', 'x'], 'the following arguments are required'),
     ],
 )
 def test_publish_without_a_catalogue_or_anything_to_do_is_refused(
@@ -159,7 +256,7 @@ def test_show_says_which_results_are_published_without_a_catalogue(
     scicat: FakeClient,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert main([*publishing, 'publish', '-l', 'x', '--form', str(form), 'row-0']) == 0
+    assert main([*publishing, 'publish', '-l', 'x', 'row-0']) == 0
     capsys.readouterr()
 
     assert main([*command, '--json', 'show', '-l', 'x']) == 0

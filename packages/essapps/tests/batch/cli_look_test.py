@@ -64,13 +64,10 @@ def test_main_exports_the_files_of_a_table_that_it_reduced(
         [*command, 'export', str(done), str(folder / 'reduced'), '-o', str(files)]
     )
 
-    result = read_text(files)
     assert code == 0
-    assert list(result['total']) == [
-        str(folder / 'reduced' / 'row-0' / 'total.h5'),
-        '',
-    ]
-    assert Path(result.loc[0, 'total']).is_file()
+    assert read_text(files).equals(read_text(done))
+    assert (folder / 'reduced' / 'row-0' / 'total.h5').is_file()
+    assert [p.name for p in (folder / 'reduced').iterdir()] == ['row-0']
 
 
 def test_the_rows_that_main_makes_read_the_corrections_kept_in_the_folder(
@@ -223,14 +220,14 @@ def test_the_template_of_a_batch_holds_its_settings(
 def test_export_of_a_label_writes_the_outputs_of_its_rows_as_they_stand(
     command: list[str], reduced_once: Path
 ) -> None:
-    out = reduced_once / 'exported.csv'
+    out = reduced_once / 'out'
 
-    code = main(
-        [*command, 'export', '-l', 'x', str(reduced_once / 'out'), '-o', str(out)]
-    )
+    assert main([*command, 'export', '-l', 'x', str(out)]) == 0
 
-    assert code == 0
-    assert [Path(p).is_file() for p in read_text(out)['total']] == [True, True]
+    assert [(out / k / 'total.h5').is_file() for k in ('row-0', 'row-1')] == [
+        True,
+        True,
+    ]
 
 
 def test_the_rows_that_main_makes_from_the_files_are_a_table_to_reduce(

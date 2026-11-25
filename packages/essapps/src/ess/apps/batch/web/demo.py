@@ -339,7 +339,7 @@ def build(
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows, and the tab "Publish"
+    every ``interval`` seconds while a batch follows, and the button "Publish"
     if given a ``catalogue``. If no batch is listed,
     a batch of the samples there are is made, with a column of thickness, so
     also at a start after a person removed the last one.
@@ -362,11 +362,6 @@ def build(
         ]
         return plots.figure(curves, quantity='I(Q)')
 
-    publisher = None
-    if catalogue is not None:
-        from ..publish import Publisher
-
-        publisher = Publisher(intake.manager, catalogue)
     pages = Pages(
         intake,
         interval=interval,
@@ -375,7 +370,7 @@ def build(
         files=files,
         marks=Marks,
         folder=folder,
-        publisher=publisher,
+        catalogue=catalogue,
     )
     return create_app(pages)
 

@@ -128,6 +128,19 @@ def batch(client: Client) -> Iterator[Batch]:
 
 
 @pytest.fixture
+def done_batch(fake: FakeFiles, client: Client, manager: BatchManager) -> Batch:
+    """The batch Morning of two rows, water (1) and sample A (2), both reduced."""
+    for run, name in [(1, 'water'), (2, 'sample A')]:
+        fake.measure(run, float(run), role='sample', sample=name, pid=f'20.500/s{run}')
+        fake.measure(run + 1000, 1.0, role='transmission', sample=name)
+    batch = manager.create(
+        'plain', title='Morning', description='2 mm cells', rows=toys.rows(client)
+    )
+    client.wait(list(batch.reduce(['1', '2']).values()))
+    return batch
+
+
+@pytest.fixture
 def definitions(tmp_path: Path) -> FolderDefinitions:
     return FolderDefinitions(tmp_path / 'workspace')
 
@@ -232,7 +245,9 @@ def table() -> pd.DataFrame:
     )
 
 
-MODULE = '''
+MODULE = (
+    f'from {toys.__name__} import TEXT\n'
+    + '''
 import os
 import signal
 from typing import Annotated
@@ -342,6 +357,9 @@ UPGRADED = [
 STAGING = [StagedFunction(SPEC, _reduce), function_binding(FIND, _find)]
 
 
+WRITERS = {'cli-toy': [TEXT]}
+
+
 def pair(files):
     rows = [
         {'key': str(run := f.metadata['run']), 'run': int(run), 'sample': str(f.ref)}
@@ -367,6 +385,7 @@ REFUSING = {
     )
 }
 '''
+)
 
 
 @pytest.fixture

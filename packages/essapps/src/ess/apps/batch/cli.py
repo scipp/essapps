@@ -8,11 +8,13 @@ Each row of the batch table is one reduction, such as of one sample run; the
 template holds the settings that the rows share.
 
 The options before the command name the folder, the bindings (the reductions
-that the folder runs) and the row sources (which make rows from the files);
-publish-form and publish also need the catalogue (-c), a function from the
-proposal (--proposal) to the catalogue, which needs the extra scicat:
+that the folder runs), the row sources (which make rows from the files) and
+the writers of the specs (the file formats of the results, beside scipp
+HDF5); publish also needs the catalogue (-c), a function from the proposal
+(--proposal) to the catalogue, which needs the extra scicat:
 
-    B="essapps-batch -w FOLDER -b package.module:BINDINGS -s package.module:SOURCES"
+    B="essapps-batch -w FOLDER -b package.module:BINDINGS -s package.module:SOURCES
+       -W package.module:WRITERS"
 
 A first session, in this order; each command has its own --help:
 
@@ -32,11 +34,12 @@ A first session, in this order; each command has its own --help:
     $B show -l water              # the batch table of water, with each row's status
     $B reduce -l water --remaining       # reduce the rows that are not done
     $B template -l water -o now.yaml     # the settings of water, as a template
-    $B export -l water results    # write the outputs of the rows of water
-    $B -c package.module:CATALOGUE publish-form -l water -o form.yaml
-                                  # the form of the datasets of water in SciCat
-    $B -c package.module:CATALOGUE publish -l water --form form.yaml KEY...
-                                  # keep the form; publish the results of KEY...
+    $B form -l water -o form.yaml # how the results of water are written: the
+                                  # format, and what is said of them
+    $B form -l water form.yaml    # keep the form edited
+    $B export -l water results    # write the results of the rows of water
+    $B -c package.module:CATALOGUE publish -l water KEY...
+                                  # publish the results of KEY... to SciCat
     $B offered -l water           # the rows of the row source that water lacks
     $B take -l water KEY...       # put those rows into water; reduces nothing
     $B follow -l water --steps 3  # add and reduce the rows that arrive: 3 steps,
@@ -154,18 +157,21 @@ from ..folder import (
     scan_folder,
 )
 from ..records import Record, Status
+from ..writers import Writer
 from . import frames
 from .corrections import CorrectedFiles
 from .definition import FolderDefinitions, NotKept
-from .export import export_table
+from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
 from .manager import BatchManager
 from .reduction import Batch
 from .source import Range, RowSource
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template, settings_text, template_to_fill
+from .writing import Writing, load_form
 
 if TYPE_CHECKING:
+    from ..scicat import Catalogue
     from .publish import Publisher
 
 
@@ -222,6 +228,21 @@ def _sources(name: str) -> Mapping[str, RowSource]:
     return sources
 
 
+def _writers(name: str) -> Mapping[str, Sequence[Writer]]:
+    """The writers by spec that ``name`` names; ``_Wrong`` if other things."""
+    writers = _named(name)
+    if not isinstance(writers, Mapping) or not all(
+        isinstance(given, Sequence) and all(isinstance(w, Writer) for w in given)
+        for given in writers.values()
+    ):
+        raise _Wrong(
+            f'{name} is a {type(writers).__name__}, not a mapping of spec names '
+            'to lists of writers (ess.apps.writers.Writer), such as '
+            'package.module:WRITERS'
+        )
+    return writers
+
+
 def _catalogue(name: str) -> Callable[[str], Any]:
     """The function that ``name`` names; ``_Wrong`` if it names something else."""
     make = _named(name)
@@ -233,16 +254,16 @@ def _catalogue(name: str) -> Callable[[str], Any]:
     return make
 
 
-def _publisher(given: _Given) -> Publisher:
+def _the_catalogue(given: _Given) -> Catalogue | None:
     """
-    The publisher of the folder, to the catalogue that the function of
-    ``--catalogue`` gives for the proposal; ``_Wrong`` if it gives another
-    thing.
+    The catalogue that the function of ``--catalogue`` gives for the
+    proposal, ``None`` without one; ``_Wrong`` if it gives another thing.
     """
-    from ..scicat import Catalogue  # the extra scicat
-    from .publish import Publisher
-
     args = given.args
+    if args.catalogue is None:
+        return None
+    from ..scicat import Catalogue  # the extra scicat
+
     try:
         catalogue = _catalogue(args.catalogue)(args.proposal)
     except Exception as error:  # a real catalogue logs in, and may fail to
@@ -252,7 +273,31 @@ def _publisher(given: _Given) -> Publisher:
             f'{args.catalogue} gave a {type(catalogue).__name__}, not a catalogue '
             '(ess.apps.scicat.Catalogue)'
         )
-    return Publisher(given.manager(), catalogue)
+    return catalogue
+
+
+def _writing(given: _Given, catalogue: Catalogue | None) -> Writing:
+    """
+    The writing of the folder, with the writers of ``-W``; the owner and
+    contact of a form not set are the principal investigator of the
+    proposal, as ``catalogue`` says, if given.
+    """
+    contact = None
+    if catalogue is not None:
+        from ..scicat import principal_investigator
+
+        contact = principal_investigator(catalogue, given.client.proposal)
+    return Writing(given.manager(), given.writers, contact)
+
+
+def _publisher(given: _Given) -> Publisher:
+    """The publisher of the folder, to the catalogue of ``--catalogue``."""
+    from .publish import Publisher
+
+    catalogue = _the_catalogue(given)
+    if catalogue is None:
+        raise _Wrong('publish needs -c/--catalogue')
+    return Publisher(_writing(given, catalogue), catalogue)
 
 
 def _existing(text: str) -> Path:
@@ -266,12 +311,14 @@ def _existing(text: str) -> Path:
 @dataclass(frozen=True)
 class _Given:
     """
-    What a command runs with: its arguments, the row sources by name, and the
-    client and definitions of the folder, if the command opens it.
+    What a command runs with: its arguments, the row sources by name, the
+    writers by spec name, and the client and definitions of the folder, if
+    the command opens it.
     """
 
     args: argparse.Namespace
     sources: Mapping[str, RowSource]
+    writers: Mapping[str, Sequence[Writer]]
     folder: tuple[Client, FolderDefinitions] | None = None
 
     @property
@@ -535,10 +582,14 @@ def _reduced(result: pd.DataFrame) -> int:
 
 
 def _export(given: _Given) -> pd.DataFrame:
-    """Write the outputs of the rows of a table, or of a batch as it stands."""
+    """
+    Write the results of the rows of a table as scipp HDF5, or of a batch as
+    it stands by its form; the table.
+    """
     args = given.args
     if args.label is not None:
         table = _show(given)
+        write, _ = Writing(given.manager(), given.writers).by_form(args.label)
     else:
         table = read_text(args.table)
         if KEY not in table.columns:
@@ -546,33 +597,34 @@ def _export(given: _Given) -> pd.DataFrame:
                 f'{args.table}: no column {KEY}, so reduce did not write it'
             )
         table = table.set_index(KEY)
-    return export_table(given.client, table, args.directory)
+        write = by_writer(given.client)
+    export_table(given.client, table, args.directory, write)
+    return table
 
 
-def _publish_form(given: _Given) -> str:
-    """The form of a batch, as YAML to edit and give to publish."""
-    publisher = _publisher(given)
-    return publisher.form_text(_known(publisher.manager, given.args.label))
+def _form(given: _Given) -> str:
+    """Keep the form of a file, if given; the form of a batch, as YAML."""
+    args = given.args
+    writing = _writing(given, _the_catalogue(given))
+    label = _known(writing.manager, args.label)
+    if args.file is not None:
+        writing.set_form(label, load_form(args.file))
+    return writing.form_text(label)
 
 
 def _publish(given: _Given) -> pd.DataFrame:
-    """
-    Keep the form given, then publish the rows of the keys given; those rows,
-    as ``show`` writes them.
-    """
-    from .publish import UploadFailed, load_form
+    """Publish the rows of the keys given; those rows, as ``show`` writes them."""
+    from .publish import UploadFailed
 
     args = given.args
     publisher = _publisher(given)
-    label = _known(publisher.manager, args.label)
-    if args.form is not None:
-        publisher.set_form(label, load_form(args.form))
+    manager = publisher.writing.manager
+    label = _known(manager, args.label)
     try:
-        if args.keys:
-            publisher.publish(label, args.keys)
+        publisher.publish(label, args.keys)
     except UploadFailed as error:
         raise _Failed(f'not published: {error}') from None
-    return _table(given.client, publisher.manager.batch(label), args.keys)
+    return _table(given.client, manager.batch(label), args.keys)
 
 
 def _offered(given: _Given) -> pd.DataFrame:
@@ -973,20 +1025,24 @@ def _take_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
+def _form_arguments(command: argparse.ArgumentParser) -> None:
+    _label(command, required=True, help='the label of the batch')
+    command.add_argument(
+        'file',
+        metavar='FILE',
+        type=_existing,
+        nargs='?',
+        help='a form, YAML, as the command writes it, to keep for the batch',
+    )
+
+
 def _publish_arguments(command: argparse.ArgumentParser) -> None:
     _label(command, required=True, help='the label of the batch')
     command.add_argument(
         'keys',
         metavar='KEY',
-        nargs='*',
+        nargs='+',
         help='the key of a row whose result to publish: done, or earlier',
-    )
-    command.add_argument(
-        '--form',
-        type=_existing,
-        metavar='FILE',
-        help='a form, YAML (see the command publish-form), to keep for the '
-        'batch before publishing',
     )
 
 
@@ -1043,12 +1099,6 @@ def _one_of(first: str, second: str) -> Callable[[argparse.Namespace], str | Non
 def _with_catalogue(name: str) -> Callable[[argparse.Namespace], str | None]:
     """A check that -c/--catalogue is given to the command ``name``."""
     return lambda args: None if args.catalogue else f'{name} needs -c/--catalogue'
-
-
-def _publish_check(args: argparse.Namespace) -> str | None:
-    if not (args.keys or args.form):
-        return 'give a KEY to publish, or --form, or both'
-    return _with_catalogue('publish')(args)
 
 
 def _reduce_check(args: argparse.Namespace) -> str | None:
@@ -1149,36 +1199,39 @@ _COMMANDS = {
         check=_reduce_check,
         status=_reduced,
     ),
+    'form': _Command(
+        _form,
+        description='Keep the form FILE for the batch of LABEL, if given; then '
+        'write the form of the batch as YAML, to edit and give back: the format '
+        'that export -l, publish and the page write the results as, the outputs '
+        'that a format which writes those chosen writes, and the name, '
+        'description, keywords, owner and contact email of the results. Until a '
+        'form is kept, the format is the first that -W gives for the spec, else '
+        'scipp HDF5, and with -c the owner and contact are the principal '
+        'investigator of the proposal, as the catalogue says.',
+        arguments=_form_arguments,
+        output='text',
+    ),
     'export': _Command(
         _export,
-        description='Write the outputs of each done row of the table file '
-        'TABLE, or of the batch of LABEL as it stands, to a folder of its key in '
-        'DIRECTORY, and those rows with the path of each output.',
+        description='Write the result of each done row of the table file '
+        'TABLE, each output as scipp HDF5, or of the batch of LABEL as it '
+        'stands, as its form says, to a folder of its key in DIRECTORY, with '
+        'the record as _record.json; and write the rows.',
         arguments=_export_arguments,
         check=_one_of('table', 'label'),
     ),
-    'publish-form': _Command(
-        _publish_form,
-        description='Write the form of the batch of LABEL as YAML, to edit and '
-        'give to publish --form: the outputs that each dataset holds, its '
-        'name, description, keywords, owner and contact email. Until a form '
-        'is kept, the owner and contact are the principal investigator of the '
-        'proposal, as the catalogue says.',
-        arguments=_show_arguments,
-        check=_with_catalogue('publish-form'),
-        output='text',
-    ),
     'publish': _Command(
         _publish,
-        description='Keep the form FILE for the batch of LABEL, if given; then '
-        'publish the result of the row of each KEY to the catalogue as one '
-        'derived dataset, as the form says, and write those rows as show does, '
+        description='Publish the result of the row of each KEY of the batch of '
+        'LABEL to the catalogue as one derived dataset, with the files that '
+        'its form says, and write those rows as show does, '
         'with the catalogue identifier in the column published. A result is '
         'published once; '
         'a new result of the row is a new dataset. If an upload fails, the '
         'rows published before it stay published, and the error names them.',
         arguments=_publish_arguments,
-        check=_publish_check,
+        check=_with_catalogue('publish'),
     ),
     'offered': _Command(
         _offered,
@@ -1263,7 +1316,15 @@ def _parser() -> argparse.ArgumentParser:
         '--catalogue',
         metavar='MODULE:NAME',
         help='a function from the proposal to the catalogue to publish to '
-        '(ess.apps.scicat.Catalogue), for publish-form and publish',
+        '(ess.apps.scicat.Catalogue), for publish; form takes the owner and '
+        'contact of a form not set from it',
+    )
+    parser.add_argument(
+        '-W',
+        '--writers',
+        metavar='MODULE:NAME',
+        help='the writers of the specs: a mapping of spec name to a list of '
+        'writers (ess.apps.writers.Writer), for form, export -l and publish',
     )
     parser.add_argument(
         '--json',
@@ -1350,7 +1411,9 @@ def _opened(given: _Given, command: _Command) -> _Result:
     except RuntimeError as error:  # another process holds the folder
         raise _Failed(str(error)) from None
     with client:
-        return command.run(_Given(args, given.sources, (client, definitions)))
+        return command.run(
+            _Given(args, given.sources, given.writers, (client, definitions))
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1364,6 +1427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.output.suffix not in suffixes:
                 raise _Wrong(f'{args.output}: write a file of {", ".join(suffixes)}')
         sources = {} if args.sources is None else _sources(args.sources)
+        writers = {} if args.writers is None else _writers(args.writers)
         if (wrong := command.check(args)) is not None:
             raise _Wrong(wrong)
         if args.catalogue is not None:
@@ -1373,7 +1437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source = getattr(args, 'source', None)
         if source is not None and source not in sources:
             raise _Wrong(not_registered(source, sources))
-        given = _Given(args, sources)
+        given = _Given(args, sources, writers)
         result = _opened(given, command) if command.folder else command.run(given)
     except _Wrong as error:
         parser.error(str(error))

@@ -16,10 +16,11 @@ the workspace::
     used_software       the Python packages installed now (installed_software)
     scientific_metadata the spec, the request and the record's ID
 
-A person gives the rest as :class:`About`. :class:`Catalogue` says where to
-publish: a ``scitacean.Client``, real or ``scitacean.testing.client.FakeClient``,
-with its file transfer. Whether the files are copied on a shared file system
-or sent over SFTP is the choice of that transfer, not of this module.
+A person gives the rest as :class:`~ess.apps.writers.About`. :class:`Catalogue`
+says where to publish: a ``scitacean.Client``, real or
+``scitacean.testing.client.FakeClient``, with its file transfer. Whether the
+files are copied on a shared file system or sent over SFTP is the choice of
+that transfer, not of this module.
 
 The software is that of the process that publishes, not of the one that
 reduced, since a record names no software versions: correct while one
@@ -35,8 +36,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel
-
 try:
     from scitacean import PID, Dataset, RemotePath
     from scitacean import Client as ScicatClient
@@ -47,6 +46,7 @@ except ModuleNotFoundError as error:
 
 from .client import Client
 from .records import Record
+from .writers import About, Person
 
 _PID_PREFIX = 'pid:'
 
@@ -73,24 +73,6 @@ class Catalogue:
     client: ScicatClient
     instrument: str
     folder: str = '/ess/data/{proposal}/{instrument}/upload/{record}'
-
-
-class About(BaseModel, frozen=True):
-    """What a person says of a dataset; the rest is read from the record."""
-
-    name: str
-    owner: str
-    contact_email: str
-    description: str = ''
-    keywords: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class Person:
-    """A person as the catalogue names one: a name and an email."""
-
-    name: str
-    email: str
 
 
 def principal_investigator(catalogue: Catalogue, proposal: str) -> Person | None:
@@ -129,11 +111,14 @@ def publish(
     record: Record,
     files: Sequence[Path],
     about: About,
+    format: str,
 ) -> str:
     """
-    Upload ``files``, written from ``record``, as a new derived dataset, and
+    Upload ``files``, written from ``record`` in ``format``, the name of a
+    writer (:class:`ess.apps.writers.Writer`), as a new derived dataset, and
     return its catalogue identifier, as ``pid:<pid>`` like the files a record
-    names (ADR 0010).
+    names (ADR 0010). The dataset keeps the format, since files of different
+    formats may have the same names, such as ``iofq.h5``.
 
     Raises what the SciCat client raises, such as ``pydantic.ValidationError``
     for a dataset that lacks a required field.
@@ -165,6 +150,7 @@ def publish(
         meta={
             'spec': str(record.spec),
             'record': record.id,
+            'format': format,
             'request': record.request.model_dump(mode='json', by_alias=True),
             'other_inputs': [i for i in identities if not _is_pid(i)],
         },

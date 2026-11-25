@@ -4,75 +4,60 @@
 The files that a person takes away from a batch. It needs pandas, scipp, and h5py.
 
 :func:`export_table` takes the table that :func:`.frames.reduce_table` returned,
-indexed by key, and writes the outputs of each completed row to a folder named
-by its key. It finds a row's outputs by the ``record`` column, so it exports
-what the table says, also after later reductions under the same label.
-
-The files are those of :mod:`ess.apps.hdf5`, a placeholder for the formats of
-the techniques, such as NXcanSAS, each of which needs a writer for the type of
-its output.
+indexed by key, and writes the result of each completed row to a folder named
+by its key, with a :data:`RowWriter`: by the form of the batch
+(:meth:`.writing.Writing.by_form`), or with one writer (:func:`by_writer`),
+such as scipp HDF5 for a table that names no batch. It finds a row's
+result by the ``record`` column, so it exports what the table says, also after
+later reductions under the same label.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import shutil
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import pandas as pd
 
-from .. import hdf5
+from .. import writers
 from ..client import Client
 from ..records import Record, Status
-from .table import RESULT
+from ..writers import SCIPP_HDF5, About, Writer
 
-RECORD_FILE = '_record.json'
-"""The file of the record in the folder of a row; no output is named so."""
+type RowWriter = Callable[[str, Record, Path], None]
+"""Writes the result of the row of a key, its record, into a new folder."""
 
 
-def write_outputs(
-    client: Client,
-    record: Record,
-    directory: Path,
-    names: Sequence[str] | None = None,
-) -> dict[str, Path]:
+def by_writer(client: Client, writer: Writer = SCIPP_HDF5) -> RowWriter:
     """
-    Write each output of ``names``, or every output, that a completed
-    ``record`` returned to ``directory``, and the record itself, which names
-    the files and the values they were computed from. It names a file by its
-    identity: its catalogue identifier, or its path, relative to the
-    workspace's folder if the file is in it::
-
-        iofq.h5            what scipp.io.load_hdf5 reads (see ess.apps.hdf5)
-        _record.json       the record
-
-    Returns the path of each output's file by its name.
+    Writes the result of a row with ``writer``, named by the key of the row;
+    a writer that writes the outputs chosen writes each output that the
+    record returned.
     """
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / RECORD_FILE).write_text(record.model_dump_json(indent=2))
-    paths = {}
-    values = (
-        client.output(record)
-        if names is None
-        else {name: client.output(record, name) for name in names}
+    return lambda key, record, directory: writers.write(
+        client,
+        record,
+        writer,
+        About(name=key),
+        directory,
+        client.readable([record])[0],
     )
-    for name, value in values.items():
-        paths[name] = directory / f'{name}.h5'
-        hdf5.write(value, paths[name])
-    return paths
 
 
-def export_table(client: Client, table: pd.DataFrame, directory: Path) -> pd.DataFrame:
+def export_table(
+    client: Client, table: pd.DataFrame, directory: Path, write: RowWriter
+) -> None:
     """
-    Write the outputs of each row of ``table``, indexed by key, whose record
-    completed to ``directory / key`` (see :func:`write_outputs`), and return
-    the table with a column for each output, which holds the path of its file,
-    empty for a row that has none. A column of the table that is named as an
-    output is replaced, as one of an earlier export is.
+    Write the result of each row of ``table``, indexed by key, whose record
+    completed to ``directory / key`` with ``write``, replacing that folder
+    whole: each row is written into a temporary folder in ``directory``
+    first, so that a row that fails leaves the folder of its key as it was.
 
     Raises ``ValueError`` if the table has no ``record`` column, names a record
-    that the workspace lacks, has a key twice, a key that is not the name of a
-    folder, such as one with ``/``, or an output named as the index or a
-    column that reduce adds; nothing is written.
+    that the workspace lacks, has a key twice, or a key that is not the name of
+    a folder, such as one with ``/``; nothing is written.
     """
     if 'record' not in table:
         raise ValueError('the table has no column record: reduce it first')
@@ -88,13 +73,12 @@ def export_table(client: Client, table: pd.DataFrame, directory: Path) -> pd.Dat
         raise ValueError(f'the workspace has no record {error.args[0]}') from None
     status = dict(zip((r.id for r in records), client.status(records), strict=True))
     by_id = {r.id: r for r in records if status[r.id] is Status.COMPLETED}
-    names = dict.fromkeys(n for r in records for n in r.outputs)
-    if taken := sorted(names.keys() & {table.index.name, *RESULT}):
-        raise ValueError(f'an output is named as a column: {", ".join(taken)}')
-    paths = {
-        key: write_outputs(client, by_id[i], directory / key)
-        for key, i in ids.items()
-        if i in by_id
-    }
-    added = {n: [str(paths.get(k, {}).get(n, '')) for k in keys] for n in names}
-    return table.drop(columns=added.keys(), errors='ignore').assign(**added)
+    directory.mkdir(parents=True, exist_ok=True)
+    for key, i in ids.items():
+        if i in by_id:
+            with tempfile.TemporaryDirectory(dir=directory) as temporary:
+                written = Path(temporary) / key
+                write(key, by_id[i], written)
+                if (directory / key).exists():
+                    shutil.rmtree(directory / key)
+                written.rename(directory / key)
