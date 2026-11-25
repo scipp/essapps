@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 import scipp as sc
-from ess import sans
 from ess.instruments.loki.specs import BeamCentre, Corrections
 from ess.loki import data
 from ess.loki.larmor_workflow import LokiAtLarmorWorkflow
@@ -16,6 +15,7 @@ from ess.sans.types import (
     DirectBeamFilename,
     EmptyBeamRun,
     Filename,
+    PixelMaskFilenames,
     QBins,
     ReturnEvents,
     SampleRun,
@@ -152,5 +152,5 @@ def plain_esssans_iofq(
         data.loki_tutorial_run_60392()
     )
     workflow[Filename[EmptyBeamRun]] = str(data.loki_tutorial_run_60392())
-    workflow = sans.with_pixel_mask_filenames(workflow, [str(mask_file)])
+    workflow[PixelMaskFilenames] = [str(mask_file)]
     return workflow.compute(BackgroundSubtractedIofQ)

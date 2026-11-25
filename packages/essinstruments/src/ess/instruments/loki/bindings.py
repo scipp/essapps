@@ -3,11 +3,11 @@
 """
 The bindings of LoKI's specs over esssans, for the LoKI detector test at Larmor.
 
-The detector, the masks, and the beam centre are functions, since esssans builds its
-masks by changing a pipeline, and its beam-centre finder takes a pipeline. Those that
-read the detector give esssans what the detector holds in place of the file. I(Q) is a
-pipeline, so that it serves stages. Its masks are a value given to the pipeline,
-which replaces the provider of esssans that reads them from a file and the
+The detector, the masks, and the beam centre are functions, since the masks and the
+beam centre read the detector, and esssans' beam-centre finder takes a pipeline. Those
+that read the detector give esssans what the detector holds in place of the file.
+I(Q) is a pipeline, so that it serves stages. Its masks are a value given to the
+pipeline, which replaces the provider of esssans that reads them from a file and the
 sample run.
 """
 
@@ -28,14 +28,16 @@ from ess.sans.types import (
     BeamCenter,
     CorrectedDetector,
     CorrectForGravity,
-    DetectorIDs,
     DetectorMasks,
     DirectBeam,
     DirectBeamFilename,
     EmptyBeamRun,
+    EmptyDetector,
     Filename,
     Measurement,
+    NeutronSourcePosition,
     Numerator,
+    PixelMaskFilenames,
     Position,
     QBins,
     ReturnEvents,
@@ -110,7 +112,7 @@ def load_detector(params: CalibratedDetectorParams) -> CalibratedDetectorOutputs
     workflow[DetectorMasks] = {}
     detector = CorrectedDetector[SampleRun, Numerator]
     sample = Position[snx.NXsample, SampleRun]
-    source = Position[snx.NXsource, SampleRun]
+    source = NeutronSourcePosition[SampleRun]
     values = workflow.compute((detector, sample, source))
     counts = values[detector].bins.sum()
     return CalibratedDetectorOutputs(
@@ -123,19 +125,14 @@ def load_detector(params: CalibratedDetectorParams) -> CalibratedDetectorOutputs
 
 
 def compute_masks(params: MasksParams) -> MasksOutputs:
-    names = [path.name for path in params.mask_files]
-    if len(set(names)) < len(names):
-        # Masks are named by file, so that one mask would replace the other.
-        raise ValueError(f'mask files with the same name: {sorted(names)}')
     masks: dict[str, sc.Variable] = {}
     if params.mask_files:
+        # esssans names a mask of detector IDs by its file name, and refuses two
+        # files of the same name, since one mask would replace the other.
         workflow = _workflow()
-        workflow[DetectorIDs] = params.detector.counts.coords['detector_number']
-        # esssans names each mask by the path of its file, which differs by host.
-        by_path = sans.with_pixel_mask_filenames(
-            workflow, [str(path) for path in params.mask_files]
-        ).compute(DetectorMasks)
-        masks = {Path(path).name: mask for path, mask in by_path.items()}
+        workflow[EmptyDetector[SampleRun]] = params.detector.counts
+        workflow[PixelMaskFilenames] = [str(path) for path in params.mask_files]
+        masks = dict(workflow.compute(DetectorMasks))
     return MasksOutputs(masks=PixelMasks(masks=masks))
 
 
@@ -146,7 +143,7 @@ def find_beam_centre(params: BeamCentreParams) -> BeamCentreOutputs:
         raise ValueError('no counts outside the masks to find a beam centre from')
     workflow = _workflow()
     workflow[Position[snx.NXsample, SampleRun]] = counts.coords['sample_position']
-    workflow[Position[snx.NXsource, SampleRun]] = counts.coords['source_position']
+    workflow[NeutronSourcePosition[SampleRun]] = counts.coords['source_position']
     # The finder sums the dimensions that the positions lack, and else expects events.
     workflow[CorrectedDetector[SampleRun, Numerator]] = sc.concat([counts], 'summed')
     centre = sans.beam_center_from_center_of_mass(workflow).to(unit='m')
