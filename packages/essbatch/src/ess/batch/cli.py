@@ -63,6 +63,20 @@ detector, and mask_files a list of one file, by its path in files.csv: reduce
 the detector first, under a label of its own. The template that "template SPEC"
 writes says how to write each kind of value.
 
+files.csv says what each file is: its run, kind, role, sample. No raw file,
+and no SciCat dataset, says the role of its run, so a person adds it, in one
+of two ways:
+    a run table   keep the roles in a table of your own, a row per run, and
+                  write files.csv anew from it whenever runs arrive:
+                  "files ... --with runs.xlsx -o files.csv". files.csv is then
+                  made, never edited, and nothing written in it by hand lasts.
+    by hand       write files.csv once, "files ... -o files.csv", and add a
+                  column role to it. files then refuses to write over it, so
+                  as not to lose what you added: a run that arrives later is
+                  a row you add by hand. Suits a set of runs that is complete.
+A run corrected on the page (its Runs view) keeps the correction in the folder,
+not in files.csv, and the commands see it too, either way.
+
 reduce on a label without a batch makes the batch: of the rows of --source, of
 a table file, or else of one row keyed by the label; on a label with a batch, a
 template replaces its settings and a table file its batch table. It reduces
