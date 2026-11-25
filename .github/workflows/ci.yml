@@ -21,7 +21,7 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: packages/*/pyproject.toml
-      - run: pip install -e packages/essspec[test] -e packages/essapps[test] -e packages/essinstruments[test]
+      - run: pip install -e packages/essspec[test] -e packages/essapps[test] -e packages/essbatch[test] -e packages/essinstruments[test]
       # The browser tests of the batch web page need Chromium and the page's
       # JavaScript libraries; they fail rather than skip when CI is set.
       - run: python -m playwright install chromium
@@ -30,6 +30,8 @@ jobs:
         working-directory: packages/essspec
       - run: python -m pytest -n auto
         working-directory: packages/essapps
+      - run: python -m pytest -n auto
+        working-directory: packages/essbatch
       # Without the tests on esssans' tutorial data: what a real reduction
       # computes is not what these packages are tested for, and the tests
       # together hold more memory than a hosted runner has.

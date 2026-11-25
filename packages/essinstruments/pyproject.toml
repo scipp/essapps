@@ -40,7 +40,8 @@ loki = [
 ]
 loki-app = [
     "essinstruments[loki]",
-    "essapps[panel,web]",
+    "essapps[panel]",
+    "essbatch[web]",
 ]
 test = [
     "essinstruments[loki-app]",

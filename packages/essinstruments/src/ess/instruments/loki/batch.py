@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The batches of I(Q) of LoKI, on the toolbox of :mod:`ess.apps.batch`. It
+The batches of I(Q) of LoKI, on the toolbox of :mod:`ess.batch`. It
 needs the extra ``[loki-app]``.
 
 A sample run is a row. The ``sample`` key of the metadata of its file names the
@@ -10,24 +10,23 @@ sample, and pairs the run with the transmission run of the same sample::
     {'file': 'run-1.nxs', 'run': 1, 'role': 'sample', 'sample': 'water'}
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
 
-:data:`SOURCES` gives an :class:`~ess.apps.batch.Intake`, and :data:`STAGED`
-a :class:`~ess.apps.batch.BatchManager`, the batches of I(Q). A batch without
+:data:`SOURCES` gives an :class:`~ess.batch.Intake`, and :data:`STAGED`
+a :class:`~ess.batch.BatchManager`, the batches of I(Q). A batch without
 a manager keeps nothing::
 
     Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS), staged=True)
 
-The command takes the sources as ``essapps-batch -s
+The command takes the sources as ``essbatch -s
 ess.instruments.loki.batch:SOURCES``, and a source by its name, such as
-``essapps-batch -s ... rows sample-runs``.
+``essbatch -s ... rows sample-runs``.
 """
 
 import sys
 from collections.abc import Sequence
 
 import pandas as pd
-
-from ess.apps.batch import FileInfo, RowSource
-from ess.apps.batch.table import KEY, cell_of
+from ess.batch import FileInfo, RowSource
+from ess.batch.table import KEY, cell_of
 
 from .specs import IOFQ
 

@@ -7,10 +7,9 @@ readable as stored, and a request may not reference its outputs.
 """
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
-import pandas as pd
 import pydantic
 import pytest
 import scipp as sc
@@ -25,7 +24,6 @@ from ess.apps import (
     SubmitError,
     Template,
 )
-from ess.apps.batch import Batch
 from ess.apps.folder import open_folder
 from ess.apps.log import Finished, Log, Started, Submitted
 from ess.apps.testing import kept_rows
@@ -378,32 +376,3 @@ def test_the_changes_after_a_restart_with_another_spec_are_those_before(
 
     with open_folder(folder, another) as client:
         assert client.changes() == before
-
-
-@pytest.fixture
-def batch_of(folder: Path) -> Callable[[list[Binding]], Batch]:
-    """A batch of row ``5`` of the folder reopened with the bindings given."""
-
-    def make(bindings: list[Binding]) -> Batch:
-        client = open_folder(folder, bindings)
-        rows = pd.DataFrame({'bins': [5]}, index=['5'])
-        return Batch(client, bindings[0].spec, label='c', rows=rows)
-
-    with open_folder(folder, WRITTEN) as client:
-        client.submit(CENTRE, params={'bins': 5}, label='c', member='5', persist=True)
-    return make
-
-
-@pytest.mark.parametrize('another', ['renamed', 'bumped'])
-def test_a_batch_shows_a_row_whose_result_is_of_another_spec_as_outdated(
-    batch_of: Callable[[list[Binding]], Batch], another: str
-) -> None:
-    batch = batch_of(OTHERS[another])
-    try:
-        Listing(batch.client)  # what the batch's views list
-        state = batch.state()['5']
-        assert state.record is not None
-        assert state.spec_changed
-        assert state.text == 'outdated'
-    finally:
-        batch.client.close()

@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from ess.batch import Batch, FileInfo, left_to_reduce, ready, rows_of
+from ess.batch.table import dtypes
 from ess.instruments.loki.batch import SAMPLE_RUNS, pair_by_sample
 from ess.instruments.loki.bindings import BINDINGS
 from ess.instruments.loki.specs import (
@@ -18,8 +20,6 @@ from ess.instruments.loki.specs import (
 )
 
 from ess.apps import Client, FolderFiles, file, local
-from ess.apps.batch import Batch, FileInfo, left_to_reduce, ready, rows_of
-from ess.apps.batch.table import dtypes
 from ess.spec import FileRef
 
 

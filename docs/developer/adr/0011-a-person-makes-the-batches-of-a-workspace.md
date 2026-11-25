@@ -6,7 +6,7 @@
 
 ## Context
 
-*Spec*, *record* and *binding* are the words of [README.md](../README.md); *row*, *key*, *result*, *template* and *outdated* are those of [batch.md, "Terms"](../../../packages/essapps/docs/batch.md#terms).
+*Spec*, *record* and *binding* are the words of [README.md](../README.md); *row*, *key*, *result*, *template* and *outdated* are those of [batch.md, "Terms"](../../../packages/essbatch/docs/batch.md#terms).
 These are used here:
 
 - A *workspace* is a `Client` (the specs it binds, the files, the records) and its definitions; for a folder workspace, one folder.
@@ -21,7 +21,7 @@ One batch per workspace leaves three things a person cannot do:
 
 1. **End a series.** If the settings change after lunch, every row of the morning reads `earlier`, reduced with earlier settings, and "Reduce them again" offers to reduce it with the new settings. Nothing says that those rows are finished.
 2. **Work on two sets of runs.** A person wants to reduce yesterday's runs again while the runs measured now are reduced as they arrive, and to look at one without stopping the other.
-3. **Give each row the output of another workflow.** A beam centre per sample needs two batches and a source written for the pair. A cell can name an output of another record ([batch.md, "Chains"](../../../packages/essapps/docs/batch.md#chains)), but the column is filled in code.
+3. **Give each row the output of another workflow.** A beam centre per sample needs two batches and a source written for the pair. A cell can name an output of another record ([batch.md, "Chains"](../../../packages/essbatch/docs/batch.md#chains)), but the column is filled in code.
 
 One batch also grows with its proposal: at 30 000 rows a state of the page takes 1.6 s and 18 MB ([#223](https://github.com/scipp/essapps/issues/223)).
 
@@ -51,7 +51,7 @@ manager.remove(label)
 - The manager holds the one `Batch` of each label in its process, since two writers of one definition lose each other's changes.
 - A person changes the title and the description. The spec is fixed when the batch is made; ADR 0012 says how the settings and the table change.
 - Removing a batch removes its definitions. Its records stay in the workspace, as all history does ([ADR 0004](0004-history-is-append-only-lists.md)).
-- The command `essapps-batch reduce --label` makes and reads its batch with the manager, so it shows in the list. A `Batch` made in code without the manager has no header and is not listed.
+- The command `essbatch reduce --label` makes and reads its batch with the manager, so it shows in the list. A `Batch` made in code without the manager has no header and is not listed.
 
 What the application gives once, and what a person chooses for each batch:
 
@@ -103,7 +103,7 @@ intake.step()                                            # one step of Follow on
 
 - Making a batch that follows, or `intake.follow(label)`, stops the batch that followed before, first, so at most one batch follows.
 - `Intake` keeps it in the definitions of the batch (`"follows"` in its `source.json`), so a restart resumes, and removing the batch that follows ends Follow, also for a batch made again with the label.
-- Whoever serves the pages owns the timer that calls `step`; without a page, the command `essapps-batch follow` does. `Intake` has no thread, no timer and no lock.
+- Whoever serves the pages owns the timer that calls `step`; without a page, the command `essbatch follow` does. `Intake` has no thread, no timer and no lock.
 - The workspace has one lock: every request of every page and each step take it, so the batches, the manager and the corrections change in one request at a time.
 
 ### A page shows one batch, named in its URL
@@ -163,7 +163,7 @@ If it is built, the labels and the URL change: a label per workflow, such as `20
 - A person ends a series by making the next batch. The settings of the batch before stay as they are, so its rows do not read `earlier` when the next series gets other settings.
 - A person looks at one batch while another runs. All batches share the workspace's queue, so a long reduction still delays the batch that follows (see Open).
 - Problem 3 stays as it is for batches made in code, and is not available for batches that a person makes.
-- Follow belongs to the application that serves all batches, or to the command `essapps-batch follow` while no application holds the folder. The application owns the timer, and steps the batch that follows under the lock of the pages.
+- Follow belongs to the application that serves all batches, or to the command `essbatch follow` while no application holds the folder. The application owns the timer, and steps the batch that follows under the lock of the pages.
 - Only the batch that follows lists its source at each step, so the cost of a step does not grow with the number of batches. A cache of the metadata of each file belongs in the file source, below the batches.
 - A batch that holds one series has tens to hundreds of rows, so the cost per row of [#223](https://github.com/scipp/essapps/issues/223) does not arise. The cost per file stays.
 - The preparatory reductions of LoKI (detector, masks) are batches without a source, with one row.

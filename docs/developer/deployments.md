@@ -61,10 +61,10 @@ flowchart TD
 ```
 
 The page holds only what it shows, and every rule is in the Python process.
-The command `essapps-batch` opens the same folder when the application is not running.
+The command `essbatch` opens the same folder when the application is not running.
 Two users of one proposal have two folders.
-The batch logic (`ess.apps.batch`), the command, and the batch of LoKI (`ess.instruments.loki.batch`) are implemented.
-The web page (`ess.apps.batch.web`) is experimental and runs as a demo.
+The batch logic (`ess.batch`), the command, and the batch of LoKI (`ess.instruments.loki.batch`) are implemented.
+The web page (`ess.batch.web`) is experimental and runs as a demo.
 
 ## Automatic reduction
 
@@ -89,7 +89,7 @@ The process holds a workspace for each proposal that has new files.
 It runs with no page open, and users find its results through SciCat, not by connecting to it.
 For the first release, the same process may run on a VISA machine ([requirements](../requirements/users.md)).
 A scientist who needs a variant of the automatic reduction runs a batch.
-Of this deployment, only Follow exists ([automatic-reduction.md](automatic-reduction.md)): `Intake` keeps which batch follows and the keys it has considered, its `step` calls `ess.apps.batch.auto.step` on that batch, and the timer of the batch page or the command `essapps-batch follow` calls `Intake.step` every few seconds.
+Of this deployment, only Follow exists ([automatic-reduction.md](automatic-reduction.md)): `Intake` keeps which batch follows and the keys it has considered, its `step` calls `ess.batch.auto.step` on that batch, and the timer of the batch page or the command `essbatch follow` calls `Intake.step` every few seconds.
 
 ## One proposal, several histories
 

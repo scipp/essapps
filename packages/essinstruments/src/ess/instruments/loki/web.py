@@ -2,12 +2,12 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The batch page of LoKI's I(Q) on a workspace folder, as a web page
-(:mod:`ess.apps.batch.web`). It needs the extra ``[loki-app]``::
+(:mod:`ess.batch.web`). It needs the extra ``[loki-app]``::
 
     python -m ess.instruments.loki.web FOLDER [--port 8000] [--interval SECONDS]
 
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`): its ``files.csv``
-says the run, role and sample of each file, as ``essapps-batch files`` writes
+says the run, role and sample of each file, as ``essbatch files`` writes
 it. A row is a sample run, paired with the transmission run of its sample
 (:func:`~.batch.pair_by_sample`). A start at which no batch is listed makes
 a batch from the source of sample runs, with the rows that have both runs
@@ -33,7 +33,7 @@ and a mask file of the folder, two templates::
 
 and two commands::
 
-    B="essapps-batch -w FOLDER -b ess.instruments.loki.bindings:BINDINGS"
+    B="essbatch -w FOLDER -b ess.instruments.loki.bindings:BINDINGS"
     $B reduce detector.yaml -l detector
     $B reduce masks.yaml -l masks
 
@@ -51,7 +51,7 @@ reduces it, until a person clicks "Stop following" or makes another batch
 that follows. A step never changes a row that the batch table has: a newer
 transmission run of its sample does not replace the one in its cell. A row
 with a result waits for the person's "Reduce". The batch that follows is
-kept, so a restart resumes. Without a page, ``essapps-batch -s
+kept, so a restart resumes. Without a page, ``essbatch -s
 ess.instruments.loki.batch:SOURCES ... follow -l LABEL`` runs the steps.
 """
 
@@ -62,13 +62,13 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
+from ess.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
+from ess.batch.web import Pages, Shown, create_app, plots
+from ess.batch.web.api import STATIC
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from ess.apps import Client
-from ess.apps.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
-from ess.apps.batch.web import Pages, Shown, create_app, plots
-from ess.apps.batch.web.api import STATIC
 from ess.apps.folder import ArrivingFiles, open_folder
 
 from .batch import SOURCES, STAGED

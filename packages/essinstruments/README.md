@@ -26,4 +26,4 @@ pn.serve(lambda: App(client, plots=PLOTS).panel(), port=5006)
 
 ## The LoKI batch page
 
-`python -m ess.instruments.loki.web FOLDER` serves the batch page of I(Q) (`ess.apps.batch.web`) on a workspace folder, and `python -m ess.instruments.loki.arrivals` on a new folder into which the tutorial runs arrive over time. The [README of the page](../essapps/src/ess/apps/batch/web/README.md) says how to use both.
+`python -m ess.instruments.loki.web FOLDER` serves the batch page of I(Q) (`ess.batch.web`) on a workspace folder, and `python -m ess.instruments.loki.arrivals` on a new folder into which the tutorial runs arrive over time. The [README of the page](../essbatch/src/ess/batch/web/README.md) says how to use both.

@@ -40,10 +40,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ess.batch.web.api import STATIC, every
 from ess.loki import data
 
 from ess.apps import Client, file
-from ess.apps.batch.web.api import STATIC, every
 from ess.apps.folder import write_files_table
 from ess.spec import FileRef
 

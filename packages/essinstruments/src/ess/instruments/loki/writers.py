@@ -7,7 +7,7 @@ The writers of the outputs of LoKI's reductions.
 ``loki`` extra of ``essinstruments``, which brings esssans.
 
 An application gives :data:`WRITERS`, the writers by the name of a spec, for example
-``essapps-batch -W ess.instruments.loki.writers:WRITERS``.
+``essbatch -W ess.instruments.loki.writers:WRITERS``.
 """
 
 from collections.abc import Mapping
