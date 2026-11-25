@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, get_origin
 
 from annotated_types import MaxLen, MinLen
@@ -187,11 +188,24 @@ class Checks:
                 name,
                 value,
                 lambda file, marker: self._file(file, marker, proposal),
-                self._files.path,
+                lambda ref: self._path(name, ref),
                 table=name in self.spec.tables,
             )
         except ParamsError as error:
             raise SubmitError.of(error) from None
+
+    def _path(self, name: str, ref: FileRef) -> Path:
+        """
+        The local path of ``ref``, a file of parameter ``name``. The file
+        source raising ``OSError``, such as a catalogue that timed out,
+        refuses the file as :meth:`_file` does.
+        """
+        try:
+            return self._files.path(ref)
+        except OSError as error:
+            raise SubmitError.at(
+                (name,), f'file {ref.file} cannot be read: {error}'
+            ) from None
 
     def _file(self, name: str, marker: File, proposal: str) -> str:
         """
