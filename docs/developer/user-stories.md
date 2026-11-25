@@ -108,7 +108,7 @@ Besides the calls in README.md, the stories use this one:
 record.request.files()    # the files the request names directly
 ```
 
-Automatic reduction belongs to its sub-design ([automatic-reduction.md](automatic-reduction.md)), and is a batch of `ess.apps.batch` ([batch.md](../../packages/essapps/docs/batch.md)).
+Automatic reduction belongs to its sub-design ([automatic-reduction.md](automatic-reduction.md)), and is a batch of `ess.batch` ([batch.md](../../packages/essbatch/docs/batch.md)).
 The stories use these calls:
 
 ```python

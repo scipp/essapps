@@ -14,7 +14,7 @@ The folder holds what a workspace needs to go on after its process ended::
     store/        persisted outputs, <record>/<output>.h5
     definitions/  what a person made of the batches on the folder: the
                   corrections of files, and the header, settings, rows and
-                  source of each label (see ess.apps.batch.definition)
+                  source of each label (see ess.batch.definition)
 
 So a command that runs and ends, and the next one, are clients of one workspace:
 the second reads the records of the first, and references their outputs if they
@@ -22,7 +22,7 @@ were persisted. One process holds the folder at a time, since a log has one
 writer.
 
 A file of the store is named by the ID of its record.
-:mod:`ess.apps.batch.export` writes the files of a batch to folders named by
+:mod:`ess.batch.export` writes the files of a batch to folders named by
 the keys of its rows.
 """
 
@@ -260,7 +260,7 @@ def open_folder(
     workspace.
 
     ``files`` is the file source, :func:`folder_files` if not given. Give a
-    wrapper of that, such as :class:`~ess.apps.batch.CorrectedFiles`, to
+    wrapper of that, such as :class:`~ess.batch.CorrectedFiles`, to
     correct what ``files.csv`` says while the client is open. Raises
     ``FileNotFoundError`` without ``files.csv``, and ``RuntimeError`` if another
     process holds the folder. ``workers`` is the number of threads that run

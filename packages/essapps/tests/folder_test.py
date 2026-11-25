@@ -4,6 +4,7 @@
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Annotated
 
 import pandas as pd
 import pydantic
@@ -11,10 +12,6 @@ import pytest
 import scipp as sc
 
 from ess.apps import Client, Selector, file
-from ess.apps.batch import Batch, FileInfo, RowSource, rows_of
-from ess.apps.batch.auto import step
-from ess.apps.batch.frames import with_results
-from ess.apps.batch.table import KEY
 from ess.apps.folder import (
     ArrivingFiles,
     FolderStore,
@@ -24,9 +21,14 @@ from ess.apps.folder import (
     write_files_table,
 )
 from ess.apps.testing import read_file
-from ess.spec import Binding, FileRef, WorkflowSpec, function_binding
-
-from .batch import toys
+from ess.spec import (
+    Binding,
+    FileRef,
+    Referenced,
+    RunFile,
+    WorkflowSpec,
+    function_binding,
+)
 
 
 class Array(pydantic.BaseModel, arbitrary_types_allowed=True):
@@ -51,13 +53,54 @@ CURVE = WorkflowSpec(
 )
 
 
-def _find(params: toys.FindParams) -> toys.FindOutputs:
-    return toys.FindOutputs(offset=toys.Offset(value=read_file(params.sample)))
+class Offset(pydantic.BaseModel):
+    value: float = 0.0
 
 
-def _plain(params: toys.Params) -> toys.Outputs:
+class FindParams(pydantic.BaseModel):
+    sample: RunFile
+
+
+class FindOutputs(pydantic.BaseModel):
+    offset: Offset
+
+
+class PlainParams(pydantic.BaseModel):
+    sample: RunFile
+    transmission: RunFile
+    thickness: Annotated[float, pydantic.Field(ge=0)] = 1.0
+    offset: Offset | Referenced[Offset] | None = None
+
+
+class PlainOutputs(pydantic.BaseModel):
+    total: float
+
+
+FIND = WorkflowSpec(
+    name='find',
+    version=1,
+    title='Find',
+    description='A toy.',
+    params=FindParams,
+    outputs=FindOutputs,
+)
+PLAIN = WorkflowSpec(
+    name='plain',
+    version=1,
+    title='Plain',
+    description='A toy.',
+    params=PlainParams,
+    outputs=PlainOutputs,
+)
+
+
+def _find(params: FindParams) -> FindOutputs:
+    return FindOutputs(offset=Offset(value=read_file(params.sample)))
+
+
+def _plain(params: PlainParams) -> PlainOutputs:
     offset = 0.0 if params.offset is None else params.offset.value
-    return toys.Outputs(total=params.thickness + offset)
+    return PlainOutputs(total=params.thickness + offset)
 
 
 @pytest.fixture
@@ -79,8 +122,8 @@ def folder(tmp_path: Path) -> Path:
 @pytest.fixture
 def bindings() -> list[Binding]:
     return [
-        function_binding(toys.FIND, _find),
-        function_binding(toys.PLAIN, _plain),
+        function_binding(FIND, _find),
+        function_binding(PLAIN, _plain),
     ]
 
 
@@ -90,7 +133,7 @@ def open_client(folder: Path, bindings: list[Binding]) -> Callable[[], Client]:
 
 
 def find_offset(client: Client) -> str:
-    record = client.submit(toys.FIND, params={'sample': file(run=3)}, persist=True)
+    record = client.submit(FIND, params={'sample': file(run=3)}, persist=True)
     client.wait([record])
     return record.id
 
@@ -122,7 +165,7 @@ def test_a_second_session_lists_the_records_of_the_first(
     open_client: Callable[[], Client],
 ) -> None:
     with open_client() as first:
-        record = first.submit(toys.FIND, params={'sample': file(run=3)}, label='a')
+        record = first.submit(FIND, params={'sample': file(run=3)}, label='a')
         first.wait([record])
 
     with open_client() as second:
@@ -137,7 +180,7 @@ def test_a_second_session_reads_an_output_the_first_persisted(
 
     with open_client() as second:
         (record,) = second.records(ids=[found])
-        assert second.output(record, 'offset') == toys.Offset(value=3)
+        assert second.output(record, 'offset') == Offset(value=3)
 
 
 def test_a_request_of_a_second_session_references_a_persisted_output(
@@ -149,7 +192,7 @@ def test_a_request_of_a_second_session_references_a_persisted_output(
     with open_client() as second:
         (record,) = second.records(ids=[found])
         total = second.submit(
-            toys.PLAIN,
+            PLAIN,
             params={
                 'sample': file(run=1),
                 'transmission': file(run=2),
@@ -161,33 +204,15 @@ def test_a_request_of_a_second_session_references_a_persisted_output(
         assert second.output(total, 'total') == 4.0
 
 
-def _runs(files: Sequence[FileInfo]) -> pd.DataFrame:
-    keys = pd.Index([str(f.metadata['run']) for f in files], name=KEY)
-    return pd.DataFrame({'sample': [str(f.ref) for f in files]}, index=keys)
-
-
-RUNS = RowSource(_runs, fills=('sample',))
-"""A row per run."""
-
-
-def _found(client: Client) -> Batch:
-    """The rows of the runs, whose offset is found under the label ``found``."""
-    rows = rows_of(client, RUNS)
-    return Batch(client, toys.FIND, label='found', rows=rows, persist=True)
-
-
-def _table(client: Client) -> pd.DataFrame:
-    batch = _found(client)
-    return with_results(client, batch.state(), batch.frame(), published={})
-
-
 def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_them(
     folder: Path, bindings: list[Binding]
 ) -> None:
     with open_folder(folder, bindings) as first:
-        found = list(step(_found(first), RUNS, ()).records.values())
+        found = [
+            first.submit(FIND, params={'sample': file(run=run)}, persist=True)
+            for run in (1, 2, 3)
+        ]
         first.wait(found)
-        table = _table(first)
     files = [r.request.params['sample'] for r in found]
     assert files == [
         FileRef(file='path:run-1.json'),
@@ -198,8 +223,6 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
     with open_folder(folder.rename(folder.with_name('moved')), bindings) as second:
         assert second.files.list(Selector()) == files
         assert [second.output(r, 'offset').value for r in found] == [1, 2, 3]
-        assert step(_found(second), RUNS, ()).records == {}
-        assert _table(second).equals(table)
         again = second.submit(found[0].request)
         second.wait([again])
         assert second.output(again, 'offset').value == 1

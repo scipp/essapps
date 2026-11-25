@@ -13,7 +13,7 @@ the values the outputs were computed from::
     _record.json       the record, the same for every format
 
 Download, ``export -l`` and publishing all write through :func:`write` by
-the form of a batch (:mod:`ess.apps.batch.writing`), so that they give the
+the form of a batch (:mod:`ess.batch.writing`), so that they give the
 same files. :data:`SCIPP_HDF5` writes each output as scipp HDF5
 (:mod:`ess.apps.hdf5`), for a spec that has no writer of its own, and for
 ``export TABLE``, which names no batch.

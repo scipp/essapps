@@ -74,7 +74,7 @@ For us: a workspace started on history that another workspace still writes is re
 **Temporary and protected outputs.**
 `temp()` deletes an output once every consumer has run, and `protected()` write-protects an expensive one ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L2132-L2160)).
 The workflow author marks them, since the author knows which outputs are throwaway.
-For us: nothing is written unless persisted, and the batch of the automatic reduction says what it persists ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), [batch.md, "Follow"](../../../packages/essapps/docs/batch.md#follow)).
+For us: nothing is written unless persisted, and the batch of the automatic reduction says what it persists ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), [batch.md, "Follow"](../../../packages/essbatch/docs/batch.md#follow)).
 If a story asks, an author's mark on outputs meant only for inspection could set that default.
 
 **Between-workflow caching is opt-in and narrow.**

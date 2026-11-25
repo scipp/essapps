@@ -14,7 +14,7 @@ The details live one level down:
 | stages, accumulators, and their symmetries | [accumulators.md](accumulators.md) |
 | automatic reduction | [automatic-reduction.md](automatic-reduction.md) |
 | which process holds what, and how a value passes from one workspace to another | [deployments.md](deployments.md) |
-| how to build an application that reduces many samples | [packages/essapps/docs/batch.md](../../packages/essapps/docs/batch.md) |
+| how to build an application that reduces many samples | [packages/essbatch/docs/batch.md](../../packages/essbatch/docs/batch.md) |
 | the rules behind each call: what is kept and readable, when a call returns, what it raises | [`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) |
 | the shapes and shortcuts of the client | the docstrings of `ess.apps.client` |
 | how the code is built | the module docstrings |
@@ -292,7 +292,7 @@ total = client.freeze(volume)                               # the final sum, as 
 
 ## Automatic reduction
 
-Automatic reduction is Follow on a batch of `ess.apps.batch`: a step every few seconds adds the rows of its row source that are filled and not considered, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essapps/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
+Automatic reduction is Follow on a batch of `ess.batch`: a step every few seconds adds the rows of its row source that are filled and not considered, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essbatch/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
 The application's row source pairs runs as the technique needs:
 
 ```python

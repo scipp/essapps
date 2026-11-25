@@ -1,7 +1,7 @@
 # Automatic reduction
 
 Automatic reduction is Follow: a step every few seconds on one batch adds the rows of its row source that are filled and not considered, and reduces the rows that are ready and have no result.
-How it works is in [the batch guide, "Follow"](../../packages/essapps/docs/batch.md#follow); the decision is [ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md).
+How it works is in [the batch guide, "Follow"](../../packages/essbatch/docs/batch.md#follow); the decision is [ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md).
 Its stories are E1 to E4 in [user-stories.md](user-stories.md), and [deployments.md](deployments.md#automatic-reduction) places it.
 This page holds what neither says: how the records decide what a step reduces, what `submit` refuses, measured costs, and open questions.
 

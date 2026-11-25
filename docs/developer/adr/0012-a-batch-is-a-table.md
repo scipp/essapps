@@ -8,7 +8,7 @@
 
 *Batch*, *label*, *header*, *source*, *definitions* are the words of [ADR 0011](0011-a-person-makes-the-batches-of-a-workspace.md).
 *Template*, *blank* and *fill* are those of `ess.apps.Template`: a spec, some values, and blanks that each use fills.
-*Row*, *key*, *cell*, *result* are those of [batch.md, "Terms"](../../../packages/essapps/docs/batch.md#terms).
+*Row*, *key*, *cell*, *result* are those of [batch.md, "Terms"](../../../packages/essbatch/docs/batch.md#terms).
 Two words name what this decision replaces.
 A *scope* was a slice of an index that a source gave each row, kept in the header of a batch.
 A *scan* asked the source for every row at each read of a batch.
@@ -25,7 +25,7 @@ So a batch is defined by how its rows are made, and the table a person sees is t
 1. **The table needs the files.** If the file mount is not available, the scan gives no rows, and the table is empty. The results are in the workspace, but no row shows them.
 2. **Removing files removes rows.** A row whose file is gone disappears, also one that was reduced or edited.
 3. **A change of the source's code changes every batch**, also one that was finished last week.
-4. **The model has no table to put a table in.** The command takes one (`essapps-batch reduce iofq.yaml runs.csv`), and the page loads and saves one. Both are translated into "cells set by hand on top of the scan", in four structures of different shape (`added`, `edited`, `cleared`, `removed`) and a marker for a cleared cell.
+4. **The model has no table to put a table in.** The command takes one (`essbatch reduce iofq.yaml runs.csv`), and the page loads and saves one. Both are translated into "cells set by hand on top of the scan", in four structures of different shape (`added`, `edited`, `cleared`, `removed`) and a marker for a cleared cell.
 5. **A cell is held in two forms**: a pydantic object if a source or the page made it (`FileRef(file='run:60339')`), plain data if a table file did. Four functions convert between the forms and do not agree: a table file loaded back unchanged marks a cell that holds a reference to an output as set by hand.
 6. **What a batch is depends on what amends it.** The source, the scope, and who wrote each cell are parts of every batch, because a scan must be able to run again at any time. A batch made from a table file has no source and carries the same parts.
 
@@ -208,17 +208,17 @@ A row that Follow adds later has an empty cell, and is reduced with 1.5. The set
 **The command.**
 
 ```
-essapps-batch reduce iofq.yaml runs.csv -l water      # makes the batch `water`: iofq.yaml its settings, runs.csv its rows
-essapps-batch reduce -l water -o done.csv             # the table, with a status and a record per row
+essbatch reduce iofq.yaml runs.csv -l water      # makes the batch `water`: iofq.yaml its settings, runs.csv its rows
+essbatch reduce -l water -o done.csv             # the table, with a status and a record per row
 # edit done.csv in a spreadsheet, then:
-essapps-batch reduce -l water done.csv                # done.csv replaces the table, and its rows are reduced
+essbatch reduce -l water done.csv                # done.csv replaces the table, and its rows are reduced
 ```
 
 The columns of the state (`status`, `record`) are not columns of the table and are left out when a table file is read. A value of `iofq.yaml` at a column of `runs.csv` is the setting of the rows whose cell is empty.
 
 ## pandas
 
-The batch holds its rows as a `DataFrame`, so pandas becomes a dependency of `ess.apps.batch`; today only the command and the table files need it. Each concept is a line of pandas:
+The batch holds its rows as a `DataFrame`, so pandas becomes a dependency of `ess.batch`; today only the command and the table files need it. Each concept is a line of pandas:
 
 | Concept | In pandas |
 |---|---|
