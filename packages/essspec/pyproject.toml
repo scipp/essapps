@@ -31,9 +31,7 @@ dependencies = ["pydantic>=2.10"]
 [project.optional-dependencies]
 scipp = ["scipp>=26.3.1"]
 sciline = [
-    # sciline.Stage (ADR 0003 of scipp/sciline) is not released yet; only ess.spec.pipeline imports it.
-    # A commit is pinned because the API on the branch still changes.
-    "sciline @ git+https://github.com/scipp/sciline.git@2a522a08bed92d243d32d820e49c7ac5c651542f",
+    "sciline>=26.11.0",  # sciline.Stage, which ess.spec.pipeline imports
 ]
 test = [
     "essspec[scipp,sciline]",

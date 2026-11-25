@@ -131,7 +131,7 @@ essbatch specs                                                # the registered s
 - Moving a spec into its workflow package is one coordinated release: the spec leaves `essinstruments`, and its extra pins the first version of the workflow package that has it, since two entries with the same spec fail the load.
 - An instrument's app pins a range of `essapps`, as any app pins the framework it is built on.
 - essspec has its own tags (`essspec/*`) and its own ADRs (`packages/essspec/docs/developer/adr`, where scipp/ess keeps them), so moving it to scipp/ess is a variant of the move that scipp/ess's `ADDING_PACKAGES.md` describes: the history filtered to `packages/essspec`, keeping only its own tags, and no tag rename, since they already carry the prefix. essapps, essbatch and essinstruments are tagged `essapps/*`, `essbatch/*` and `essinstruments/*`.
-- None of the distributions is on PyPI. They are installed together from the checkout: `pip install -e packages/essspec -e 'packages/essapps[test]' -e 'packages/essbatch[test]'`, where the test extra of each brings `essspec[scipp,sciline]` and its own extras. essspec can be published only once sciline has released `Stage`, which `essspec[sciline]` installs from a branch.
+- None of the distributions is on PyPI. They are installed together from the checkout: `pip install -e packages/essspec -e 'packages/essapps[test]' -e 'packages/essbatch[test]'`, where the test extra of each brings `essspec[scipp,sciline]` and its own extras.
 - Testing and type-checking essapps needs all its extras installed.
 - The HTTP API is a public interface once a web frontend uses it, with its own versioning.
 - The repository keeps its name, scipp/essapps.
