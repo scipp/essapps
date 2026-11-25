@@ -105,7 +105,6 @@ SCIPP_HDF5 = Writer(
     outputs=None,
     write=_write_hdf5,
 )
-"""Each output as ``<name>.h5``, which ``scipp.io.load_hdf5`` reads."""
 
 
 def write(

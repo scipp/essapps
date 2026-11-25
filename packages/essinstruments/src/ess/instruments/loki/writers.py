@@ -43,7 +43,5 @@ NXCANSAS = Writer(
     outputs=('iofq',),
     write=_nxcansas,
 )
-"""I(Q) as ``iofq.h5``, an NXcanSAS file with the title and run of the sample,
-an empty run if its file has none."""
 
 WRITERS = {IOFQ.name: [NXCANSAS]}

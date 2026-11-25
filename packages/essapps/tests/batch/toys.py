@@ -89,7 +89,6 @@ TEXT = Writer(
     outputs=('total',),
     write=_text,
 )
-"""A format of fixed outputs: the name and the total, in ``total.txt``."""
 
 PLAIN = WorkflowSpec(
     name='plain',

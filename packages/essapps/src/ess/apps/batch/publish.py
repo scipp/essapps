@@ -68,6 +68,7 @@ class Publisher:
         published before it, which are kept.
         """
         write, abouts = self.writing.by_form(label)
+        format = self.writing.form(label).format
         records = self._results(label, keys)
         for about in (abouts[key] for key in records):
             given = [('owner', about.owner), ('contact email', about.contact_email)]
@@ -76,7 +77,9 @@ class Publisher:
         pids: dict[str, str] = {}
         for key, record in records.items():
             try:
-                pids[key] = self._publish(label, key, record, write, abouts[key])
+                pids[key] = self._publish(
+                    label, key, record, write, abouts[key], format
+                )
             except NotKept:  # noqa: PERF203
                 raise
             except Exception as error:  # the catalogue's client may raise anything
@@ -109,7 +112,13 @@ class Publisher:
         return records
 
     def _publish(
-        self, label: str, key: str, record: Record, write: RowWriter, about: About
+        self,
+        label: str,
+        key: str,
+        record: Record,
+        write: RowWriter,
+        about: About,
+        format: str,
     ) -> str:
         """Upload one result and keep that it was; its catalogue identifier."""
         client = self.writing.manager.client
@@ -117,7 +126,7 @@ class Publisher:
             written = Path(folder) / key
             write(key, record, written)
             files = sorted(written.iterdir())
-            pid = publish(self.catalogue, client, record, files, about)
+            pid = publish(self.catalogue, client, record, files, about, format)
         kept = self._kept(label)
         upload = Published(key=key, record=record.id, pid=pid)
         try:

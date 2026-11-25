@@ -111,11 +111,14 @@ def publish(
     record: Record,
     files: Sequence[Path],
     about: About,
+    format: str,
 ) -> str:
     """
-    Upload ``files``, written from ``record``, as a new derived dataset, and
+    Upload ``files``, written from ``record`` in ``format``, the name of a
+    writer (:class:`ess.apps.writers.Writer`), as a new derived dataset, and
     return its catalogue identifier, as ``pid:<pid>`` like the files a record
-    names (ADR 0010).
+    names (ADR 0010). The dataset keeps the format, since files of different
+    formats may have the same names, such as ``iofq.h5``.
 
     Raises what the SciCat client raises, such as ``pydantic.ValidationError``
     for a dataset that lacks a required field.
@@ -147,6 +150,7 @@ def publish(
         meta={
             'spec': str(record.spec),
             'record': record.id,
+            'format': format,
             'request': record.request.model_dump(mode='json', by_alias=True),
             'other_inputs': [i for i in identities if not _is_pid(i)],
         },

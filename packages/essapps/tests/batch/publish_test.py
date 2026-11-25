@@ -75,6 +75,7 @@ def test_a_row_is_published_as_a_derived_dataset_of_its_inputs(
     assert dataset.proposal_ids == ['p1']
     assert dataset.owner_group == 'p1'
     assert dataset.meta['other_inputs'] == ['uuid:run-1001']
+    assert dataset.meta['format'] == 'scipp-hdf5'
     assert any(s.startswith('scitacean==') for s in dataset.used_software)
     assert sorted(
         f.remote_access_path(dataset.source_folder).name for f in dataset.files
