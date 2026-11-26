@@ -1,40 +1,16 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Where each row of a batch stands, worked out from plain data.
+The state of each row of a batch, computed from plain data.
 
-Nothing here calls a client, so every rule of what is ready and what is left
-to do is tested on values. :class:`~.reduction.Batch` reads
-the records and gives them to these functions.
+Nothing here calls a client, so the rules are tested on values.
+:class:`~.reduction.Batch` reads the records and passes them in.
 
-A row's *result* is the newest record under the batch's label with the row's
-key as its member, of any spec (:func:`results`). The row's request now differs
-from its result's at the parameters that :attr:`RowState.changed` names, found
-with :func:`changed_names` on both as a record holds them. A result is *outdated*
-(:attr:`RowState.outdated`) if it is of an unbound spec
-(:attr:`RowState.spec_changed`), or if the request changed at any parameter
-(:func:`row_states`).
+A cell that the workspace rejects is a problem of its row, not a change: a
+change would offer the row to :func:`left_to_reduce`, though it cannot run.
 
-The cells of a row are given here as its request takes them, each empty cell
-given the setting, else its default, or ``None`` if its parameter takes
-``None`` (:meth:`~.reduction.Batch.cells`). A column left out of them is empty, and a
-problem of the row. A value refused when resolved is a problem of the row, not
-a change: the row cannot run with it, and a change would offer it to
-:func:`left_to_reduce`.
-
-A change of settings applies to the rows not reduced yet. For one row, a
-parameter counts as a setting if it is no column or the row's cell there is
-empty, since the row then takes the setting of the batch. A completed result
-whose request differs from the row's only at settings so counted is reduced
-with earlier settings (:attr:`RowState.settings_changed`): it reads
-``settings changed``, and :func:`left_to_reduce` leaves it until a person
-reduces it again. A row whose
-own cell changed reads ``outdated``. Which cells are empty is read from the
-batch table now, so a cell emptied after the row was reduced counts as a setting.
-
-A step of Follow reduces the rows of :func:`not_reduced`: ready, and
-without a result. A row with a result is left to a person, whether it is
-outdated, failed or cancelled.
+The statuses and the rules: guide ``packages/essbatch/docs/batch.md``, "The
+state of a row and the rules over it".
 """
 
 from __future__ import annotations
@@ -62,28 +38,34 @@ type RowStatus = Literal[
     'settings changed',
     'outdated',
 ]
-"""The status of a row, as the page, a table file written and the command say it."""
+"""The status of a row, as the page, a written table file and the command show it."""
 
 
 @dataclass(frozen=True)
 class RowState:
     """
-    Where one row stands.
+    The state of one row.
 
-    ``record`` is the row's result, if it has one, and ``record_status`` its
-    status. ``problems`` say why the row cannot be reduced now. ``changed``
-    names the parameters at which the row's request now differs from the
-    request of its result, both as a record holds them, and is ``None`` if they
-    were not compared, as in what ``Batch.state(compare=False)`` gives.
-    ``spec_changed`` is true if the result is of an unbound spec.
-    ``outdated`` is true if the result is of an unbound spec, or if the
-    request changed; ``None`` if that is not known, since the requests were not
-    compared. ``settings_changed`` is true if the row is ready and its
-    completed result differs from its request only at settings: not at a
-    column where the row's cell holds a value, and of the same spec.
-    ``overrides`` names the parameter columns at which the row's cell holds a
-    value: those where the row gives itself its value, not the setting or the
-    default.
+    Attributes
+    ----------
+    record:
+        The result of the row, if any.
+    problems:
+        Why the row cannot be reduced now.
+    changed:
+        The parameters at which the request of the row differs from the request
+        of its result, both as a record holds them. ``None`` if not compared.
+    spec_changed:
+        Whether the result is of another spec than the batch, or of an unbound
+        spec.
+    outdated:
+        Whether ``spec_changed`` or ``changed`` is not empty. ``None`` if not
+        compared and the spec did not change.
+    settings_changed:
+        Whether the row is ready, its result is completed and of the same spec,
+        and ``changed`` holds only settings: parameters outside ``overrides``.
+    overrides:
+        The parameter columns at which the cell of the row holds a value.
     """
 
     key: str
@@ -99,12 +81,12 @@ class RowState:
     @property
     def status(self) -> RowStatus:
         """
-        The status of the row. A failed or cancelled result reads as its status
-        whether or not the request changed since, since the row needs reducing
-        either way. A row of earlier settings (:attr:`settings_changed`) reads
-        ``settings changed``: its result is completed, as one that reads
-        ``done``. A completed result not compared with the settings, as while
-        they are refused, reads ``outdated``: it cannot be told to match them.
+        The status of the row.
+
+        A failed or cancelled result shows its status even if the request
+        changed since: the row needs reducing either way. A completed result
+        that was not compared, as while the settings are rejected, shows
+        ``outdated``: it cannot be told to match them.
         """
         if self.record_status is Status.PENDING:
             return 'running'
@@ -128,9 +110,9 @@ def problems(
     status: Mapping[str, Status],
 ) -> tuple[FieldError, ...]:
     """
-    Why the row of ``key`` cannot be reduced: one of ``parameter_columns``
-    that ``cells`` leave out, which is empty and has no value, or a reference
-    to a record that failed or was cancelled, per ``status`` by record ID.
+    Why the row ``key`` cannot be reduced: a column of ``parameter_columns``
+    missing from ``cells``, or a reference to a record that failed or was
+    cancelled, per ``status`` by record ID.
     """
     found = [
         FieldError(key, (c,), 'empty') for c in parameter_columns if c not in cells
@@ -145,9 +127,9 @@ def problems(
 
 def results(records: Iterable[Record]) -> dict[str, Record]:
     """
-    The result of each row by its key: the newest of ``records``, oldest
-    first, with that member, of any spec and whoever submitted it. So a rerun
-    of a row is its result, and one folder or one service holds one history.
+    The result of each row by key: the newest of ``records``, given oldest
+    first, with that member. Of any spec and any submitter, so a rerun of a row
+    is its result.
     """
     return {r.member: r for r in records if r.member is not None}
 
@@ -185,14 +167,25 @@ def row_states(
     overrides: Mapping[str, AbstractSet[str]],
 ) -> dict[str, RowState]:
     """
-    The state of each row of ``cells``, which hold its cells by key.
-    ``found`` holds their results by key, ``status`` the status of those and
-    of the records their cells reference, by record ID, ``changed`` the names
-    at which a row differs from its result, ``None`` if the rows were not
-    compared with their results, ``refused`` the reasons a row's cells were
-    refused when resolved, ``spec_changed`` the keys whose result is of
-    an unbound spec, and ``overrides`` the columns at which each row's cell holds a
-    value, by key.
+    The state of each row of ``cells``, by key.
+
+    Parameters
+    ----------
+    cells:
+        The values of the parameter columns of each row, by key.
+    found:
+        The result of each row that has one, by key.
+    status:
+        The status of the results and of the records that the cells reference,
+        by record ID.
+    changed:
+        :attr:`RowState.changed` of each row, by key; ``None`` if not compared.
+    refused:
+        The problems of the cells that the workspace rejected, by key.
+    spec_changed:
+        The keys of :attr:`RowState.spec_changed`.
+    overrides:
+        :attr:`RowState.overrides` of each row, by key.
     """
     refused = refused or {}
     states = {}
@@ -235,20 +228,17 @@ def ready(states: Mapping[str, RowState]) -> list[str]:
 
 def with_changed_settings(states: Mapping[str, RowState]) -> list[str]:
     """
-    The rows reduced with earlier settings (:attr:`RowState.settings_changed`). A page
-    that applies a change of settings to new rows only leaves these rows as
-    they are, until a person reduces them again. None in states not
-    compared.
+    The rows of :attr:`RowState.settings_changed`; none in states not compared.
     """
     return [k for k, s in states.items() if s.settings_changed]
 
 
 def left_to_reduce(states: Mapping[str, RowState]) -> list[str]:
     """
-    The ready rows with no result, one that failed or was cancelled, or one
-    that is outdated, but those of :func:`with_changed_settings`: a change of
-    settings applies to rows not reduced yet, and a change of a cell, or of the
-    spec, to its row. A row not compared counts as not outdated.
+    The ready rows without a result, or whose result failed, was cancelled or
+    is outdated, except those of :func:`with_changed_settings`.
+
+    A row not compared counts as not outdated.
     """
     return [
         k
@@ -263,7 +253,7 @@ def left_to_reduce(states: Mapping[str, RowState]) -> list[str]:
 
 
 type Which = Literal['remaining', 'settings changed', 'all']
-"""Which rows to reduce: those left, those of earlier settings, or all ready."""
+"""Which rows to reduce, as :func:`to_reduce` accepts it."""
 
 
 def to_reduce(states: Mapping[str, RowState], which: Which) -> list[str]:
@@ -280,18 +270,15 @@ def to_reduce(states: Mapping[str, RowState], which: Which) -> list[str]:
 
 def not_reduced(states: Mapping[str, RowState]) -> list[str]:
     """
-    The ready rows with no result: the rule of Follow. A row with
-    a result is left to a person, also one that is outdated, failed or was
-    cancelled. ``changed`` is not read, so ``states`` may be compared or not.
+    The ready rows without a result: the rows that a step of Follow reduces.
+
+    ``changed`` is not read, so ``states`` may be compared or not.
     """
     return [k for k in ready(states) if states[k].record is None]
 
 
 def publishable(states: Mapping[str, RowState]) -> list[str]:
-    """
-    The rows whose result may be published: those that read ``done`` or
-    ``settings changed``, completed and not outdated.
-    """
+    """The rows whose result may be published: ``done`` or ``settings changed``."""
     return [
         k
         for k, s in states.items()
