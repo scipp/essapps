@@ -30,8 +30,14 @@ async function load() {
   if (!body.rows.length) openForm();
 }
 
+// What Close does, for a person who expects it to close a view.
+const CLOSES =
+  'Let go of the folder of the workspace, so that the command essbatch can work on it. ' +
+  'Nothing is deleted. Its batches do not follow until it is opened again. ' +
+  'Refused while a reduction runs.';
+
 function draw() {
-  const button = (text, onclick) => h('button', {type: 'button', class: `quiet ${text.toLowerCase()}`, text, onclick});
+  const button = (text, title, onclick) => h('button', {type: 'button', class: `quiet ${text.toLowerCase()}`, text, title, onclick});
   const rowOf = (workspace) =>
     listRow(
       workspace,
@@ -43,8 +49,8 @@ function draw() {
       h(
         'td',
         {},
-        workspace.open && button('Close', (event) => closeWorkspace(event, workspace)),
-        button('Remove', (event) => removeWorkspace(event, workspace)),
+        workspace.open && button('Close', CLOSES, (event) => closeWorkspace(event, workspace)),
+        button('Remove', 'Delete the folder of the workspace, with its batches, history and outputs.', (event) => removeWorkspace(event, workspace)),
       ),
     );
   fillList($('workspaces'), listed.rows, rowOf, 'No workspace yet.');

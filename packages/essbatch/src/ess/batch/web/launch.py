@@ -249,7 +249,10 @@ class Launcher:
                 raise NotFound(f'{name} is not open.')
             with reject_on_error(f'{name} did not close cleanly'):
                 title = await self._close_locked(name)
-        return Notice(notice=f'Closed {title}.')
+        return Notice(
+            notice=f'Closed {title}. Nothing is deleted; '
+            'essbatch can work on its folder.'
+        )
 
     async def _close_locked(self, name: str, *, shutdown: bool = False) -> str:
         """

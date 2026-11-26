@@ -213,7 +213,10 @@ def test_a_closed_workspace_is_free_for_another_process_and_not_opened_again(
 
     closed = http.post('/api/workspaces/commissioning/close')
 
-    assert closed.json() == {'notice': 'Closed Commissioning.'}
+    assert closed.json() == {
+        'notice': 'Closed Commissioning. Nothing is deleted; '
+        'essbatch can work on its folder.'
+    }
     assert http.get('/api/workspaces').json()['rows'][0]['open'] is False
     assert opens(folder)
     polled = page.get('api/state')

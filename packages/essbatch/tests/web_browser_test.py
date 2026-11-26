@@ -2274,8 +2274,10 @@ def test_an_open_workspace_is_closed_on_the_launch_page(
     row = launch.locator('#workspaces tr:has-text("Commissioning")')
     row.locator('td:text-is("open")').wait_for()
 
+    assert 'Nothing is deleted' in row.locator('button.close').get_attribute('title')
+
     row.locator('button.close').click()
-    launch.wait_for_selector('#toast:text-is("Closed Commissioning.")')
+    launch.wait_for_selector('#toast:has-text("Closed Commissioning.")')
 
     assert row.locator('td:nth-child(4)').inner_text() == ''
     assert row.locator('button.close').count() == 0
