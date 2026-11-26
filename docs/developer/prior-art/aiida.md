@@ -26,7 +26,7 @@ Our record IDs are random UUIDs already (`ess.apps.workspace`), so `ess.apps.sci
 **Software versions on every process node.** A process stores the versions of aiida-core and its plugin on its node when it starts ([process.py L786-789][version]).
 There, the worker that creates the node also runs it.
 Our workspace logs a record before it decides where the request runs, so only the finish can say which versions ran it.
-This bears on the open question of what a finish records besides the status and on software versions in provenance, which the README promises and the code lacks ([README, Provenance](../README.md#provenance)).
+The finish names them ([README, Provenance](../README.md#provenance)).
 
 **A cache keyed on package versions reset at every upgrade.** Until v2.6 the cache hash included the aiida-core and plugin versions, so "the cache would essentially be reset each time AiiDA or any of the plugin packages would be updated".
 v2.6 removed them and gave plugins a `CACHE_VERSION` that the author bumps when behaviour changes ([CHANGELOG L1673-1679, L1747][cl-cache]).

@@ -210,7 +210,10 @@ class WorkspaceProtocol(Protocol):
         ...
 
     def status(self, ids: Sequence[str]) -> list[RecordStatus]:
-        """The status of each record now, and why it failed, if it did."""
+        """
+        The status of each record now, why it failed, if it did, and the
+        software that ran it.
+        """
         ...
 
     # History

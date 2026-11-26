@@ -242,10 +242,17 @@ class RecordStatus:
 
     The last is an error that a binding, its driver, the file source, or the
     store raised, shown with its type.
+
+    ``software`` holds the installed distributions of the process that ran the
+    record, as ``name==version``, as the workspace's ``software`` callable
+    returned them. The default, ``installed_software``, sorts them by name. It
+    is ``None`` while the record is pending, and for a record whose workflow
+    never ended, such as a cancelled record or one that failed at a restart.
     """
 
     status: Status
     failure: str | None = None
+    software: tuple[str, ...] | None = None
 
 
 class Record(BaseModel, frozen=True):

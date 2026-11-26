@@ -572,6 +572,15 @@ class Client:
         """
         return [s.failure for s in self._statuses(records)]
 
+    @_shaped
+    def software(self, records: list[Record]) -> list[tuple[str, ...] | None]:
+        """
+        The installed distributions of the process that ran each record.
+
+        See :class:`~ess.apps.RecordStatus`.
+        """
+        return [s.software for s in self._statuses(records)]
+
     def _statuses(self, records: list[Record]) -> list[RecordStatus]:
         return self._workspace.status([r.id for r in records])
 

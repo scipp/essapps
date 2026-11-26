@@ -6,7 +6,7 @@ import json
 import shutil
 import threading
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -25,9 +25,11 @@ from ess.apps import (
     Template,
     Workspace,
     file,
+    local,
 )
 from ess.apps.log import (
     FORMAT,
+    Environment,
     Event,
     Finished,
     Log,
@@ -39,12 +41,14 @@ from ess.apps.log import (
     Submitted,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, list_driver, read_file
+from ess.apps.workspace import installed_software
 from ess.spec import (
     FileRef,
     OutputRef,
     Referenced,
     RunFile,
     WorkflowSpec,
+    function_binding,
 )
 
 
@@ -155,14 +159,21 @@ def entered() -> threading.Event:
     return threading.Event()
 
 
+SOFTWARE = ('essapps==1.0', 'scipp==25.11.0')
+"""The software of the process of a workspace that ``start`` makes, by default."""
+
+
 @pytest.fixture
 def start(
     files: FakeFiles,
     loading: threading.Event,
     windows: list[Any],
     entered: threading.Event,
-) -> Iterator[Callable[[Path], Client]]:
-    """A client of a new workspace over the log at a path."""
+) -> Iterator[Callable[..., Client]]:
+    """
+    A client of a new workspace over the log at a path, in a process with
+    ``software``.
+    """
     workspaces: list[Workspace] = []
 
     def load(params: LoadParams) -> ValueOutputs:
@@ -173,14 +184,20 @@ def start(
         value = read_file(params.sample) * (window.stop - window.start)
         return ValueOutputs(value=Amount(value=value))
 
-    def start(path: Path) -> Client:
+    def start(path: Path, software: Sequence[str] = SOFTWARE) -> Client:
         bind = [
             StagedFunction(LOAD, load),
             list_driver(TOTAL, total),
             list_driver(RUNS, runs),
         ]
         workspaces.append(
-            Workspace(proposal='p1', files=files, bind=bind, log=Log(path))
+            Workspace(
+                proposal='p1',
+                files=files,
+                bind=bind,
+                log=Log(path),
+                software=lambda: software,
+            )
         )
         return Client(workspaces[-1], submitter='anna')
 
@@ -287,7 +304,7 @@ def test_an_accumulator_is_logged_as_its_template_and_pushes_and_a_freeze_as_a_r
         total.push(part=[load.ref('value')])
     frozen = client.freeze(total)
 
-    events = Log.read(tmp_path / 'log')
+    events = [e for e in Log.read(tmp_path / 'log') if not isinstance(e, Environment)]
     assert events[9:13] == [
         Opened(
             accumulator=total.id,
@@ -441,7 +458,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
         total.push(part=[load.ref('value')])
 
 
-def test_the_log_holds_submissions_starts_finishes_accumulators_and_pushes_only(
+def test_the_log_holds_submissions_starts_finishes_environments_accumulators_and_pushes(
     tmp_path: Path, start: Callable[[Path], Client]
 ) -> None:
     client = start(tmp_path / 'log')
@@ -454,9 +471,128 @@ def test_the_log_holds_submissions_starts_finishes_accumulators_and_pushes_only(
         Opened,
         Submitted,
         Started,
+        Environment,
         Finished,
         Pushed,
     ]
+
+
+def test_the_log_holds_the_environment_once_for_many_records(
+    tmp_path: Path, start: Callable[[Path], Client]
+) -> None:
+    client = start(tmp_path / 'log')
+    loads = [client.compute(LOAD, params=_sample(n)) for n in (1, 2, 3)]
+
+    environments = [e for e in Log.read(tmp_path / 'log') if isinstance(e, Environment)]
+    assert environments == [Environment.of(SOFTWARE)]
+    assert client.software(loads) == [SOFTWARE] * 3
+
+
+def test_a_record_names_the_installed_software_of_the_process_that_ran_it(
+    files: FakeFiles,
+) -> None:
+    bind = [function_binding(RUNS, runs)]
+    with local(proposal='p1', files=files, bind=bind) as client:
+        record = client.compute(RUNS, params={'cans': [], 'runs': [file(run=1)]})
+
+        assert client.software(record) == tuple(installed_software())
+        assert any(s.startswith('pydantic==') for s in installed_software())
+
+
+def test_a_record_cancelled_before_it_ran_names_no_software(
+    tmp_path: Path, start: Callable[[Path], Client], loading: threading.Event
+) -> None:
+    client = start(tmp_path / 'log')
+    loading.clear()
+    running, waiting = client.submit([Request(LOAD, params=_sample(n)) for n in (1, 2)])
+    client.cancel(waiting)
+    loading.set()
+    client.wait([running, waiting])
+
+    assert client.software([running, waiting]) == [SOFTWARE, None]
+
+
+def test_a_record_whose_workflow_failed_names_the_software(files: FakeFiles) -> None:
+    def fail(params: RunsParams) -> ValueOutputs:
+        raise RuntimeError('no beam')
+
+    workspace = Workspace(
+        proposal='p1',
+        files=files,
+        bind=[function_binding(RUNS, fail)],
+        software=lambda: SOFTWARE,
+    )
+    with Client(workspace, submitter='anna', on_close=workspace.close) as client:
+        record = client.submit(RUNS, params={'cans': [], 'runs': [file(run=1)]})
+
+        assert client.wait(record) == Status.FAILED
+        assert client.software(record) == SOFTWARE
+
+
+def test_a_record_failed_at_a_restart_names_no_software(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+    entered: threading.Event,
+) -> None:
+    first = start(tmp_path / 'log')
+    loading.clear()
+    running = first.submit(LOAD, params=_sample(1))
+    assert entered.wait(timeout=5)
+
+    again = restart(tmp_path / 'log')
+    loading.set()
+
+    assert again.status(running) == Status.FAILED
+    assert again.software(running) is None
+
+
+def test_other_software_is_logged_as_an_environment_and_old_records_keep_theirs(
+    tmp_path: Path, start: Callable[..., Client]
+) -> None:
+    first = start(tmp_path / 'log')
+    old = first.compute(LOAD, params=_sample(1))
+    shutil.copy(tmp_path / 'log', tmp_path / 'again')
+    updated = ('essapps==2.0', 'scipp==25.11.0')
+
+    again = start(tmp_path / 'again', software=updated)
+    new = again.compute(LOAD, params=_sample(1))
+
+    environments = [
+        e for e in Log.read(tmp_path / 'again') if isinstance(e, Environment)
+    ]
+    assert environments == [Environment.of(SOFTWARE), Environment.of(updated)]
+    assert again.software([old, new]) == [SOFTWARE, updated]
+
+
+def test_a_workspace_with_the_same_software_logs_no_environment_again(
+    tmp_path: Path, start: Callable[..., Client]
+) -> None:
+    first = start(tmp_path / 'log')
+    first.compute(LOAD, params=_sample(1))
+    shutil.copy(tmp_path / 'log', tmp_path / 'again')
+
+    again = start(tmp_path / 'again')
+    again.compute(LOAD, params=_sample(2))
+
+    environments = [
+        e for e in Log.read(tmp_path / 'again') if isinstance(e, Environment)
+    ]
+    assert environments == [Environment.of(SOFTWARE)]
+
+
+def test_a_finish_naming_an_environment_the_log_lacks_is_refused(
+    tmp_path: Path, start: Callable[[Path], Client]
+) -> None:
+    start(tmp_path / 'log').compute(LOAD, params=_sample(1))
+    lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
+    kept = [line for line in lines if b'"kind":"environment"' not in line]
+    assert len(kept) == len(lines) - 1
+    (tmp_path / 'again').write_bytes(b''.join(kept))
+
+    with pytest.raises(ValueError, match='which the log does not hold'):
+        start(tmp_path / 'again')
 
 
 def test_a_refused_call_writes_nothing_to_the_log(

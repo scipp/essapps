@@ -118,6 +118,7 @@ as its plain request.
 from __future__ import annotations
 
 import copy
+import importlib.metadata
 import threading
 import uuid
 from collections import Counter, deque
@@ -152,6 +153,7 @@ from .client import Client
 from .errors import NotReadable, RecordFailed, Stopped, SubmitError
 from .files import Selector, readable
 from .log import (
+    Environment,
     Event,
     Finished,
     Log,
@@ -198,6 +200,16 @@ def _reason(error: Exception) -> str:
         return str(error)
     text = str(error)
     return f'{type(error).__name__}: {text}' if text else type(error).__name__
+
+
+def installed_software() -> list[str]:
+    """The installed Python distributions as ``name==version``, sorted."""
+    found = {
+        d.name.lower(): d.version
+        for d in importlib.metadata.distributions()
+        if d.name  # a dist-info folder left without its metadata has none
+    }
+    return [f'{name}=={version}' for name, version in sorted(found.items())]
 
 
 def _outputs_of(
@@ -433,13 +445,18 @@ class Workspace(WorkspaceProtocol):
         Where persisted outputs are written. A workspace started from an
         existing log needs the store of the workspace that wrote the log.
         Without it, the persisted work that goes on fails.
+    software:
+        Returns the software of this process, which the log holds for each
+        record that runs here. Called once, when the workspace is made, so
+        an error it raises is raised here.
 
     Raises
     ------
     ValueError
         If two bindings have the same spec name and version, or the log holds
-        an event of another proposal or a submission whose spec digest the log
-        lacks. In the second case the log is closed.
+        an event of another proposal, a submission whose spec digest the log
+        lacks, or a finish whose environment the log lacks. A refused log is
+        closed.
     TypeError
         If ``bind`` is not a list of bindings.
     """
@@ -453,8 +470,10 @@ class Workspace(WorkspaceProtocol):
         workers: int = 1,
         log: Log | None = None,
         store: Store | None = None,
+        software: Callable[[], Sequence[str]] = installed_software,
     ) -> None:
         self._proposal = proposal
+        self._environment = Environment.of(software())
         self._files = files
         self._store = store
         self._bound: dict[SpecId, _Bound] = {}
@@ -891,7 +910,9 @@ class Workspace(WorkspaceProtocol):
             outputs = plan.compute()
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
-                self._finish_locked(record_id, Status.FAILED, _reason(error))
+                self._finish_locked(
+                    record_id, Status.FAILED, _reason(error), ran_here=True
+                )
                 self._let_go_locked(reads)
             return
         with self._changed:
@@ -1047,14 +1068,14 @@ class Workspace(WorkspaceProtocol):
             return
         if failure is not None:
             self._finish_locked(
-                record_id, Status.FAILED, f'the write failed: {failure}'
+                record_id, Status.FAILED, f'the write failed: {failure}', ran_here=True
             )
             return
         for name, value in outputs.items():
             self._outputs[(record_id, name)] = value
         names = self._views.records.outputs(record_id)
         omitted = tuple(n for n in names if n not in outputs)
-        self._finish_locked(record_id, Status.COMPLETED, omitted=omitted)
+        self._finish_locked(record_id, Status.COMPLETED, omitted=omitted, ran_here=True)
         self._drop_locked(record_id)
 
     # Writing
@@ -1077,14 +1098,22 @@ class Workspace(WorkspaceProtocol):
         status: Status,
         failure: str | None = None,
         omitted: tuple[str, ...] = (),
+        *,
+        ran_here: bool = False,
     ) -> None:
         """
         Log the end of a record, and fail or start the records that wait for it.
-        ``omitted`` names the outputs the workflow did not return.
+        ``omitted`` names the outputs the workflow did not return. ``ran_here``
+        is whether the record's workflow ended in this process, so that the
+        record names the environment of this process.
         """
-        todo = [(record_id, status, failure, omitted)]
+        if ran_here and record_id not in self._views.finished:
+            environment = self._environment_locked()
+        else:
+            environment = None
+        todo = [(record_id, status, failure, omitted, environment)]
         while todo:
-            finished_id, finished, message, left_out = todo.pop()
+            finished_id, finished, message, left_out, ran_in = todo.pop()
             if finished_id in self._views.finished:
                 continue
             self._append_locked(
@@ -1093,6 +1122,7 @@ class Workspace(WorkspaceProtocol):
                     status=finished,
                     failure=message,
                     omitted=left_out,
+                    environment=ran_in,
                 )
             )
             if (plan := self._plans.pop(finished_id, None)) is not None:
@@ -1110,6 +1140,7 @@ class Workspace(WorkspaceProtocol):
                             Status.FAILED,
                             f'record {finished_id} {finished}',
                             (),
+                            None,
                         )
                     )
                     continue
@@ -1117,6 +1148,15 @@ class Workspace(WorkspaceProtocol):
         for acc in list(self._accumulating):  # a step may wait for these records
             self._advance_locked(acc)
         self._changed.notify_all()
+
+    def _environment_locked(self) -> str:
+        """
+        The ID of this process's environment, appended to the log unless the
+        log holds it.
+        """
+        if self._environment.id not in self._views.environments:
+            self._append_locked(self._environment)
+        return self._environment.id
 
     def _satisfied_locked(self, record_id: str, key: str) -> None:
         """Start the record once ``key`` was the last thing it waited for."""
@@ -1159,13 +1199,7 @@ class Workspace(WorkspaceProtocol):
             self._check_running()
             for record_id in ids:
                 self._record_locked(record_id)
-            finished = [self._views.finished.get(i) for i in ids]
-            return [
-                RecordStatus(Status.PENDING)
-                if f is None
-                else RecordStatus(f.status, f.failure)
-                for f in finished
-            ]
+            return [self._views.record_status(i) for i in ids]
 
     def cancel(self, ids: Sequence[str]) -> None:
         with self._changed:
