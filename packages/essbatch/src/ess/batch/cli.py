@@ -492,7 +492,7 @@ def _batches(given: _Given) -> pd.DataFrame:
     )
 
 
-def _table(client: Client, batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
+def _table(batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
     """
     The rows of ``keys`` of ``batch``, or all, with what came of each; why the
     settings are refused, if they are, on stderr.
@@ -500,18 +500,12 @@ def _table(client: Client, batch: Batch, keys: list[str] | None = None) -> pd.Da
     states, refused = batch.shown(keys)
     if refused:
         sys.stderr.write(f'the settings are refused: {SubmitError(refused)}\n')
-    frame = batch.frame()
-    return frames.with_results(
-        client,
-        states,
-        frame if keys is None else frame.loc[keys],
-        published=batch.published(),
-    )
+    return frames.with_results(batch, states, keys)
 
 
 def _show(given: _Given) -> pd.DataFrame:
     """The batch table of the label, with what came of each row."""
-    return _table(given.client, given.batch(given.args.label))
+    return _table(given.batch(given.args.label))
 
 
 def _reduce(given: _Given) -> pd.DataFrame:
@@ -665,7 +659,7 @@ def _publish(given: _Given) -> pd.DataFrame:
         publisher.publish(label, args.keys)
     except UploadFailed as error:
         raise _Failed(f'not published: {error}') from None
-    return _table(given.client, manager.batch(label), args.keys)
+    return _table(manager.batch(label), args.keys)
 
 
 def _offered(given: _Given) -> pd.DataFrame:
@@ -679,7 +673,7 @@ def _take(given: _Given) -> pd.DataFrame:
     args = given.args
     intake = given.intake()
     intake.take(_known(intake.manager, args.label), args.keys)
-    return _table(given.client, intake.manager.batch(args.label), args.keys)
+    return _table(intake.manager.batch(args.label), args.keys)
 
 
 def _remove(given: _Given) -> int:

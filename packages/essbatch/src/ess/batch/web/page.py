@@ -1194,12 +1194,7 @@ class Page:
     def table_file(self, suffix: str) -> bytes:
         """The batch table with what came of each row, as ``.csv`` or ``.xlsx``."""
         batch = self.batch
-        table = frames.with_results(
-            batch.client,
-            self._states()[0],
-            batch.frame(),
-            published=batch.published(),
-        )
+        table = frames.with_results(batch, self._states()[0])
         with named_file(f'rows{suffix}') as path:
             write_table(table, path)
             return path.read_bytes()
@@ -1268,9 +1263,7 @@ class Page:
             raise Problem('None of these rows has a result.')
         buffer = io.BytesIO()
         with named_file('results') as folder:
-            table = frames.with_results(
-                batch.client, states, frame.loc[done], published=batch.published()
-            )
+            table = frames.with_results(batch, states, done)
             with refused('Not downloaded'):
                 write, _ = self.pages.writing.by_form(self.label)
                 export_table(batch.client, table, folder, write)

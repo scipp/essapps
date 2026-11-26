@@ -709,7 +709,7 @@ Each subcommand is a few calls of the batch layer:
 | `sources` | the names of `-s`, and the `fills` and `description` of each |
 | `rows NAME` | `intake.rows_of(NAME)` |
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
-| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame(), published=batch.published())` |
+| `show -l LABEL` | `frames.with_results(batch, batch.shown()[0])` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
 | `export TABLE` | `export.export_table(client, table, directory, export.by_writer(client))`, of the table file |
 | `export -l LABEL` | `export.export_table(client, table, directory, writing.by_form(label)[0])`, of what `show` gives |
