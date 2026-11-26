@@ -566,8 +566,9 @@ class RowsField(Field):
     editor of one row.
 
     The table has a column per field of every alternative of the element, and a
-    ``File`` or ``Record`` column for a row given by reference. The editor is
-    the field of the element's type. The rows are held as a request writes
+    ``File`` or ``Record`` column for a row given by reference. A cell shows a
+    group or a list as its JSON text. The editor is the field of the element's
+    type. The rows are held as a request writes
     them, so the number of fields does not grow with the rows.
 
     The editor shows the selected row, and the defaults if no row or several are
