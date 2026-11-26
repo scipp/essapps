@@ -50,7 +50,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 from collections.abc import Callable, Mapping
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Union, get_args
 
 from annotated_types import MaxLen, MinLen
 from pydantic import (
@@ -69,7 +69,8 @@ from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
 from pydantic_core import CoreSchema, PydanticCustomError, core_schema
 
 from . import field_types
-from .parameters import REFERENCED, File, not_its_source
+from .field_types import Choice, FileKind, Group, Scalar
+from .parameters import File, not_its_source
 from .refs import FileRef, Loc, OutputRef
 
 INLINE: Final = 'inline'
@@ -100,10 +101,10 @@ def source_of(value: Any) -> str | None:
 
 def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     """
-    The sources that a field of type ``tp`` takes, by tag, each the type
-    that validates it, with the constraints of the field (see
-    :func:`~ess.spec.field_types.unwrapped` for ``tp`` and ``metadata``). Of the
-    part of ``tp`` that a request writes (see :func:`~ess.spec.field_types.split`):
+    The sources that a field of type ``tp`` with ``metadata`` (see
+    :func:`~ess.spec.field_types.field_metadata`), not a list, takes, by tag,
+    each the type that validates it, with the constraints of the field. Of
+    what a request writes inline (see :func:`~ess.spec.field_types.shape`):
 
     - :data:`INLINE`: the union of groups, with its discriminator, the
       group, or the scalar, each group as :func:`_group_request_type` gives it;
@@ -126,25 +127,21 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     source a field takes.
     """
     taken: dict[str, Any] = {}
-    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-    union = field_types.alternatives(inline, *inline_metadata)
-    if union is not None:
-        tag, groups = union
-        members = tuple(_alternative(group, tag, v) for v, group in groups.items())
-        alternatives = Union[members]  # noqa: UP007
-        taken[INLINE] = Annotated[
-            alternatives, *inline_metadata, Field(discriminator=tag)
-        ]
-    elif (marker := field_types.file_marker(inline, *inline_metadata)) is not None:
-        taken[FILE] = Annotated[FileRef, _ResolvedFile(marker)]
-    elif inline is not None:
-        written = (
-            _group_request_type(inline) if field_types.is_group(inline) else inline
-        )
-        taken[INLINE] = (
-            Annotated[written, *inline_metadata] if inline_metadata else written
-        )
-    if referenced:
+    field = field_types.shape(tp, metadata)
+    match field.inline:
+        case Choice(tag, groups):
+            members = tuple(_alternative(g, tag, v) for v, g in groups.items())
+            alternatives = Union[members]  # noqa: UP007
+            taken[INLINE] = Annotated[
+                alternatives, *field.metadata, Field(discriminator=tag)
+            ]
+        case FileKind(marker):
+            taken[FILE] = Annotated[FileRef, _ResolvedFile(marker)]
+        case Group(group):
+            taken[INLINE] = _annotated(_group_request_type(group), field.metadata)
+        case Scalar(scalar):
+            taken[INLINE] = _annotated(scalar, field.metadata)
+    if referenced := field.referenced:
         data: Any = Union[referenced]  # noqa: UP007
         data_type: JsonDict = {'dataType': field_types.type_name(data)}
         taken[OUTPUT] = Annotated[
@@ -264,15 +261,20 @@ def _field_request_type(annotation: Any, metadata: tuple[Any, ...] = ()) -> Any:
     as a validator, check the data or the paths, and run when the params
     model validates the list (see :func:`ess.spec.validation.validate_request_value`).
     """
-    tp, none, metadata = field_types.unwrapped(annotation, metadata)
-    if REFERENCED not in metadata and get_origin(tp) is list:
-        (element,) = get_args(tp)
+    field = field_types.shape(annotation, metadata)
+    if (element := field.element) is not None:
+        metadata = field.metadata
         if field_types.holds_marker(element):
             metadata = tuple(m for m in metadata if isinstance(m, MinLen | MaxLen))
         listed: Any = list[_field_request_type(element)]  # type: ignore[misc]
-        made = Annotated[listed, *metadata] if metadata else listed
-        return Union[made, None] if none else made  # noqa: UP007
-    return _source_union(sources(tp, metadata), none)
+        made = _annotated(listed, metadata)
+        return Union[made, None] if field.none else made  # noqa: UP007
+    return _source_union(sources(annotation, metadata), field.none)
+
+
+def _annotated(tp: Any, metadata: tuple[Any, ...]) -> Any:
+    """``tp`` with ``metadata``, if any."""
+    return Annotated[tp, *metadata] if metadata else tp
 
 
 @functools.cache
