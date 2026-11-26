@@ -399,14 +399,15 @@ class Pages:
 
     def close(self) -> None:
         """
-        Stop Follow and reject every later request, so that the workspace can
-        be closed: no reduction is submitted and no definition written after.
+        Reject every later request and step of Follow, so that the workspace
+        can be closed: no reduction is submitted and no definition written
+        after. Whether a batch follows stays stored, so that it follows again
+        once the workspace is opened again.
 
         Raises :class:`~.errors.Rejected`, and changes nothing, if a record of
-        the workspace is pending. Raises it too if the definitions cannot be
-        written.
+        the workspace is pending.
         """
-        with self.lock, reject_on_write_error():
+        with self.lock:
             client = self.intake.manager.client
             pending = client.status(client.records()).count(Status.PENDING)
             if pending == 1:
@@ -418,7 +419,6 @@ class Pages:
                     f'{pending} reductions have not ended. Cancel them, or wait '
                     'until they end.'
                 )
-            self.intake.stop()
             self.lock.closed = True
 
     def counts(self) -> BatchCounts:

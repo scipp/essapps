@@ -247,12 +247,13 @@ sequenceDiagram
 
 Close runs these steps, and stops at the first that fails:
 
-1. Refuse while a record of the workspace is pending. Nothing has changed then, Follow included.
-2. Stop Follow, and refuse every later request of its pages (`Pages.close`).
+1. Refuse while a record of the workspace is pending. Nothing has changed then.
+2. Refuse every later request and step of Follow of its pages (`Pages.close`).
 3. Unmount the batch app, and leave its lifespan: the timer of Follow ends.
 4. Close the workspace: the client waits for its records and releases the folder.
 
 Close is what a person does before `essbatch` works on that folder.
+A closed workspace does not follow until it is opened again; then the batch that followed follows again, as after a stop and start of the server.
 A batch page still open in a browser then gets an answer that the workspace is closed; a click in the list opens it again.
 
 Remove closes an open workspace as Close does, then deletes the folder (`ess.batch.remove_workspace`).
@@ -261,7 +262,7 @@ It refuses a folder that another process holds, such as one of `essbatch follow`
 The folder is renamed to a hidden name while it is held, then deleted, so a deletion that fails halfway leaves no workspace in the list.
 
 A workspace stays open until it is closed or removed, or the server stops, so that its reductions and Follow go on while another is shown.
-At the stop, the lifespan of the launch app closes every open workspace, steps 3 and 4 only: Follow stays as it was for the next start, and the stop waits for pending records.
+At the stop, the lifespan of the launch app closes every open workspace, steps 3 and 4 only: the stop waits for pending records.
 A close that raises does not keep the others open; the stop raises what each raised, at the end.
 Each open, close and remove runs in the event loop under one `asyncio.Lock`, and the mounts change only there.
 What blocks, opening a workspace, the end of the timer and the close of the client, runs in a thread.

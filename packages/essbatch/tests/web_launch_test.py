@@ -223,6 +223,22 @@ def test_a_closed_workspace_is_free_for_another_process_and_not_opened_again(
     )
 
 
+def test_a_workspace_closed_and_opened_again_follows_again(
+    http: TestClient, launcher: Launcher, sample: toys.Measure
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    opened(http, 'commissioning')
+    assert http.post('/api/workspaces/commissioning/close').status_code == 200
+
+    sample(1, 'water')
+    page = opened(http, 'commissioning')
+    wait_for(lambda: page.get('api/state').json()['rows'] != [])
+
+    state = page.get('api/state').json()
+    assert state['follow']['on'] is True
+    assert [r['name'] for r in state['rows']] == ['water']
+
+
 def test_close_is_refused_while_a_record_is_pending_and_follow_goes_on(
     http: TestClient, launcher: Launcher, sample: toys.Measure, gate: toys.Gate
 ) -> None:

@@ -255,9 +255,10 @@ class Launcher:
         """
         Close the open workspace ``name`` and return its title.
 
-        Unless at ``shutdown``, the pages close first: that raises if a
-        record is pending, and stops Follow. At shutdown, Follow stays for the
-        next start, and closing waits for the pending records.
+        Unless at ``shutdown``, the pages close first, which raises if a
+        record is pending. At shutdown, closing waits for the pending records.
+        Either way, a batch that follows follows again once the workspace is
+        opened again.
         """
         opened = self._opened[name]
         if not shutdown:
