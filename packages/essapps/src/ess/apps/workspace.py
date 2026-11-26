@@ -990,35 +990,6 @@ class Workspace(WorkspaceProtocol):
             source = self._source_spec(ref, loc, also)
             check_fit(self._bound[source].spec, ref, tp, loc)
 
-    def _check_stage(self, entry: Entry, request: Request) -> _Stage | None:
-        """
-        The stage a request goes through, if any, once checked; lock held.
-
-        The request must have the stage's values outside the blanks, as given
-        or resolved when the stage was made.
-        """
-        if entry.stage is None:
-            return None
-        stage = self._stages.get(entry.stage)
-        if stage is None:
-            raise SubmitError.at((), 'the stage was released or is unknown')
-        if stage.stopped is not None:
-            raise SubmitError.at((), stage.stopped)
-        if stage.spec != request.spec:
-            raise SubmitError.at(
-                (), f'the stage holds {stage.spec}, not {request.spec}'
-            )
-        fixed = {k: v for k, v in entry.request.params.items() if k not in stage.blanks}
-        held = stage.template.params
-        differ = (fixed.keys() ^ held.keys()) | {
-            k for k in fixed.keys() & held.keys() if fixed[k] != held[k]
-        }
-        if differ:
-            raise SubmitError.at(
-                (), f"{sorted(differ)}: differ from the stage's values"
-            )
-        return stage
-
     def _source_spec(
         self, ref: OutputRef, loc: Loc, also: Collection[tuple[str, str]]
     ) -> SpecId:
@@ -1224,40 +1195,6 @@ class Workspace(WorkspaceProtocol):
             return self._files.path(ref)
         except KeyError:
             raise _Failure(f'the file source does not know the file {ref}') from None
-
-    def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
-        """
-        The stage's callable; ``make`` stages the binding, outside the
-        workspace's lock, if no call has yet.
-
-        Once staged, the binding holds what it needs, and the stage lets go of
-        what its template references. If staging fails, the stage stops, and
-        lets go of them too: the error is that call's failure, and the calls
-        after it fail with the reason.
-        """
-        with stage.staging:
-            with self._changed:
-                if stage.stopped is not None:
-                    raise _Failure(stage.stopped)
-                if stage.call is not None:
-                    return stage.call
-            try:
-                call = make()
-            except Exception as error:
-                with self._changed:
-                    reason = _reason(error)
-                    stage.stopped = f'the stage stopped: staging failed: {reason}'
-                    self._let_go_of_template(stage)
-                raise
-            with self._changed:
-                stage.call = call
-                self._let_go_of_template(stage)
-            return call
-
-    def _let_go_of_template(self, stage: _Stage) -> None:
-        """Let go of what the stage's template references, once; lock held."""
-        reads, stage.reads = stage.reads, []
-        self._let_go(reads)
 
     def _reader(self, params: Mapping[str, Any]) -> Callable[[OutputRef], Any]:
         """
@@ -1493,25 +1430,216 @@ class Workspace(WorkspaceProtocol):
                 self._drop(i)
         self._changed.notify_all()
 
-    def _unneeded(self, acc: _Accumulator) -> None:
-        """
-        Drop the steps of a released accumulator that no reader needs, and
-        let go of what they read; lock held. Called at release, and again
-        whenever the last reader of one of its states lets go.
+    # Queries and control
 
-        A reader needs the steps up to the state it reads. The step a worker
-        is doing cannot be stopped, so it stays. No record of a freeze waits
-        for a dropped step, since a pending one is a reader.
+    def _record(self, record_id: str) -> Record:
+        """The record; lock held. Raises ``KeyError`` for one unknown."""
+        record = self._views.records.get(record_id)
+        if record is None:
+            raise KeyError(f'no record {record_id} in proposal {self._proposal}')
+        return record
+
+    def status(self, ids: Sequence[str]) -> list[RecordStatus]:
+        with self._changed:
+            self._check_running()
+            for record_id in ids:
+                self._record(record_id)
+            finished = [self._views.finished.get(i) for i in ids]
+            return [
+                RecordStatus(Status.PENDING)
+                if f is None
+                else RecordStatus(f.status, f.failure)
+                for f in finished
+            ]
+
+    def cancel(self, ids: Sequence[str]) -> None:
+        with self._changed:
+            self._check_running()
+            for record_id in ids:
+                self._record(record_id)
+                self._finish(record_id, Status.CANCELLED)
+
+    def bound(self, ids: Sequence[str]) -> list[bool]:
+        with self._changed:
+            self._check_running()
+            return [self._other(self._record(i).id) is None for i in ids]
+
+    def readable(self, ids: Sequence[str]) -> list[tuple[str, ...]]:
+        with self._changed:
+            self._check_running()
+            return [
+                tuple(
+                    name
+                    for name in self._record(record_id).outputs
+                    if self._refusal((record_id, name)) is None
+                )
+                for record_id in ids
+            ]
+
+    def records(
+        self,
+        *,
+        label: str | None = None,
+        ids: Sequence[str] | None = None,
+    ) -> list[Record]:
+        if label is not None and ids is not None:
+            raise ValueError('give a label or ids, not both')
+        with self._changed:
+            self._check_running()
+            records = self._views.records
+            if ids is not None:
+                return [self._record(i) for i in ids]
+            if label is not None:
+                return [records[i] for i in self._views.labels.get(label, [])]
+            return list(records.values())
+
+    def changes(self, after: int, *, timeout: float = 0.0) -> Changes:
         """
-        read = [upto for held, upto in self._readers if held is acc]
-        done = -1 if acc.added is None else acc.added  # the opening is step 0
-        needed = max(read, default=done) - done
-        dropped = []
-        while len(acc.steps) > max(needed, int(acc.busy)):
-            dropped.append(acc.steps.pop()[1])
-        for reads in dropped:
-            self._let_go(reads)
-        self._advance(acc)
+        Wakes once an event is appended, or the workspace closes (see
+        :meth:`_append`).
+        """
+        with self._changed:
+            self._check_running()
+            self._changed.wait_for(
+                lambda: (
+                    self._stopped is not None
+                    or self._closed
+                    or self._views.changes(after).records
+                ),
+                timeout,
+            )
+            self._check_running()
+            return self._views.changes(after)
+
+    def outputs(
+        self,
+        record_id: str,
+        names: Sequence[str] | None,
+        *,
+        select: Selection | None = None,
+    ) -> dict[str, Any]:
+        values = self._read(record_id, names, select=select)
+        if select is None:
+            return values
+        return {n: _selected(v, select) for n, v in values.items()}
+
+    def describe(self, record_id: str, name: str) -> dict[str, Any]:
+        value = self._read(record_id, [name], select=None)[name]
+        info = _info(value)
+        # read as stored, any output but an array is a DataGroup: a mapping
+        stored = self._other(record_id) is not None
+        group = isinstance(value, BaseModel) or (stored and isinstance(value, Mapping))
+        return info if group else {name: info}
+
+    def _read(
+        self,
+        record_id: str,
+        names: Sequence[str] | None,
+        *,
+        select: Selection | None,
+    ) -> dict[str, Any]:
+        """
+        The values of :meth:`outputs`, not copied, in memory or read from the
+        store; ``select`` is checked here and applied by the caller.
+        """
+        with self._changed:
+            self._check_running()
+            record = self._record(record_id)
+            if select is not None:
+                typed = self._other(record_id) is None
+                self._check_select(record.spec if typed else None, names)
+            wanted = record.outputs if names is None else names
+            for name in wanted:
+                if name not in record.outputs:
+                    raise KeyError(f'{record.spec} has no output {name!r}')
+            self._wait_for(lambda: self._read_ready(record_id, wanted))
+            kept = record_id in self._kept
+            chosen = self._read_names(record, names)
+            # from memory if kept, else from the store
+            values = {n: self._outputs[(record_id, n)] for n in chosen if kept}
+        if not kept:
+            values = {n: self._stored(record.ref(n)) for n in chosen}
+        return values
+
+    def _read_ready(self, record_id: str, wanted: Sequence[str]) -> bool:
+        """
+        Whether a read of the outputs ``wanted`` stops waiting: once the
+        record has finished, or at once if the workspace does not keep it and
+        it persists none of them, since there is nothing to wait for; lock
+        held.
+        """
+        if record_id in self._views.finished:
+            return True
+        if record_id in self._kept:
+            return False
+        return not any(self._views.persists((record_id, n)) for n in wanted)
+
+    def _read_names(self, record: Record, names: Sequence[str] | None) -> list[str]:
+        """
+        The outputs a read takes, once it has waited: ``names``, or if
+        ``None`` every output that the workspace keeps or the record persists
+        and that the workflow returned; lock held. Raises ``RecordFailed`` for
+        a record that failed or was cancelled, and ``NotReadable`` for an
+        output that may not be read (see :meth:`_refusal`).
+        """
+        views, record_id = self._views, record.id
+        if names is None:
+            kept = record_id in self._kept
+            held = [n for n in record.outputs if kept or views.persists((record_id, n))]
+            if not held:
+                raise NotReadable(f'record {record_id} is not kept')
+            # only a completed record omits outputs, so a failed one raises below
+            names = [n for n in held if not views.omitted((record_id, n))]
+        finished = views.finished.get(record_id)
+        if finished is not None and finished.status is not Status.COMPLETED:
+            raise RecordFailed(record_id, finished.status, finished.failure)
+        for name in names:
+            if (why := self._refusal((record_id, name))) is not None:
+                raise NotReadable(why)
+        return list(names)
+
+    def _check_select(
+        self, spec_id: SpecId | None, names: Sequence[str] | None
+    ) -> None:
+        """
+        Refuse a selection unless it names outputs, each declared by
+        ``spec_id`` as an array or as a group with an array field; needs no
+        lock. A selection names the dimensions of the outputs it reads, so it
+        reads only outputs named. ``spec_id`` is ``None`` for a record of
+        another spec, whose outputs read as stored are checked by slicing.
+        """
+        if names is None:
+            raise ValueError('select= needs the name of an output')
+        if spec_id is None:
+            return
+        declared = self._bound[spec_id].spec.outputs.model_fields
+        for name in (n for n in names if n in declared):  # others raise when read
+            if not field_types.has_array(declared[name].annotation):
+                raise ValueError(
+                    f'{spec_id} output {name!r}: select= needs an array, or a group '
+                    'with an array field'
+                )
+
+    # Files, within the workspace's proposal
+
+    def files(self, selector: Selector) -> list[FileRef]:
+        self._check_running()
+        return [
+            ref
+            for ref in self._files.list(selector)
+            if readable(self._files.metadata(ref), self._proposal)
+        ]
+
+    def file_metadata(self, refs: Sequence[FileRef]) -> list[dict[str, Any]]:
+        self._check_running()
+        proposal = self._proposal
+        found = [self._files.metadata(ref) for ref in refs]
+        for ref, metadata in zip(refs, found, strict=True):
+            if not readable(metadata, proposal):
+                raise KeyError(f'no file {ref} in proposal {proposal}')
+        return found
+
+    # Stages and accumulators
 
     def open_stage(self, template: Template) -> tuple[str, Template]:
         """
@@ -1537,6 +1665,69 @@ class Workspace(WorkspaceProtocol):
             stage = self._stages[stage_id] = _Stage(binding, stored)
             self._readers.update(stage.reads)
         return stage_id, stored
+
+    def _check_stage(self, entry: Entry, request: Request) -> _Stage | None:
+        """
+        The stage a request goes through, if any, once checked; lock held.
+
+        The request must have the stage's values outside the blanks, as given
+        or resolved when the stage was made.
+        """
+        if entry.stage is None:
+            return None
+        stage = self._stages.get(entry.stage)
+        if stage is None:
+            raise SubmitError.at((), 'the stage was released or is unknown')
+        if stage.stopped is not None:
+            raise SubmitError.at((), stage.stopped)
+        if stage.spec != request.spec:
+            raise SubmitError.at(
+                (), f'the stage holds {stage.spec}, not {request.spec}'
+            )
+        fixed = {k: v for k, v in entry.request.params.items() if k not in stage.blanks}
+        held = stage.template.params
+        differ = (fixed.keys() ^ held.keys()) | {
+            k for k in fixed.keys() & held.keys() if fixed[k] != held[k]
+        }
+        if differ:
+            raise SubmitError.at(
+                (), f"{sorted(differ)}: differ from the stage's values"
+            )
+        return stage
+
+    def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
+        """
+        The stage's callable; ``make`` stages the binding, outside the
+        workspace's lock, if no call has yet.
+
+        Once staged, the binding holds what it needs, and the stage lets go of
+        what its template references. If staging fails, the stage stops, and
+        lets go of them too: the error is that call's failure, and the calls
+        after it fail with the reason.
+        """
+        with stage.staging:
+            with self._changed:
+                if stage.stopped is not None:
+                    raise _Failure(stage.stopped)
+                if stage.call is not None:
+                    return stage.call
+            try:
+                call = make()
+            except Exception as error:
+                with self._changed:
+                    reason = _reason(error)
+                    stage.stopped = f'the stage stopped: staging failed: {reason}'
+                    self._let_go_of_template(stage)
+                raise
+            with self._changed:
+                stage.call = call
+                self._let_go_of_template(stage)
+            return call
+
+    def _let_go_of_template(self, stage: _Stage) -> None:
+        """Let go of what the stage's template references, once; lock held."""
+        reads, stage.reads = stage.reads, []
+        self._let_go(reads)
 
     def open_accumulator(self, template: Template) -> tuple[str, Template]:
         """
@@ -1778,6 +1969,26 @@ class Workspace(WorkspaceProtocol):
             acc.end()
         self._changed.notify_all()
 
+    def _unneeded(self, acc: _Accumulator) -> None:
+        """
+        Drop the steps of a released accumulator that no reader needs, and
+        let go of what they read; lock held. Called at release, and again
+        whenever the last reader of one of its states lets go.
+
+        A reader needs the steps up to the state it reads. The step a worker
+        is doing cannot be stopped, so it stays. No record of a freeze waits
+        for a dropped step, since a pending one is a reader.
+        """
+        read = [upto for held, upto in self._readers if held is acc]
+        done = -1 if acc.added is None else acc.added  # the opening is step 0
+        needed = max(read, default=done) - done
+        dropped = []
+        while len(acc.steps) > max(needed, int(acc.busy)):
+            dropped.append(acc.steps.pop()[1])
+        for reads in dropped:
+            self._let_go(reads)
+        self._advance(acc)
+
     def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
         """
         Why the plain request of the accumulator's state after ``upto`` pushes
@@ -1868,52 +2079,6 @@ class Workspace(WorkspaceProtocol):
             with self._changed:
                 self._let_go([(acc, upto)])
 
-    # Queries and control
-
-    def _record(self, record_id: str) -> Record:
-        """The record; lock held. Raises ``KeyError`` for one unknown."""
-        record = self._views.records.get(record_id)
-        if record is None:
-            raise KeyError(f'no record {record_id} in proposal {self._proposal}')
-        return record
-
-    def status(self, ids: Sequence[str]) -> list[RecordStatus]:
-        with self._changed:
-            self._check_running()
-            for record_id in ids:
-                self._record(record_id)
-            finished = [self._views.finished.get(i) for i in ids]
-            return [
-                RecordStatus(Status.PENDING)
-                if f is None
-                else RecordStatus(f.status, f.failure)
-                for f in finished
-            ]
-
-    def cancel(self, ids: Sequence[str]) -> None:
-        with self._changed:
-            self._check_running()
-            for record_id in ids:
-                self._record(record_id)
-                self._finish(record_id, Status.CANCELLED)
-
-    def bound(self, ids: Sequence[str]) -> list[bool]:
-        with self._changed:
-            self._check_running()
-            return [self._other(self._record(i).id) is None for i in ids]
-
-    def readable(self, ids: Sequence[str]) -> list[tuple[str, ...]]:
-        with self._changed:
-            self._check_running()
-            return [
-                tuple(
-                    name
-                    for name in self._record(record_id).outputs
-                    if self._refusal((record_id, name)) is None
-                )
-                for record_id in ids
-            ]
-
     def plain_request(self, accumulator_id: str) -> Request:
         with self._changed:
             acc, upto = self._logged_state(accumulator_id)
@@ -1921,150 +2086,6 @@ class Workspace(WorkspaceProtocol):
             raise NotReadable(refused)
         with self._changed:
             return self._views.plain(acc.id, upto)
-
-    def records(
-        self,
-        *,
-        label: str | None = None,
-        ids: Sequence[str] | None = None,
-    ) -> list[Record]:
-        if label is not None and ids is not None:
-            raise ValueError('give a label or ids, not both')
-        with self._changed:
-            self._check_running()
-            records = self._views.records
-            if ids is not None:
-                return [self._record(i) for i in ids]
-            if label is not None:
-                return [records[i] for i in self._views.labels.get(label, [])]
-            return list(records.values())
-
-    def changes(self, after: int, *, timeout: float = 0.0) -> Changes:
-        """
-        Wakes once an event is appended, or the workspace closes (see
-        :meth:`_append`).
-        """
-        with self._changed:
-            self._check_running()
-            self._changed.wait_for(
-                lambda: (
-                    self._stopped is not None
-                    or self._closed
-                    or self._views.changes(after).records
-                ),
-                timeout,
-            )
-            self._check_running()
-            return self._views.changes(after)
-
-    def outputs(
-        self,
-        record_id: str,
-        names: Sequence[str] | None,
-        *,
-        select: Selection | None = None,
-    ) -> dict[str, Any]:
-        values = self._read(record_id, names, select=select)
-        if select is None:
-            return values
-        return {n: _selected(v, select) for n, v in values.items()}
-
-    def describe(self, record_id: str, name: str) -> dict[str, Any]:
-        value = self._read(record_id, [name], select=None)[name]
-        info = _info(value)
-        # read as stored, any output but an array is a DataGroup: a mapping
-        stored = self._other(record_id) is not None
-        group = isinstance(value, BaseModel) or (stored and isinstance(value, Mapping))
-        return info if group else {name: info}
-
-    def _read(
-        self,
-        record_id: str,
-        names: Sequence[str] | None,
-        *,
-        select: Selection | None,
-    ) -> dict[str, Any]:
-        """
-        The values of :meth:`outputs`, not copied, in memory or read from the
-        store; ``select`` is checked here and applied by the caller.
-        """
-        with self._changed:
-            self._check_running()
-            record = self._record(record_id)
-            if select is not None:
-                typed = self._other(record_id) is None
-                self._check_select(record.spec if typed else None, names)
-            wanted = record.outputs if names is None else names
-            for name in wanted:
-                if name not in record.outputs:
-                    raise KeyError(f'{record.spec} has no output {name!r}')
-            self._wait_for(lambda: self._read_ready(record_id, wanted))
-            kept = record_id in self._kept
-            chosen = self._read_names(record, names)
-            # from memory if kept, else from the store
-            values = {n: self._outputs[(record_id, n)] for n in chosen if kept}
-        if not kept:
-            values = {n: self._stored(record.ref(n)) for n in chosen}
-        return values
-
-    def _read_ready(self, record_id: str, wanted: Sequence[str]) -> bool:
-        """
-        Whether a read of the outputs ``wanted`` stops waiting: once the
-        record has finished, or at once if the workspace does not keep it and
-        it persists none of them, since there is nothing to wait for; lock
-        held.
-        """
-        if record_id in self._views.finished:
-            return True
-        if record_id in self._kept:
-            return False
-        return not any(self._views.persists((record_id, n)) for n in wanted)
-
-    def _read_names(self, record: Record, names: Sequence[str] | None) -> list[str]:
-        """
-        The outputs a read takes, once it has waited: ``names``, or if
-        ``None`` every output that the workspace keeps or the record persists
-        and that the workflow returned; lock held. Raises ``RecordFailed`` for
-        a record that failed or was cancelled, and ``NotReadable`` for an
-        output that may not be read (see :meth:`_refusal`).
-        """
-        views, record_id = self._views, record.id
-        if names is None:
-            kept = record_id in self._kept
-            held = [n for n in record.outputs if kept or views.persists((record_id, n))]
-            if not held:
-                raise NotReadable(f'record {record_id} is not kept')
-            # only a completed record omits outputs, so a failed one raises below
-            names = [n for n in held if not views.omitted((record_id, n))]
-        finished = views.finished.get(record_id)
-        if finished is not None and finished.status is not Status.COMPLETED:
-            raise RecordFailed(record_id, finished.status, finished.failure)
-        for name in names:
-            if (why := self._refusal((record_id, name))) is not None:
-                raise NotReadable(why)
-        return list(names)
-
-    def _check_select(
-        self, spec_id: SpecId | None, names: Sequence[str] | None
-    ) -> None:
-        """
-        Refuse a selection unless it names outputs, each declared by
-        ``spec_id`` as an array or as a group with an array field; needs no
-        lock. A selection names the dimensions of the outputs it reads, so it
-        reads only outputs named. ``spec_id`` is ``None`` for a record of
-        another spec, whose outputs read as stored are checked by slicing.
-        """
-        if names is None:
-            raise ValueError('select= needs the name of an output')
-        if spec_id is None:
-            return
-        declared = self._bound[spec_id].spec.outputs.model_fields
-        for name in (n for n in names if n in declared):  # others raise when read
-            if not field_types.has_array(declared[name].annotation):
-                raise ValueError(
-                    f'{spec_id} output {name!r}: select= needs an array, or a group '
-                    'with an array field'
-                )
 
     def accumulator_outputs(
         self,
@@ -2100,25 +2121,6 @@ class Workspace(WorkspaceProtocol):
             if select is None:
                 return copy.deepcopy(values)
             return {n: _selected(v, select) for n, v in values.items()}
-
-    # Files, within the workspace's proposal
-
-    def files(self, selector: Selector) -> list[FileRef]:
-        self._check_running()
-        return [
-            ref
-            for ref in self._files.list(selector)
-            if readable(self._files.metadata(ref), self._proposal)
-        ]
-
-    def file_metadata(self, refs: Sequence[FileRef]) -> list[dict[str, Any]]:
-        self._check_running()
-        proposal = self._proposal
-        found = [self._files.metadata(ref) for ref in refs]
-        for ref, metadata in zip(refs, found, strict=True):
-            if not readable(metadata, proposal):
-                raise KeyError(f'no file {ref} in proposal {proposal}')
-        return found
 
 
 def local(
