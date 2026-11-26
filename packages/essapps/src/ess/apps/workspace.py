@@ -949,16 +949,16 @@ class Workspace(WorkspaceProtocol):
         """
         try:
             stage = self._check_stage(entry, request)
-            also: Collection[tuple[str, str]] = ()
+            stage_reads: Collection[tuple[str, str]] = ()
             if stage is not None:
-                read, also = stage.read_part(request).params, stage.reads
+                read, stage_reads = stage.read_part(request).params, stage.reads
                 reads = [r for r in reads if r[0][0] in read]
-            self._check_reads(reads, also)
+            self._check_reads(reads, stage_reads)
         except SubmitError as error:
             raise _refused(index, error) from None
 
     def _check_reads(
-        self, reads: OutputReads, also: Collection[tuple[str, str]] = ()
+        self, reads: OutputReads, stage_reads: Collection[tuple[str, str]] = ()
     ) -> None:
         """
         Check the outputs of records that a request, a template, or a push
@@ -966,17 +966,13 @@ class Workspace(WorkspaceProtocol):
         fit; lock held. Each must be one that may be referenced (see
         :meth:`_source_spec`), declared by its spec, and fit its field (see
         :func:`.checks.check_fit`).
-
-        A request through a stage that has yet to stage also reads ``also``,
-        what the stage keeps, which :meth:`_check_stage` has checked it for;
-        one through a stage that has staged reads only its blanks.
         """
         for loc, ref, tp in reads:
-            source = self._source_spec(ref, loc, also)
+            source = self._source_spec(ref, loc, stage_reads)
             check_fit(self._bound[source].spec, ref, tp, loc)
 
     def _source_spec(
-        self, ref: OutputRef, loc: Loc, also: Collection[tuple[str, str]]
+        self, ref: OutputRef, loc: Loc, stage_reads: Collection[tuple[str, str]]
     ) -> SpecId:
         """
         The spec of a record a request may read; lock held. The record's
@@ -1006,7 +1002,7 @@ class Workspace(WorkspaceProtocol):
         record = self._views.records.get(ref.record)
         if record is None:
             raise SubmitError.at(loc, f'unknown record or accumulator {ref.record}')
-        if (why := self._refusal((ref.record, ref.output), also)) is not None:
+        if (why := self._refusal((ref.record, ref.output), stage_reads)) is not None:
             raise SubmitError.at(loc, why)
         if (other := self._other(ref.record)) is not None:
             raise SubmitError.at(
@@ -1017,7 +1013,7 @@ class Workspace(WorkspaceProtocol):
         return record.spec
 
     def _refusal(
-        self, key: tuple[str, str], also: Collection[tuple[str, str]] = ()
+        self, key: tuple[str, str], stage_reads: Collection[tuple[str, str]] = ()
     ) -> str | None:
         """
         Why a request may not reference an output of a record now, or ``None``;
@@ -1026,16 +1022,16 @@ class Workspace(WorkspaceProtocol):
         This is the read rule. The record must not have failed or been
         cancelled, and a record that has completed must have returned the
         output. The workspace must hold the record in memory, or the request's
-        stage the output, ``also``, and it is read from memory; or the record must
-        persist the output, and it is read from the store. A pending record
-        passes: whether a request is accepted does not depend on how far what
-        it reads has run.
+        stage the output, ``stage_reads``, and it is read from memory; or the
+        record must persist the output, and it is read from the store. A pending
+        record passes: whether a request is accepted does not depend on how far
+        what it reads has run.
         """
         record_id, name = key
         status = self._views.status(record_id)
         if status in (Status.FAILED, Status.CANCELLED):
             return f'record {record_id} {status}'
-        held = record_id in self._in_memory or key in also
+        held = record_id in self._in_memory or key in stage_reads
         if not held and not self._views.persists(key):
             return f'record {record_id} is neither in memory nor persisted'
         if self._views.omitted(key):
