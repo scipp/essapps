@@ -359,16 +359,16 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.get('/api/runs')
     def runs() -> Runs:
-        return pages.runs()
+        return pages.files.runs()
 
     @workspace.post('/api/runs/cells')
     def correct(body: CellEdit) -> Notice:
         """Correct runs; no row of a batch changes."""
-        return pages.correct(body)
+        return pages.files.correct(body)
 
     @workspace.post('/api/runs/cells/revert')
     def revert_run(body: Cells) -> Notice:
-        return pages.revert_run(body)
+        return pages.files.revert_run(body)
 
     app.include_router(batch)
     app.include_router(workspace)

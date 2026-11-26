@@ -246,7 +246,7 @@ class Page:
     def __init__(self, pages: Pages, label: str) -> None:
         self.pages = pages
         self.label = label
-        pages.list_again()
+        pages.files.list_again()
         self._columns: tuple[str, ...] | None = None
         self._fit()
         self.refused: list[FieldError] = []
@@ -290,9 +290,9 @@ class Page:
             return
         self._columns = batch.parameter_columns
         self._cells = Fields(
-            batch.spec.params, self.pages.listing, fields=batch.parameter_columns
+            batch.spec.params, self.pages.files.listing, fields=batch.parameter_columns
         )
-        self.draft = Draft(batch, self.pages.listing)
+        self.draft = Draft(batch, self.pages.files.listing)
         self._titles = view.titles(batch.spec.params)
 
     def _follows(self) -> bool:
@@ -306,20 +306,20 @@ class Page:
         What the page shows that changes without an action, each by what
         counts its changes or as its value: the batch (its table and its
         template), the records listed, the files listed and why they cannot
-        be (:attr:`Pages.files_version <.pages.Pages.files_version>`), the
+        be (:attr:`SafeListing.version <.runs.SafeListing.version>`), the
         headers of the batches, which batch follows, and what Follow said of
-        this batch (:meth:`Pages.follow_token <.pages.Pages.follow_token>`).
+        this batch (:meth:`LastStep.token <.follow.LastStep.token>`).
         A record that changed since the records listed is in the feed that
         :meth:`poll` reads.
         """
         pages = self.pages
         return (
             self.batch.version,
-            pages.listing.cursor,
-            pages.files_version,
+            pages.files.listing.cursor,
+            pages.files.listing.version,
             pages.intake.manager.version,
             pages.intake.following,
-            pages.follow_token(self.label),
+            pages.follow.token(self.label),
         )
 
     def _new_version(self) -> None:
@@ -328,16 +328,16 @@ class Page:
 
     def _list_again(self) -> None:
         """
-        List again (:meth:`Pages.list_again <.pages.Pages.list_again>`), and
+        List again (:meth:`Files.list_again <.runs.Files.list_again>`), and
         give the pickers and the forms what is listed now.
         """
-        self.pages.list_again()
-        self.draft.refresh(self.pages.listing)
-        self._cells.refresh(self.pages.listing)
+        self.pages.files.list_again()
+        self.draft.refresh(self.pages.files.listing)
+        self._cells.refresh(self.pages.files.listing)
 
     def _show_settings(self) -> None:
         """Show the batch's settings in the form, which then holds no change."""
-        self.draft.reset(self.batch.settings, self.pages.listing)
+        self.draft.reset(self.batch.settings, self.pages.files.listing)
 
     def _states(
         self, keys: Sequence[str] | None = None
@@ -354,7 +354,7 @@ class Page:
         """The state, or ``None`` if it is still that of version ``after``."""
         # The feed catches a record that ended after the last relist but before
         # ``_seen`` was read, which ``_live`` holds already and the listing lacks.
-        changes = self.batch.client.changes(after=self.pages.listing.cursor)
+        changes = self.batch.client.changes(after=self.pages.files.listing.cursor)
         # A table changed by another caller may name files that the listing lacks.
         if changes.records or self._live() != self._seen:
             self._list_again()
@@ -387,7 +387,7 @@ class Page:
         batch = self.batch
         columns = batch.parameter_columns
         states, unusable = self._states()
-        unsubmitted = self.pages.unsubmitted(self.label, states)
+        unsubmitted = self.pages.follow.unsubmitted(self.label, states)
         failures = self._failures(states)
         frame = batch.frame()
         requested = batch.cells()
@@ -425,7 +425,7 @@ class Page:
         return State(
             version=self.version,
             start=self.start,
-            runs=self.pages.runs_version,
+            runs=self.pages.files.runs_version,
             batches=self.pages.batches().rows,
             label=self.label,
             title=header.title,
@@ -458,8 +458,8 @@ class Page:
                 n for n in forms.edited(self.draft.fields) if n not in columns
             ],
             refused=[view.refusal(e, named, titles) for e in self.refused],
-            follow=self.pages.follow_shown(self.label),
-            files_problem=self.pages.listing.failure,
+            follow=self.pages.follow.shown(self.label),
+            files_problem=self.pages.files.listing.failure,
             output=view.output(
                 self.pages.writing.form(self.label),
                 self.pages.writing.writers(self.label),
@@ -480,7 +480,8 @@ class Page:
 
     def _cell_text(self, name: str, cell: Any) -> str:
         """What a cell of the column ``name`` that holds ``cell`` shows."""
-        return view.cell_text(self.pages.listing, self.batch.spec.params, name, cell)
+        listing = self.pages.files.listing
+        return view.cell_text(listing, self.batch.spec.params, name, cell)
 
     def _row(
         self,
@@ -515,7 +516,7 @@ class Page:
             cells={
                 c: Cell(
                     value=forms.cell(self._cells.fields[c], given.get(c, UNSET)),
-                    text=view.text(self.pages.listing, given.get(c, UNSET)),
+                    text=view.text(self.pages.files.listing, given.get(c, UNSET)),
                     problem=problems.get(c),
                 )
                 for c in self.batch.parameter_columns
@@ -749,7 +750,7 @@ class Page:
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
         self.refused = [e for e in self.refused if e.entry]
-        self.pages.applied(self.label)
+        self.pages.follow.applied(self.label)
         return 'Applied the settings.'
 
     @_action
@@ -763,7 +764,7 @@ class Page:
         refuses (:meth:`~ess.batch.Batch.settable`); raises as
         :meth:`Fields.set`.
         """
-        self.draft.fill(self.batch.settable(params), self.pages.listing)
+        self.draft.fill(self.batch.settable(params), self.pages.files.listing)
 
     @_action
     def use_settings(self, key: str) -> str:
@@ -849,8 +850,8 @@ class Page:
         if record is None or state.spec_changed:
             # another spec's params are not this one's
             return RowDetail(key=key, reduced_with=None, created=None, differs=[])
-        given = Fields(self.batch.spec.params, self.pages.listing)
-        given.set(record.request.params, self.pages.listing)
+        given = Fields(self.batch.spec.params, self.pages.files.listing)
+        given.set(record.request.params, self.pages.files.listing)
         return RowDetail(
             key=key,
             reduced_with=forms.tree(given),

@@ -12,19 +12,8 @@ the batches of the manager, changes in one request at a time. One person
 works with the application, so a request waits for at most one step, or for
 the counts (:meth:`Pages.counts`), which read the state of every batch.
 
-The pages share one listing of what the client lists (:attr:`Pages.listing`):
-the files, with their metadata, and the records. A page asks to list again
-(:meth:`Pages.list_again`) when the records or its batch table changed, at a step
-of Follow, at "List runs again", and as it is made; :class:`Pages` counts
-the changes of the files and of why they cannot be listed
-(:attr:`Pages.files_version`), which every page compares at its poll.
-The runs are the files, the same on every page (:meth:`Pages.runs`), and a
-person corrects them on any page, with or without a batch
-(:meth:`Pages.correct`). A correction changes no row of a batch: a
-batch table names files, and the page shows each with its metadata now. The Runs
-view names the batches of each run from the files that each batch names,
-which come with the counts (:meth:`Pages.counts`), since Follow adds rows
-without a change of the runs.
+The pages share one listing of what the client lists, and the Runs view
+(:class:`~.runs.Files`).
 
 A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers, in one of three ways
@@ -44,9 +33,9 @@ before answers :class:`~.refusals.Missing` from then on.
 (:attr:`~ess.batch.Intake.following`). :meth:`Pages.tick` is one
 step of it (:meth:`~ess.batch.Intake.step`), with or without a
 page open, plus what the page shows of the step
-(:meth:`Pages.follow_shown`, :meth:`Pages.unsubmitted`): why rows were
-refused, how many rows wait, and what the step raised; then
-the page of the batch that follows shows what the step changed.
+(:class:`~.follow.LastStep`): why rows were refused, how many rows wait,
+and what the step raised; then the page of the batch that follows shows
+what the step changed.
 :func:`~.api.create_app` owns the timer that calls it, every
 :attr:`Pages.interval` seconds.
 """
@@ -55,45 +44,32 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from ess.apps.client import Client
-from ess.apps.errors import said
-from ess.apps.fields import UNSET, Fields
-from ess.apps.files import Selector
-from ess.apps.listing import Listing
-from ess.spec import File, FileRef
-
-from ..auto import Step
 from ..corrections import CorrectedFiles
 from ..intake import Intake, fits, step_failure
 from ..source import Range, RowSource
-from ..state import RowState, not_reduced
 from ..table import read_table
 from ..writing import Writing
-from . import forms, view
+from . import view
+from .follow import LastStep
 from .models import (
     BatchCounts,
     Batches,
     BatchRow,
-    CellEdit,
-    Cells,
-    Column,
-    Following,
     Made,
     NewBatch,
     Notice,
-    Runs,
     SourceChoice,
     SourceRows,
 )
 from .page import Page
 from .refusals import Missing, Problem, kept, refused, why
+from .runs import Files
 from .tempfiles import read_file
 
 if TYPE_CHECKING:
@@ -104,52 +80,14 @@ if TYPE_CHECKING:
     from .page import Draw
 
 
-class SafeListing(Listing):
-    """
-    What the client lists now, as :class:`Listing` gives it, but without files
-    if the file source raises: a picker then offers none, the Runs view lists
-    none, and :attr:`failure` says why. It lists every file with its metadata
-    as it is made (:attr:`files_listed`), so that :class:`Pages` sees a
-    change of the files.
-    """
-
-    error: str | None = None
-    """What the file source raised, ``None`` if it raised nothing."""
-
-    def __init__(self, client: Client, previous: Listing | None = None) -> None:
-        super().__init__(client, previous)
-        self.files_listed = self.listed(Selector())
-
-    @property
-    def failure(self) -> str | None:
-        """Why the files cannot be listed, as the page says it."""
-        return (
-            None if self.error is None else f'The files cannot be listed: {self.error}'
-        )
-
-    def files(self, marker: File) -> dict[str, FileRef]:
-        try:
-            return super().files(marker)
-        except Exception as error:  # the file source is code of the application
-            self.error = said(error)
-            return {}
-
-    def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
-        try:
-            return super().listed(selector)
-        except Exception as error:  # the file source is code of the application
-            self.error = said(error)
-            return {}
-
-
 class Pages:
     """
-    What the pages of the batches of ``intake.manager`` share. It owns, and only it
-    writes, the listing of the files and its version, the corrections of
-    runs, and the step of Follow and what it said; a :class:`~.page.Page`
-    writes its batch through the manager. Each public method takes
-    :attr:`lock`, which a caller may hold already; a property reads one value
-    without it. See the module.
+    What the pages of the batches of ``intake.manager`` share. It owns, and
+    only it writes, the files listed and their corrections (:attr:`files`),
+    and the step of Follow and what it said (:attr:`follow`); a
+    :class:`~.page.Page` writes its batch through the manager. Each public
+    method takes :attr:`lock`, which a caller may hold already. See the
+    module.
 
     Parameters
     ----------
@@ -184,6 +122,11 @@ class Pages:
     ----------
     lock:
         The lock of every request of every page and of each step of Follow.
+    files:
+        The files listed, for the pickers and the Runs view of every page.
+    follow:
+        What the last step of Follow said, for the page of the batch that
+        follows.
     """
 
     def __init__(
@@ -217,19 +160,12 @@ class Pages:
         self.interval = interval
         self.title = title
         self.draw = {} if draw is None else draw
-        # What a person corrects of a run, and where; None if nothing.
-        self._marking = None if marks is None or files is None else (marks, files)
         self.folder = folder
         self.lock = threading.RLock()
-        # What Follow said: what its last step raised, and the label and the
-        # last step that did not raise, whose refusals :meth:`applied` empties.
-        self._failure: str | None = None
-        self._last: tuple[str, Step] | None = None
-        self._listing = SafeListing(intake.manager.client)
-        # The files of the listing with their metadata, and why they cannot
-        # be listed, as at :attr:`files_version`.
-        self._files = (self._listing.files_listed, self._listing.failure)
-        self._files_version = 1
+        self.files = Files(
+            intake.manager.client, self.lock, marks=marks, corrected=files
+        )
+        self.follow = LastStep(intake, interval)
         self._pages: dict[str, Page] = {}
 
     def page(self, label: str) -> Page:
@@ -279,10 +215,11 @@ class Pages:
         A step of Follow on the batch that follows, if one does
         (:meth:`~ess.batch.Intake.step`), and what the page shows
         of it; then :meth:`Page.stepped <.page.Page.stepped>` of its page if
-        it is open, else :meth:`list_again`, so that every page and the Runs
-        view see the files that arrived. :func:`~.api.create_app` calls it
-        on a timer. What the step raises is said on the page
-        (:meth:`follow_shown`), and the next step tries again.
+        it is open, else :meth:`Files.list_again <.runs.Files.list_again>`,
+        so that every page and the Runs view see the files that arrived.
+        :func:`~.api.create_app` calls it on a timer. What the step raises is
+        said on the page (:meth:`LastStep.shown <.follow.LastStep.shown>`),
+        and the next step tries again.
         """
         # Under the lock, so that a tick that waited for a request sees what
         # that request did: no step after "Stopped following". What cannot be
@@ -293,194 +230,13 @@ class Pages:
             try:
                 if (done := self.intake.step()) is None:
                     return
-                self._last = (label, done)
-                self._failure = None
+                self.follow.stepped(label, done)
             except Exception as error:  # the next step tries again
-                self._failure = step_failure(error)
+                self.follow.failure = step_failure(error)
             if (page := self._pages.get(label)) is None:
-                self.list_again()
+                self.files.list_again()
             else:
                 page.stepped()
-
-    @property
-    def listing(self) -> SafeListing:
-        """
-        What the client lists, as :meth:`list_again` listed it last: the
-        files, their labels and the records, for every page.
-        """
-        return self._listing
-
-    @property
-    def files_version(self) -> int:
-        """Counts the changes of the files listed, and of why they cannot be."""
-        return self._files_version
-
-    @property
-    def runs_version(self) -> int | None:
-        """
-        :attr:`files_version`, which the Runs view of each page compares to
-        ask for the runs again; ``None`` if the application corrects no runs,
-        so that the pages have no Runs view.
-        """
-        return self._files_version if self.corrects_runs else None
-
-    @property
-    def corrects_runs(self) -> bool:
-        """Whether the application corrects runs: it gives their marks and files."""
-        return self._marking is not None
-
-    def list_again(self) -> None:
-        """
-        List what the client lists now (:attr:`listing`): when the records
-        or a table changed, at a step of Follow, at "List runs again", as a
-        page is made, and for the Runs view. :attr:`files_version` moves if
-        the files or why they cannot be listed differ from the last listing.
-        """
-        with self.lock:
-            self._listing = SafeListing(
-                self.intake.manager.client, previous=self._listing
-            )
-            self._new_files()
-
-    def _new_files(self) -> None:
-        """Move :attr:`files_version` if the files of :attr:`listing` changed."""
-        files = (self._listing.files_listed, self._listing.failure)
-        if files != self._files:
-            self._files = files
-            self._files_version += 1
-
-    def _marks(self) -> tuple[Fields, CorrectedFiles]:
-        """
-        The form of what a person corrects of a run, and the files to
-        correct; :class:`~.refusals.Problem` if the application corrects no runs.
-        """
-        if self._marking is None:
-            raise Problem('This application corrects no runs.')
-        marks, files = self._marking
-        return Fields(marks, self._listing), files
-
-    def runs(self) -> Runs:
-        """
-        The runs, listed again, with what a person corrected of each, as the
-        Runs view of every page shows them, and that of the page without a
-        batch; none, with why, if the file source raises. Raises
-        :class:`~.refusals.Problem` if the application corrects no runs.
-        """
-        with self.lock:
-            marks, files = self._marks()
-            self.list_again()
-            listing = self._listing
-            return Runs(
-                version=self._files_version,
-                columns=[
-                    Column(name=n, title=marks.titles[n], editor=forms.editor(f))
-                    for n, f in marks.fields.items()
-                ],
-                rows=[
-                    view.run(ref, marks, files, listing) for ref in listing.files_listed
-                ],
-                problem=listing.failure,
-            )
-
-    def correct(self, edit: CellEdit) -> Notice:
-        """Correct a field of the runs ``edit.keys``, as its field reads the value."""
-        with self.lock:
-            marks, files = self._marks()
-            value = view.read(marks, edit)
-            fields = {edit.column: None if value is UNSET else value}
-            self._kept(
-                lambda: files.correct_each(
-                    [FileRef(file=key) for key in edit.keys], **fields
-                )
-            )
-            n = len(edit.keys)
-            title = marks.titles[edit.column]
-            return Notice(notice=f'{title} corrected on {n} run{"s" * (n > 1)}.')
-
-    def revert_run(self, cells: Cells) -> Notice:
-        """Take a field of runs back to what the files say, as :meth:`correct`."""
-        with self.lock:
-            marks, files = self._marks()
-            self._kept(
-                lambda: files.reset_each(
-                    [FileRef(file=key) for key in cells.keys], cells.column
-                )
-            )
-            n = len(cells.keys)
-            title = marks.titles.get(cells.column, cells.column)
-            return Notice(notice=f'{title} set back on {n} run{"s" * (n > 1)}.')
-
-    def _kept(self, correction: Callable[[], None]) -> None:
-        """
-        Make ``correction``, then list again, so that the pages show the runs
-        again. Raises :class:`~.refusals.Problem` if the definitions do not keep
-        it, or if the runs cannot be listed after it.
-        """
-        with kept():
-            correction()
-        self.list_again()
-        if (error := self._listing.error) is not None:
-            raise Problem(f'Corrected, but the runs cannot be listed: {error}')
-
-    def _step(self, label: str) -> Step | None:
-        """Follow's last step that did not raise, if on ``label``, which follows."""
-        if self.intake.following != label or self._last is None:
-            return None
-        on, step = self._last
-        return step if on == label else None
-
-    def follow_token(self, label: str) -> object:
-        """
-        What the page of the batch of ``label`` shows of the last step of
-        Follow, as a value to compare with one given before, and not to
-        read: equal while what the page shows of Follow stays the same.
-        """
-        with self.lock:
-            if self.intake.following != label:
-                return None
-            step = self._step(label)
-            shown = None if step is None else (len(step.waiting), step.refused)
-            return self._failure, shown
-
-    def follow_shown(self, label: str) -> Following:
-        """
-        Follow, as the page of the batch of ``label`` shows it: whether the
-        batch follows, and while it does, what the last step raised and how
-        many rows wait.
-        """
-        with self.lock:
-            on = self.intake.following == label
-            step = self._step(label)
-            return Following(
-                on=on,
-                source=self.intake.source(label),
-                interval=self.interval,
-                failure=self._failure if on else None,
-                waiting=0 if step is None else len(step.waiting),
-            )
-
-    def unsubmitted(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
-        """
-        Why Follow could not submit each row of ``states`` that its next step
-        would try again, by key; none unless the batch of ``label`` follows.
-        """
-        with self.lock:
-            if (step := self._step(label)) is None:
-                return {}
-            return {
-                key: f'Follow could not reduce it: {forms.message(step.refused[key])}'
-                for key in not_reduced(states)
-                if key in step.refused
-            }
-
-    def applied(self, label: str) -> None:
-        """
-        Forget why Follow could not submit rows of the batch of ``label``,
-        whose page applied settings: its next step tries them with these.
-        """
-        with self.lock:
-            if (step := self._step(label)) is not None:
-                self._last = (label, replace(step, refused={}))
 
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""
@@ -496,7 +252,7 @@ class Pages:
             ]
             return Batches(
                 application=self.title,
-                runs=self.runs_version,
+                runs=self.files.runs_version,
                 rows=rows,
             )
 
@@ -514,7 +270,7 @@ class Pages:
             client = self.intake.manager.client
             names = dict.fromkeys(spec.name for spec in client.specs())
             specs = [client.spec_named(name) for name in names]
-            listing = self._listing
+            listing = self.files.listing
 
             def choice(name: str | None, source: RowSource | None) -> SourceChoice:
                 fills = () if source is None else source.fills
@@ -606,7 +362,7 @@ class Pages:
                     follow=new.follow,
                 )
                 if new.follow:
-                    self._failure = None  # said of the batch that followed before
+                    self.follow.failure = None  # said of the batch that followed before
                 return Made(label=batch.label)
             batch = manager.create(
                 new.spec,
