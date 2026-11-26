@@ -375,12 +375,12 @@ def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> Non
 
     store.save(key, SOURCE.dump(made))
 
-    assert SOURCE.dump(made)['considered'] == ['0342', '60339', '60340']
+    assert SOURCE.dump(made)['seen_keys'] == ['0342', '60339', '60340']
     assert store.load(key, SOURCE.read) == made
-    store.save(key, {'source': 'pairs', 'considered': '60339', 'follows': False})
-    with pytest.raises(ValueError, match=r'source\.json: considered: '):
+    store.save(key, {'source': 'pairs', 'seen_keys': '60339', 'follows': False})
+    with pytest.raises(ValueError, match=r'source\.json: seen_keys: '):
         store.load(key, SOURCE.read)
-    store.save(key, {'source': 'pairs', 'considered': ['60339']})
+    store.save(key, {'source': 'pairs', 'seen_keys': ['60339']})
     with pytest.raises(ValueError, match=r'source\.json: follows: Field required'):
         store.load(key, SOURCE.read)
 

@@ -61,7 +61,7 @@ A guide section that is a copy of a module docstring, of `--help` or of an ADR i
 
 **A term is a code identifier in backticks or a distinctive compound.** Nothing else is a term.
 
-- `Batch.put`, `Step.considered`: the backticks mark it, and the code defines it.
+- `Batch.put`, `Step.seen_keys`: the backticks mark it, and the code defines it.
 - "batch table", "row source", "files table": cannot be mistaken for ordinary use.
 - "row", "column", "table", "key", "put", "take" keep their everyday meaning. If "row" meant a row of the batch table, we could not write about the rows of any other table.
 

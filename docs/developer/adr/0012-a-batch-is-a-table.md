@@ -244,7 +244,7 @@ A source does three things to a batch today after it is made:
 Whether each is wanted, and how it is done, is decided in [ADR 0013](0013-follow-adds-the-rows-not-considered.md). Two conditions for it follow from this one:
 
 - **What amends a batch uses the table as a person does**: it adds a row or sets a cell with `put`.
-- **What it needs to know is its own state, next to the batch**: which source, and which rows it has considered. None of it is a column of `rows` or a field of every row.
+- **What it needs to know is its own state, next to the batch**: which source, and which rows it has seen. None of it is a column of `rows` or a field of every row.
 
 The code of this ADR and of ADR 0013 is written together, since Follow is in use. Several workflows on one batch (#222) are the same kind of question: something other than a person fills cells.
 

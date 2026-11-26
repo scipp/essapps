@@ -293,7 +293,7 @@ total = client.freeze(volume)                               # the final sum, as 
 
 ## Automatic reduction
 
-Automatic reduction is Follow on a batch of `ess.batch`: a step every few seconds adds the rows of its row source that are complete and not considered, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essbatch/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
+Automatic reduction is Follow on a batch of `ess.batch`: a step every few seconds adds the rows of its row source that are complete and not seen, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essbatch/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
 The application's row source pairs runs as the technique needs:
 
 ```python

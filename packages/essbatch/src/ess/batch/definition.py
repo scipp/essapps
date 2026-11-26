@@ -13,7 +13,7 @@ rows of a batch are written by its ``Batch``, which the manager makes:
                     columns
     rows            the batch table                            Batch.put
     source          the row source a batch was made from, the  Intake
-                    keys of it that the batch has considered,
+                    keys of it that the batch has seen,
                     and whether the batch follows
     output_options  the format of the files that its results   Writing
                     are written as, and what a person says of
@@ -48,7 +48,7 @@ The plain data of each entry, as its :class:`Entry` below writes and reads it
     header          {'title': 'Sample runs', 'description': ''}
     settings        {'spec': ..., 'params': {...}, 'blanks': ['sample']}
     rows            {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
-    source          {'source': 'sample-runs', 'considered': ['60337', '60338'],
+    source          {'source': 'sample-runs', 'seen_keys': ['60337', '60338'],
                      'follows': True}
     output_options  {'format': 'scipp-hdf5', 'outputs': ['iofq'],
                      'name': '{title} {name}', ...}
@@ -305,7 +305,7 @@ class Header:
 class FromSource:
     """
     What a batch made from a row source keeps of it: the name of the source;
-    the keys of its rows that the batch has considered, those put into the
+    the keys of its rows that the batch has seen, those put into the
     batch from the source or left out when the batch was made; and whether
     the batch follows its source. Data with other fields, or without one of
     these, is refused when read.
@@ -314,7 +314,7 @@ class FromSource:
     __pydantic_config__ = ConfigDict(extra='forbid')
 
     source: str
-    considered: frozenset[str]
+    seen_keys: frozenset[str]
     follows: bool
 
 
@@ -450,7 +450,7 @@ def _source_data(made: FromSource) -> dict[str, Any]:
     """What a batch keeps of its source, as plain data; the keys sorted."""
     return {
         'source': made.source,
-        'considered': sorted(made.considered),
+        'seen_keys': sorted(made.seen_keys),
         'follows': made.follows,
     }
 

@@ -92,7 +92,7 @@ done.submit_errors     # why a row could not be submitted, by key
 done.incomplete        # the keys of the incomplete rows of the source
 ```
 
-It adds the rows of the source that the batch has not considered and that are complete, and reduces the rows that are ready and have no result (`ess.batch.not_reduced`).
+It adds the rows of the source that the batch has not seen and that are complete, and reduces the rows that are ready and have no result (`ess.batch.not_reduced`).
 A row that waits for a run is added at the first step after the run arrives; the page of the batch that follows says how many rows are incomplete.
 A row that a person removed is not added again.
 A step changes no row that the batch table has: a run that arrives later, or a correction in the Runs view, leaves the cells as they are.

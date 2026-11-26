@@ -6,18 +6,18 @@ Rows of a row source into a batch, and which batch follows.
 :class:`Intake` keeps one entry of the definitions (:mod:`.definition`) for
 each batch made from a source::
 
-    source      the source, the keys considered, and whether the batch follows
+    source      the source, the keys seen, and whether the batch follows
 
 :meth:`Intake.step` is one step of Follow on the batch that follows::
 
     made = SOURCE.load(definitions, label)                   # source.json
-    done = step(batch(label), sources[made.source], made.considered)
-    source.json = replace(made, considered=done.considered)  # after rows.json
-    # if the step raised: made.considered | the keys of the batch table
+    done = step(batch(label), sources[made.source], made.seen_keys)
+    source.json = replace(made, seen_keys=done.seen_keys)  # after rows.json
+    # if the step raised: made.seen_keys | the keys of the batch table
 
 A process that stops between ``rows.json`` and ``source.json`` leaves rows
-whose keys are not considered yet. The next step considers them: it
-considers every key of the source that the batch table has. The order of the
+whose keys are not seen yet. The next step sees them: it
+sees every key of the source that the batch table has. The order of the
 writes of :meth:`Intake.create` and :meth:`Intake.follow` is in the guide,
 "What is kept on disk". ``Intake`` has no timer and no lock: whoever serves
 owns both.
@@ -229,13 +229,13 @@ class Intake:
     ) -> Batch:
         """
         Make a batch from the rows of ``source`` with the manager
-        (:meth:`~.manager.BatchManager.create`), and keep what it considered;
+        (:meth:`~.manager.BatchManager.create`), and keep what it seen;
         its ``Batch``. The source is listed once::
 
             given = rows_of(client, source)
             arrived = given[complete]        # a value in each of source.source_columns
             rows = arrived if choose is None else choose(arrived)
-            considered = arrived.index       # the rows taken and those left out
+            seen_keys = arrived.index       # the rows taken and those left out
 
         The label, the spec, the source and whether the spec fits it are
         checked before the source is listed. Nothing is written if a check
@@ -336,7 +336,7 @@ class Intake:
     def step(self) -> Step | None:
         """
         One step of Follow (:func:`~.auto.step`) on the batch that follows,
-        then keep the keys considered; ``None`` if no batch follows.
+        then keep the keys seen; ``None`` if no batch follows.
 
         Raises ``ValueError`` if the source of the batch is not registered,
         if the source raises ``ValueError``, or if the batch refuses a row
@@ -349,17 +349,17 @@ class Intake:
         batch = self.manager.batch(label)
         source = self._source(made.source)
         try:
-            done = auto.step(batch, source, made.considered)
+            done = auto.step(batch, source, made.seen_keys)
         except SourceError as error:  # a defect of the code of the source
             raise ValueError(f'the source {made.source}: {error}') from error
         except BaseException:
             with suppress(
                 DefinitionWriteError
             ):  # the exception of the step is what to say
-                kept = made.considered | set(batch.frame().index)
-                self._consider(label, made, kept)
+                kept = made.seen_keys | set(batch.frame().index)
+                self._mark_seen(label, made, kept)
             raise
-        self._consider(label, made, done.considered)
+        self._mark_seen(label, made, done.seen_keys)
         return done
 
     def offered(self, label: str) -> pd.DataFrame:
@@ -391,8 +391,8 @@ class Intake:
     def take(self, label: str, keys: Iterable[str]) -> None:
         """
         Add the rows of ``keys`` to the batch of ``label``, as its source
-        makes them now, with the columns of its batch table; then consider
-        them. A considered key may be taken.
+        makes them now, with the columns of its batch table; then mark
+        them seen. A seen key may be taken.
 
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if it
         was not made from a source, if its source is not registered or makes
@@ -408,12 +408,12 @@ class Intake:
         if held := [k for k in keys if k in table.index]:
             raise ValueError(f'rows {held} are in the batch already')
         batch.put(pd.concat([table, given.loc[keys].reindex(columns=table.columns)]))
-        self._consider(label, made, made.considered | set(keys))
+        self._mark_seen(label, made, made.seen_keys | set(keys))
 
-    def _consider(
-        self, label: str, made: FromSource, considered: frozenset[str]
+    def _mark_seen(
+        self, label: str, made: FromSource, seen_keys: frozenset[str]
     ) -> None:
-        """Keep ``considered`` as the keys of the source of ``label``, if changed."""
-        if considered != made.considered:
-            kept = replace(made, considered=considered)
+        """Keep ``seen_keys`` as those of the source of ``label``, if changed."""
+        if seen_keys != made.seen_keys:
+            kept = replace(made, seen_keys=seen_keys)
             SOURCE.save(self.manager.definitions, label, kept)

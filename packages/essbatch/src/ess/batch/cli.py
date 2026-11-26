@@ -166,7 +166,7 @@ The status of a row:
 
 follow -l water: water follows its row source, with a step every --interval
 seconds (5). A step adds the rows of the source that are complete and not
-considered (not one that a person removed or left out), and reduces each row
+seen (not one that a person removed or left out), and reduces each row
 that is ready and has no result. It never changes a row of the batch table: a
 row added with the transmission run that was newest then keeps it when a newer
 one arrives (compare rows SOURCE with show). It reduces no failed row again
@@ -1326,7 +1326,7 @@ _COMMANDS = {
         'of the batch that followed, and do a step every SECONDS until Ctrl-C '
         'or SIGTERM, or for N steps; then wait for the reductions that run. '
         'A step adds the rows of the source that are complete and not '
-        'considered, and reduces the rows that are ready and have no result. '
+        'seen, and reduces the rows that are ready and have no result. '
         'It writes a line per step that did something, an object with --json. '
         'The batch still follows when it exits: stop ends that.',
         arguments=_follow_arguments,

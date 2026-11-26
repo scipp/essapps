@@ -57,14 +57,14 @@ def made(intake: Intake, sample: Measure) -> Intake:
     return intake
 
 
-def test_a_batch_made_from_a_source_takes_and_considers_its_complete_rows(
+def test_a_batch_made_from_a_source_takes_and_sees_its_complete_rows(
     made: Intake, definitions: FolderDefinitions
 ) -> None:
     kept = SOURCE.load(definitions, 'a')
 
     assert list(made.manager.batch('a').frame().index) == ['3', '4', 'mine']
     assert made.source('a') == 'pairs'
-    assert kept.considered == {'1', '2', '3', '4'}  # not 5, which is incomplete
+    assert kept.seen_keys == {'1', '2', '3', '4'}  # not 5, which is incomplete
 
 
 def test_a_batch_made_from_a_source_keeps_its_fills_when_read_again(
@@ -139,7 +139,7 @@ def four(intake: Intake, sample: Measure) -> Intake:
     ],
     ids=['from', 'to', 'one', 'later'],
 )
-def test_a_range_takes_the_complete_rows_between_its_ends_and_considers_all(
+def test_a_range_takes_the_complete_rows_between_its_ends_and_sees_all(
     four: Intake,
     definitions: FolderDefinitions,
     chosen: Range,
@@ -148,8 +148,8 @@ def test_a_range_takes_the_complete_rows_between_its_ends_and_considers_all(
     batch = four.create(PLAIN.name, title='A', source='pairs', choose=chosen)
 
     assert list(batch.frame().index) == taken
-    considered = SOURCE.load(definitions, batch.label).considered
-    assert considered == {'1', '2', '4'}  # not 3, which is incomplete
+    seen_keys = SOURCE.load(definitions, batch.label).seen_keys
+    assert seen_keys == {'1', '2', '4'}  # not 3, which is incomplete
 
 
 @pytest.mark.parametrize(
@@ -280,7 +280,7 @@ def test_an_incomplete_row_of_the_source_is_offered_as_incomplete(
     assert intake.offered('a')['incomplete'].to_dict() == {'2': True}
 
 
-def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
+def test_rows_taken_are_put_as_the_source_makes_them_and_seen(
     intake: Intake,
     fake: FakeFiles,
     sample: Measure,
@@ -299,7 +299,7 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     assert taken['sample'] == 'uuid:run-2'
     assert pd.isna(taken['transmission'])
     assert list(batch.frame().index) == ['1']
-    assert SOURCE.load(definitions, 'a').considered == {'1', '2'}
+    assert SOURCE.load(definitions, 'a').seen_keys == {'1', '2'}
 
 
 def test_a_row_that_a_person_removed_is_taken_again(made: Intake) -> None:
@@ -387,8 +387,8 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     with pytest.raises(ValueError, match=_not_registered('pairs', 'none')):
         intake.step()
 
-    # A key typed by hand is considered only by a step that reads the source.
-    assert SOURCE.load(definitions, 'a').considered == {'1'}
+    # A key typed by hand is seen only by a step that reads the source.
+    assert SOURCE.load(definitions, 'a').seen_keys == {'1'}
 
 
 @pytest.mark.parametrize(
@@ -519,7 +519,7 @@ def test_a_source_json_that_cannot_be_read_hides_neither_follow_nor_other_batche
 
     assert again.following == 'c'
     assert again.source('b') == 'pairs'
-    with pytest.raises(ValueError, match=r'source\.json: considered: '):
+    with pytest.raises(ValueError, match=r'source\.json: seen_keys: '):
         again.source('a')
 
 

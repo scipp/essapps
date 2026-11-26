@@ -58,22 +58,22 @@ SETTINGS: dict[str, Any] = {'binning': {'bins': 2}}
 class Stepping:
     """
     Steps of one batch on ``source``, each given the keys that the one before
-    considered, as the manager keeps them; what the last step refused and
+    seen, as the manager keeps them; what the last step refused and
     which rows are incomplete.
     """
 
     def __init__(
-        self, batch: Batch, source: RowSource, considered: Iterable[str] = ()
+        self, batch: Batch, source: RowSource, seen_keys: Iterable[str] = ()
     ) -> None:
         self.batch, self.source = batch, source
-        self.considered = frozenset(considered)
+        self.seen_keys = frozenset(seen_keys)
         self.submit_errors: Mapping[str, str] = {}
         self.incomplete: tuple[str, ...] = ()
 
     def step(self) -> Mapping[str, Record]:
         """A step; the records of the rows it reduced, by key."""
-        done = step(self.batch, self.source, self.considered)
-        self.considered = done.considered
+        done = step(self.batch, self.source, self.seen_keys)
+        self.seen_keys = done.seen_keys
         self.submit_errors, self.incomplete = done.submit_errors, done.incomplete
         return done.records
 
@@ -253,14 +253,14 @@ def test_each_new_row_is_reduced_once(
     assert list(first) == ['1', '2']
     assert list(loop.step()) == ['3']
     assert loop.step() == {}
-    assert loop.considered == {'1', '2', '3'}
+    assert loop.seen_keys == {'1', '2', '3'}
 
 
-def test_a_step_adds_no_row_that_is_considered(client: Client, sample: Measure) -> None:
+def test_a_step_adds_no_row_that_is_seen(client: Client, sample: Measure) -> None:
     sample(1, 'water')
     sample(2, 'sds')
     batch = Batch(client, PLAIN, label='scan', rows=rows(client).drop('1'))
-    loop = Stepping(batch, PAIRS, considered={'1'})
+    loop = Stepping(batch, PAIRS, seen_keys={'1'})
 
     assert list(loop.step()) == ['2']
     assert list(batch.frame().index) == ['2']
@@ -572,11 +572,11 @@ def following(intake: Intake, client: Client, sample: Measure) -> Intake:
     return intake
 
 
-def considered(definitions: FolderDefinitions) -> frozenset[str]:
-    return SOURCE.load(definitions, 'a').considered
+def seen_keys(definitions: FolderDefinitions) -> frozenset[str]:
+    return SOURCE.load(definitions, 'a').seen_keys
 
 
-def test_a_batch_made_from_a_source_considers_every_row_it_gave(
+def test_a_batch_made_from_a_source_sees_every_row_it_gave(
     following: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
     following.step()
@@ -584,7 +584,7 @@ def test_a_batch_made_from_a_source_considers_every_row_it_gave(
     client.wait(client.records(label='a'))
     assert list(following.manager.batch('a').frame().index) == ['3', '4']
     assert {r.member for r in client.records(label='a')} == {'3', '4'}
-    assert considered(definitions) == {'1', '2', '3', '4'}
+    assert seen_keys(definitions) == {'1', '2', '3', '4'}
 
 
 def test_a_row_of_a_sample_measured_before_its_transmission_waits_then_is_added(
@@ -605,7 +605,7 @@ def test_a_row_of_a_sample_measured_before_its_transmission_waits_then_is_added(
     assert (waits.incomplete, adds.incomplete) == (('5',), ())
     assert list(following.manager.batch('a').frame().index) == ['3', '4', '5']
     assert '5' in {r.member for r in client.records(label='a')}
-    assert considered(definitions) == {'1', '2', '3', '4', '5'}
+    assert seen_keys(definitions) == {'1', '2', '3', '4', '5'}
 
 
 def test_a_row_that_a_person_removes_stays_away(following: Intake) -> None:
@@ -623,7 +623,7 @@ def test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_r
     batch = following.manager.batch('a')
     edit(batch, '5', sample='uuid:run-1', transmission='uuid:run-1')
     sample(5, 'oil')
-    following.step()  # the table has 5: the step adds no row, and considers it
+    following.step()  # the table has 5: the step adds no row, and sees it
     batch.put(batch.frame().drop('5'))
 
     following.step()
@@ -631,7 +631,7 @@ def test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_r
     assert list(batch.frame().index) == ['3', '4']
 
 
-def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
+def test_a_row_of_a_step_cut_off_before_seen_stays_away_once_removed(
     following: Intake, refusing: Refusing, client: Client, sample: Measure
 ) -> None:
     sample(5, 'oil')
@@ -640,7 +640,7 @@ def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
         following.step()
     refusing.part = None
     client.wait(client.records(label='a'))
-    following.step()  # the table has 5: the step considers it
+    following.step()  # the table has 5: the step sees it
     batch = following.manager.batch('a')
     batch.put(batch.frame().drop('5'))
 
@@ -649,7 +649,7 @@ def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
     assert list(batch.frame().index) == ['3', '4']
 
 
-def test_an_error_of_a_step_is_said_also_if_considered_is_refused_after_it(
+def test_an_error_of_a_step_is_said_also_if_seen_keys_is_refused_after_it(
     client: Client, refusing: Refusing, sample: Measure
 ) -> None:
     intake = Intake(BatchManager(Flaky(client), definitions=refusing), sources=SOURCES)
@@ -699,7 +699,7 @@ def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
     intake.step()
 
     assert batch.frame().empty
-    assert considered(definitions) == {'1'}
+    assert seen_keys(definitions) == {'1'}
 
 
 def test_a_cell_of_the_source_that_the_batch_refuses_is_named_with_the_source(

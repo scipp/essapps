@@ -3,7 +3,7 @@
 """
 One step of Follow on a batch.
 
-The caller keeps ``considered`` from one step to the next
+The caller keeps ``seen_keys`` from one step to the next
 (:class:`~.intake.Intake` in ``source.json``).
 
 How a step works: ``packages/essbatch/docs/batch.md``, "Follow".
@@ -37,17 +37,17 @@ def added(
     table: pd.DataFrame,
     given: pd.DataFrame,
     source_columns: Collection[str],
-    considered: Collection[str],
+    seen_keys: Collection[str],
 ) -> tuple[pd.DataFrame, pd.Index]:
     """
     The rows of ``given`` to add to ``table``, with the columns of ``table``,
     and the keys of the rows that are incomplete.
 
-    A row is added if its key is neither considered nor in ``table`` and it
+    A row is added if its key is neither seen nor in ``table`` and it
     is complete: it has a value in each of ``source_columns``. A row with such a key
     that is not complete is incomplete.
     """
-    is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
+    is_new = ~given.index.isin(list(seen_keys)) & ~given.index.isin(table.index)
     is_ready = complete(given, source_columns)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     return new, given.index[is_new & ~is_ready]
@@ -63,8 +63,8 @@ class Step:
     added:
         The keys of the rows that the step added, in the order of the batch
         table.
-    considered:
-        The keys considered after the step: those given to it, those of the
+    seen_keys:
+        The keys seen after the step: those given to it, those of the
         rows it added, and those of the source that the batch table has.
     submit_errors:
         Why the submission refused each row, by key: the rows submitted that
@@ -79,13 +79,13 @@ class Step:
     """
 
     added: tuple[str, ...]
-    considered: frozenset[str]
+    seen_keys: frozenset[str]
     submit_errors: Mapping[str, str]
     incomplete: tuple[str, ...]
     records: Mapping[str, Record]
 
 
-def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
+def step(batch: Batch, source: RowSource, seen_keys: Collection[str]) -> Step:
     """
     Add the rows of ``source`` that are new and complete to ``batch``, then
     reduce the rows of :func:`~.state.not_reduced`. A row whose request is
@@ -98,8 +98,8 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
         since nothing releases its records.
     source:
         The source that the rows are added from.
-    considered:
-        The keys of the source that the batch has considered.
+    seen_keys:
+        The keys of the source that the batch has seen.
 
     Raises
     ------
@@ -110,12 +110,12 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     table = batch.frame()
     try:
         given = rows_of(batch.client, source)
-        new, incomplete = added(table, given, batch.source_columns, considered)
+        new, incomplete = added(table, given, batch.source_columns, seen_keys)
         if len(new):
             batch.put(pd.concat([table, new]))
     except ValueError as error:
         raise SourceError(error_text(error)) from error
-    now = frozenset(considered) | set(new.index) | (set(given.index) & set(table.index))
+    now = frozenset(seen_keys) | set(new.index) | (set(given.index) & set(table.index))
     # Only the rows without a result are compared: a step reduces no other.
     candidates = not_reduced(batch.state(compare=False))
     try:

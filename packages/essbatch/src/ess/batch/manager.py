@@ -15,7 +15,7 @@ each batch. A batch is kept as these entries of the definitions
     header      title, description                      BatchManager
     settings    the template, with the source columns as blanks  the Batch
     rows        the batch table                         the Batch
-    source      the source, the keys considered, and    Intake; only for a
+    source      the source, the keys seen, and    Intake; only for a
                 whether the batch follows               batch made from a source
     form        the format its results are written as,  Writing; only for a
                 and what a person says of them          batch whose form is set

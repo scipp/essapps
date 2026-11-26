@@ -114,10 +114,10 @@ The stories use these calls:
 ```python
 source = RowSource(rows_of_files, source_columns=(...))   # rows_of_files: the files -> a DataFrame of rows
 batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
-done = step(batch, source, considered)   # reads batch.settings at each step
+done = step(batch, source, seen_keys)   # reads batch.settings at each step
 done.records      # the step added the new rows of the source, and reduced the ready rows without a result; their records by key
 done.submit_errors # why rows of the step were refused by submit, by key
-done.considered   # what the next step is given
+done.seen_keys   # what the next step is given
 ```
 
 ## S. Small stories
@@ -678,11 +678,11 @@ source = RowSource(angles, source_columns=('runs',))
 batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
               persist=True, settings={'reference': reference})
 counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}
-considered, reduced = frozenset(), {}
+seen_keys, reduced = frozenset(), {}
 for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:   # 4 before 3; 2 listed again
     measure(run, counts[run], role='sample', sample='si')
-    done = step(batch, source, considered)
-    considered = done.considered
+    done = step(batch, source, seen_keys)
+    seen_keys = done.seen_keys
     reduced |= done.records
     assert list(done.records) == ([] if key is None else [key])  # the same list again is the same key: no row
     client.wait(done.records)
@@ -729,7 +729,7 @@ first = step(batch, PER_RUN, ())
 pid = client.publish(reduced.ref('iofq'), 'scicat')
 files.add_published(scicat.entries[pid])
 
-assert step(batch, PER_RUN, first.considered).records == {}
+assert step(batch, PER_RUN, first.seen_keys).records == {}
 ```
 
 A published entry is a file of kind `'derived'`, and a batch's row source is given only raw files unless its selector names another kind.
@@ -747,7 +747,7 @@ done = step(following, PER_RUN, ())
 settings = {'reduction': Reduction(threshold=1.5), 'normalization': None}
 following.settings = settings                                   # read at the next step
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-(after,) = step(following, PER_RUN, done.considered).records.values()
+(after,) = step(following, PER_RUN, done.seen_keys).records.values()
 
 user = connect()                                                # any client of the proposal
 assert after.request.files() == [second]                        # run 1 is not reduced again

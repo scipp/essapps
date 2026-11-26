@@ -139,11 +139,11 @@ class Range:
     Raises ``ValueError`` for ``later`` with an end; called, for an end that
     is not a key of the rows given, and for a ``first`` after the ``last``.
     ``create`` refuses a ``Range`` with a ``last`` and ``follow``: the rows
-    complete between the last row and the making would be considered, so
+    complete between the last row and the making would be seen, so
     Follow would never add them, but would add the rows that arrive later.
     A ``choose`` that is a function may pick any rows, also with
     ``follow``: a person chose them in code, and the complete rows that it
-    leaves out are considered, so Follow adds only what arrives later.
+    leaves out are seen, so Follow adds only what arrives later.
     """
 
     first: str | None = None

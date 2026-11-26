@@ -1,6 +1,6 @@
 # Automatic reduction
 
-Automatic reduction is Follow: a step every few seconds on one batch adds the rows of its row source that are complete and not considered, and reduces the rows that are ready and have no result.
+Automatic reduction is Follow: a step every few seconds on one batch adds the rows of its row source that are complete and not seen, and reduces the rows that are ready and have no result.
 How it works is in [the batch guide, "Follow"](../../packages/essbatch/docs/batch.md#follow); the decision is [ADR 0013](adr/0013-follow-adds-the-rows-not-considered.md).
 Its stories are E1 to E4 in [user-stories.md](user-stories.md), and [deployments.md](deployments.md#automatic-reduction) places it.
 This page holds what neither says: how the records decide what a step reduces, what `submit` refuses, measured costs, and open questions.
@@ -14,10 +14,10 @@ Two batches on one label share their results: what one reduces, the other does n
 
 ## What a step keeps
 
-A step keeps only `considered`, which `Intake` writes to `source.json`.
+A step keeps only `seen_keys`, which `Intake` writes to `source.json`.
 A step reads the files, the batch table and the settings, and the records under the label, and works out the rest.
 So a step that raises, in the settings, the row source, or a submission, loses nothing: the next step tries again.
-If a step raises, `Intake` keeps the keys of the batch table as considered, so a row that the step added and a person removes stays away.
+If a step raises, `Intake` keeps the keys of the batch table as seen, so a row that the step added and a person removes stays away.
 A restarted application reduces no row again that has a result.
 A record that was running when the workspace ended is failed at the restart, and one that had not started is cancelled unless it persists outputs ([`Workspace._restart`](../../packages/essapps/src/ess/apps/workspace.py)); a step does not run such a row again, and a person retries it.
 This holds while the proposal's history is kept. A step keeps it, since its calls keep the proposal from being idle ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
@@ -100,7 +100,7 @@ A cut-off by age or by count, of the files given to the row source, would bound 
 - A partner older than the cut-off, such as a can measured at the start, is gone, and its row waits for ever.
 - A sample measured again after the cut-off gets a row with its later runs only, which is reduced with those, and nothing shows it.
 
-A cut-off that a person sets on purpose, "only the runs from 60339 on", is the choice of rows when the batch is made: the rows before are considered and never added, and the source still sees every file.
+A cut-off that a person sets on purpose, "only the runs from 60339 on", is the choice of rows when the batch is made: the rows before are seen and never added, and the source still sees every file.
 
 ## Open
 

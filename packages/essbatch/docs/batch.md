@@ -3,7 +3,7 @@
 `ess.batch` reduces one spec for many samples: a table of rows, settings shared by all rows, and the result of each row.
 It is built on the client of `ess.apps`; [the client guide](../../../docs/developer/roles/client-authors.ipynb) explains specs, records, labels and stages.
 Publishing results to SciCat (`ess.batch.publish`) needs the extra `essbatch[scicat]` (scitacean).
-The decisions behind it are [ADR 0012](../../../docs/developer/adr/0012-a-batch-is-a-table.md) (a batch is a template and a table) and [ADR 0013](../../../docs/developer/adr/0013-follow-adds-the-rows-not-considered.md) (Follow adds the rows not considered).
+The decisions behind it are [ADR 0012](../../../docs/developer/adr/0012-a-batch-is-a-table.md) (a batch is a template and a table) and [ADR 0013](../../../docs/developer/adr/0013-follow-adds-the-rows-not-considered.md) (Follow adds the rows not seen).
 
 ## The system on one page
 
@@ -59,7 +59,7 @@ Nothing in the batch layer imports the page or the command.
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
-| `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `considered` |
+| `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `seen_keys` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
 | writing | `writing.py`: `Writing` | how the results of a batch are written: the output options of a batch (a format, outputs, and what a person says of them, `ess.apps.writers.DatasetMetadata`), and the writers of each spec (`ess.apps.writers.Writer`); the download of the page, `export -l` and publishing write by it |
 | publisher | `publish.py`: `Publisher` | the results of a batch into SciCat, one derived dataset per row (`ess.apps.scicat`) with the files that `Writing` writes: which results may be published, and what was published |
@@ -76,8 +76,8 @@ Nothing in the batch layer imports the page or the command.
 | result of a row | the newest record under the label with the row's key as member |
 | row source | code of the application that makes rows from the files (a `RowSource`) |
 | complete, waits | a row of a source is complete once it has a value in each parameter that the source fills (`RowSource.source_columns`, kept as `batch.source_columns`); until then it waits |
-| considered | the keys of its source that a batch has taken, left out when it was made, or had in its batch table at a step (`source.json`) |
-| Follow, the batch that follows | Follow is a step every few seconds on the batch that follows (`intake.following`): add the rows of its source that are complete and not considered, then reduce the rows that are ready and have no result |
+| seen, `seen_keys` | the keys of its source that a batch has taken, left out when it was made, or had in its batch table at a step (`source.json`) |
+| Follow, the batch that follows | Follow is a step every few seconds on the batch that follows (`intake.following`): add the rows of its source that are complete and not seen, then reduce the rows that are ready and have no result |
 
 The value and the request of a row are defined in [The request of a row](#the-request-of-a-row); its state, `outdated` and `settings changed` in [The state of a row](#the-state-of-a-row-and-the-rules-over-it).
 
@@ -122,7 +122,7 @@ The batch layer refuses what is asked with `ValueError`, a label that no batch h
 | `definitions/labels/<label>/header.json` | `{"title": ..., "description": ...}` | manager |
 | `definitions/labels/<label>/settings.json` | a template: the spec; the settings in `params`, also those of a parameter that has a column; `batch.source_columns` as its `blanks` | `Batch` |
 | `definitions/labels/<label>/rows.json` | the batch table: `{"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}]}` | `Batch.put` |
-| `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "considered": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
+| `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "seen_keys": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
 | `definitions/labels/<label>/output_options.json` | `{"format": "nxcansas", "outputs": ["iofq"], "name": "{title} {name}", ...}`; only for a batch whose output options are set (`ess.batch.writing`) | `Writing` |
 | `definitions/labels/<label>/publish.json` | `{"published": [{"key": "60339", "record": ..., "pid": ...}]}`; only for a batch published from (`ess.batch.publish`) | `Publisher` |
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
@@ -147,7 +147,7 @@ A table file is written and read by pandas (`to_csv`, `read_csv`, `to_excel`, `r
 `settings.json` has the form of a template file of the client.
 Its `blanks` are the parameters that the row source of the batch fills (`batch.source_columns`): a template gives a blank no value, and each row must fill it.
 Which parameters have a column is said by the batch table; they are the blanks of `batch.template()`.
-A `source.json` is refused when read unless its fields are `source`, `considered` and `follows`.
+A `source.json` is refused when read unless its fields are `source`, `seen_keys` and `follows`.
 
 ## One example followed through
 
@@ -171,9 +171,9 @@ batch = intake.create('loki-iofq', title='Afternoon', source='sample-runs',
 ```
 
 `intake.create` lists the source once and gives `choose` the rows that are complete; a `Range` picks those from 60339 on. In code, `choose` may be any function that picks rows and adds columns.
-On disk: `header.json`, `settings.json`, `rows.json` with rows 60339 and 60340, and `source.json` with `considered` = 60337 to 60340 and `"follows": true`.
-Rows 60337 and 60338 are considered and not in the batch table: they were left out when the batch was made, so Follow never adds them.
-A row that is incomplete when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor considered: Follow adds it once it is complete.
+On disk: `header.json`, `settings.json`, `rows.json` with rows 60339 and 60340, and `source.json` with `seen_keys` = 60337 to 60340 and `"follows": true`.
+Rows 60337 and 60338 are seen and not in the batch table: they were left out when the batch was made, so Follow never adds them.
+A row that is incomplete when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor seen: Follow adds it once it is complete.
 
 **2. A person edits a cell and reduces.**
 
@@ -203,7 +203,7 @@ A row added later, by a step of Follow, by `take` or by hand, takes 1.5 until it
 
 **4. Follow adds a row once its transmission run is listed.** The page calls `intake.step()` every few seconds.
 
-| | What happens | Batch table | `considered` |
+| | What happens | Batch table | `seen_keys` |
 |---|---|---|---|
 | a | sample run 60341 is listed; its transmission run is not | unchanged; `done.incomplete == ('60341',)` | unchanged |
 | b | transmission run 60342 is listed | 60341 is added and reduced | + 60341 |
@@ -244,11 +244,11 @@ evening = intake.create('loki-iofq', title='Evening', source='sample-runs',
 
 No row moves between batches.
 `afternoon` keeps its rows, also those from 60400 on that it added before, until a person removes them.
-`intake.follow('afternoon')` would let it follow again, in place of `evening`: its next step would add every complete row it has not considered, also those that `evening` took.
+`intake.follow('afternoon')` would let it follow again, in place of `evening`: its next step would add every complete row it has not seen, also those that `evening` took.
 A batch that follows has no last row: the rows complete between a last row and the making would never be added.
-`intake.create` refuses `follow=True` with a `Range` that has a `last` (see [From a row source](#from-a-row-source)); a function as `choose` may pick any rows, and the complete rows it leaves out are considered.
+`intake.create` refuses `follow=True` with a `Range` that has a `last` (see [From a row source](#from-a-row-source)); a function as `choose` may pick any rows, and the complete rows it leaves out are seen.
 For a batch of only the rows that arrive from now on, `choose` takes none: `choose=Range(later=True)`.
-Every row complete now is then considered, and none is reduced again.
+Every row complete now is then seen, and none is reduced again.
 
 ## Writing a row source
 
@@ -526,14 +526,14 @@ intake.source(batch.label)               # 'sample-runs'; None for a batch made 
 given = rows_of(client, source)
 arrived = given[complete]                # a value in each of source.source_columns
 table = arrived if choose is None else choose(arrived)
-considered = arrived.index               # the rows taken and those left out
+seen_keys = arrived.index               # the rows taken and those left out
 batch = manager.create(spec, rows=table, source_columns=source.source_columns, ...)
 # with follow: "follows": false to the batch that followed
-# then source.json: the source, considered, and whether it follows
+# then source.json: the source, seen, and whether it follows
 ```
 
 `Range` refuses an end that is not a key of the rows that arrived (an incomplete row is not one), a first row after the last, and an end with `later=True`.
-`intake.create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the complete rows it leaves out are considered.
+`intake.create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the complete rows it leaves out are seen.
 It refuses a source that is not registered, a source that fills a parameter that the spec lacks (`fits`), and a key from `choose` that is not in `arrived`, and refuses as `manager.create` does.
 It checks the label, the title and the spec first, with `manager.check`, then the source and whether the spec fits it, so these refusals come before the source is listed.
 If the process stops while a batch that follows is made, the batch may be there and no batch follow (see [What is kept on disk](#what-is-kept-on-disk)).
@@ -562,22 +562,22 @@ intake.follow(label)        # this batch follows; the batch that followed stops
 done = intake.step()        # a Step, or None if none follows
 done.submit_errors          # why rows were refused, by key; they do not hold back the others
 intake.offered(label)       # the rows of the source that the batch table lacks, with a boolean column `incomplete`
-intake.take(label, keys)    # put these rows as the source gives them now, also considered ones; then consider them
+intake.take(label, keys)    # put these rows as the source gives them now, also seen ones; then mark them seen
 ```
 
-A step (`auto.step(batch, source, considered)`), as code:
+A step (`auto.step(batch, source, seen_keys)`), as code:
 
 ```python
 table = batch.frame()
 given = rows_of(batch.client, source)                  # every row the source makes now
-new, incomplete = added(table, given, batch.source_columns, considered)
+new, incomplete = added(table, given, batch.source_columns, seen_keys)
 batch.put(pd.concat([table, new]))                     # only the columns of the batch table
-considered |= set(new.index) | (set(given.index) & set(table.index))
+seen_keys |= set(new.index) | (set(given.index) & set(table.index))
 candidates = not_reduced(batch.state(compare=False))   # ready as given, no result
 batch.reduce(not_reduced(batch.state(candidates)))
 ```
 
-One step of Follow, from the timer to `considered` kept:
+One step of Follow, from the timer to `seen_keys` kept:
 
 ```mermaid
 sequenceDiagram
@@ -588,24 +588,24 @@ sequenceDiagram
     participant batch as Batch
     participant definitions
     timer->>intake: step()
-    intake->>definitions: read source.json: the source, considered
-    intake->>step: step(batch, source, considered)
+    intake->>definitions: read source.json: the source, seen_keys
+    intake->>step: step(batch, source, seen_keys)
     step->>batch: frame()
     step->>source: rows_of(client, source)
     Note over source: lists the files
     source-->>step: given: every row the source makes now
-    Note over step: new: not considered, not in the batch table, complete. Waiting: not complete yet.
+    Note over step: new: not seen, not in the batch table, complete. Incomplete: not complete yet.
     opt rows are new
         step->>batch: put(table + new)
         batch->>definitions: write rows.json
     end
     step->>batch: reduce(rows ready and without a result)
-    step-->>intake: Step: added, considered, submit_errors, incomplete, records
-    intake->>definitions: write source.json: considered, if it changed
+    step-->>intake: Step: added, seen, submit_errors, incomplete, records
+    intake->>definitions: write source.json: seen, if it changed
     intake-->>timer: Step
 ```
 
-A removed row stays away: its key is considered, and only `intake.take` brings it back.
+A removed row stays away: its key is seen, and only `intake.take` brings it back.
 A step reduces a row once: a row that has a result, also a failed, cancelled or outdated one, is left to a person.
 
 A source whose row grows, such as the runs of a sample so far, gives the grown list a new key:
@@ -617,9 +617,9 @@ after run 3:  si@2,3,4  runs=[2, 3, 4]   # listed after run 4: a new key too
 ```
 
 Each list is a new row, which a step adds and reduces. The earlier rows keep their results.
-The key names the whole list, since a step adds a row only under a key that is not considered.
+The key names the whole list, since a step adds a row only under a key that is not seen.
 
-`auto.step(batch, source, considered)` runs the same step on a `Batch` made in code, with `considered` in memory: give the next step `done.considered`.
+`auto.step(batch, source, seen_keys)` runs the same step on a `Batch` made in code, with `seen_keys` in memory: give the next step `done.seen_keys`.
 A batch of the manager persists what it submits. A `Batch` made in code for `auto.step` needs `persist=True`, since nothing releases its records.
 The batch layer has no timer: the page's server (`every` of `ess.batch.web.api`) and `essbatch follow` (`cli.follow`) call `intake.step()`.
 

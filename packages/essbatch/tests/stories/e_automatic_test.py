@@ -79,13 +79,13 @@ def test_e1_series_grows_reduction_follows(
     )
     counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}
 
-    considered: frozenset[str] = frozenset()
+    seen_keys: frozenset[str] = frozenset()
     reduced: dict[str, Record] = {}
     # Run 4 is listed before run 3, and run 2 is listed again at the end.
     for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:
         measure(run, counts[run], role='sample', sample='si')
-        done = step(batch, source, considered)
-        considered = done.considered
+        done = step(batch, source, seen_keys)
+        seen_keys = done.seen_keys
         reduced |= done.records
         # The newest row only; the same list again is the same key: no row.
         assert list(done.records) == ([] if key is None else [key])
@@ -133,7 +133,7 @@ def test_e3_reduction_of_our_own_output(
     pid = client.publish(reduced.ref('iofq'), 'scicat')
     files.add_published(scicat.entries[pid])
 
-    assert step(batch, PER_RUN, first.considered).records == {}
+    assert step(batch, PER_RUN, first.seen_keys).records == {}
 
 
 def test_e4_template_improved_during_a_beamtime(
@@ -147,7 +147,7 @@ def test_e4_template_improved_during_a_beamtime(
     settings = {'reduction': toys.Reduction(threshold=1.5), 'normalization': None}
     following.settings = settings
     second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-    (after,) = step(following, PER_RUN, done.considered).records.values()
+    (after,) = step(following, PER_RUN, done.seen_keys).records.values()
 
     user = connect()  # any client of the proposal
     assert after.request.files() == [second]
