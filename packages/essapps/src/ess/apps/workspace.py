@@ -879,13 +879,15 @@ class Workspace(WorkspaceProtocol):
         Log a submission or a freeze of ``records`` of the bound ``spec_ids``,
         and hold in memory the outputs of those that persist none.
         """
-        unlogged = self._views.unlogged({s: self._bound[s].digest for s in spec_ids})
+        new_digests = self._views.new_digests(
+            {s: self._bound[s].digest for s in spec_ids}
+        )
         self._append_locked(
             Submitted(
                 time=datetime.now(UTC),
                 proposal=self._proposal,
                 submitter=submitter,
-                specs=unlogged,
+                specs=new_digests,
                 records=tuple(records),
             )
         )
