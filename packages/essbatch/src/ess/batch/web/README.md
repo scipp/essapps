@@ -241,8 +241,9 @@ sequenceDiagram
 | `GET api/workspaces` | lists the workspaces; a workspace that cannot be opened, or whose `workspace.json` cannot be read, with the reason |
 | `POST api/workspaces` | makes a workspace (`ess.batch.create_workspace`) |
 | `POST api/workspaces/NAME/open` | opens it, unless it is open |
-| any request under `workspaces/NAME/` while it is not open | opens it, then redirects to the same URL (307); refused if it was closed on the launch page |
-| `POST api/workspaces/NAME/close` | closes it, see below |
+| any request under `workspaces/NAME/` while it is not open | opens it, then redirects to the same URL (307); refused if it was closed |
+| `POST api/workspaces/NAME/close` | closes it, see below; the page has no button for it |
+| `POST api/workspaces/NAME/clear` | opens it unless it is open, then clears the outputs of all its records (`Pages.clear`) |
 | `POST api/workspaces/NAME/remove` | closes it if it is open, then deletes the folder |
 
 Close runs these steps, and stops at the first that fails:
@@ -252,12 +253,13 @@ Close runs these steps, and stops at the first that fails:
 3. Unmount the batch app, and leave its lifespan: the timer of Follow ends.
 4. Close the workspace: the client waits for its records and releases the folder.
 
-Close is what a person does before `essbatch` works on that folder.
+Close is for whoever runs the server: it releases the folder, so that `essbatch` can work on it.
+A person of the page has no use for it, so the page does not show it: `curl -X POST SERVER/api/workspaces/NAME/close`.
 A closed workspace does not follow until it is opened again; then the batch that followed follows again, as after a stop and start of the server.
 A batch page still open in a browser then gets an answer that the workspace is closed; a click in the list opens it again.
 
 Remove of a workspace closes it as Close does if it is open, then deletes the folder with all its outputs (`ess.batch.remove_workspace`).
-**Clear all outputs** on its batch page frees the disk space of the outputs and keeps the workspace.
+**Clear outputs** in the row of a workspace frees the disk space of its outputs and keeps the workspace, as **Clear all outputs** on its batch page does.
 It does not open a workspace that is not open, so that one that cannot be opened, such as one of a file source this server does not allow, can be removed.
 It refuses a folder that another process holds, such as one of `essbatch follow`, and a folder that is a symbolic link, before anything is closed.
 The folder is renamed to a hidden name while it is held, then deleted, so a deletion that fails halfway leaves no workspace in the list.
@@ -265,17 +267,17 @@ The folder is renamed to a hidden name while it is held, then deleted, so a dele
 A workspace stays open until it is closed or removed, or the server stops, so that its reductions and Follow go on while another is shown.
 At the stop, the lifespan of the launch app closes every open workspace, steps 3 and 4 only: the stop waits for pending records.
 A close that raises does not keep the others open; the stop raises what each raised, at the end.
-Each open, close and remove runs in the event loop under one `asyncio.Lock`, and the mounts change only there.
+Each open, close, clear and remove runs in the event loop under one `asyncio.Lock`, and the mounts change only there.
 What blocks, opening a workspace, the end of the timer and the close of the client, runs in a thread.
 
 ## Limits
 
-- One process holds the folder. `essbatch` opens it only while no server has it open: close it on the launch page first. What its commands write, such as the rows that `essbatch add` adds, the page shows when the server opens it next.
+- One process holds the folder. `essbatch` opens it only while no server has it open: close it first (`POST api/workspaces/NAME/close`). What its commands write, such as the rows that `essbatch add` adds, the page shows when the server opens it next.
 - A server logs in to SciCat once, when it starts. Once the login expires, the file source of a SciCat workspace raises, and its pages say so, until the server starts again.
 - One `Batch` object per label. Another `Batch` of the page's label writes its whole batch table at each change, over that of the page.
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages. A request waits while a step of Follow runs on another batch, and while results are published, uploads included.
-- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so the page cannot remove it. `essbatch remove` can, once the workspace is closed on the launch page or the server is stopped.
+- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so the page cannot remove it. `essbatch remove` can, once the workspace is closed or the server is stopped.
 - The confirmations are the browser's dialogs (`confirm`).
 
 ## Browser tests

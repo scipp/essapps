@@ -9,8 +9,9 @@ root folder. It needs the extra ``[loki-app]``::
 
 ``http://localhost:8000/`` lists the workspace folders in ``ROOT``
 (:func:`ess.batch.workspaces`), makes a new one, and opens one at
-``/workspaces/<name>/``. A workspace stays open until it is closed or removed on
-that page, or the server stops. Close it there before ``essbatch`` works on it.
+``/workspaces/<name>/``. A workspace stays open until it is removed on that page
+or the server stops. Before ``essbatch`` works on it, stop the server or close
+the workspace (``POST api/workspaces/<name>/close``).
 
 The proposal and the file source of a workspace are in its ``workspace.json``
 (``packages/essbatch/docs/batch.md``, "Workspaces of a root folder"). By default

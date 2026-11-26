@@ -2263,24 +2263,24 @@ def test_a_workspace_is_removed_after_a_confirmation_that_says_what_goes(
     assert 'the batches, the history and the stored outputs' in asked[0]
 
 
-def test_an_open_workspace_is_closed_on_the_launch_page(
+def test_the_outputs_of_a_workspace_are_cleared_after_a_confirmation(
     launch: Any, launcher: Launcher
 ) -> None:
     create_workspace(launcher.root, 'commissioning', CATALOGUED)
     launch.goto(launch.root)
-    launch.click('#workspaces a:text-is("Commissioning")')
-    launch.wait_for_url(f'{launch.root}workspaces/commissioning/batches/*/')
-    launch.goto(launch.root)
+    asked: list[str] = []
+
+    def answer(dialog: Any) -> None:
+        asked.append(dialog.message)
+        dialog.accept()
+
+    launch.on('dialog', answer)
     row = launch.locator('#workspaces tr:has-text("Commissioning")')
-    row.locator('td:text-is("open")').wait_for()
+    row.locator('button.clear').click()
+    launch.wait_for_selector('#toast:has-text("Cleared the outputs of Commissioning.")')
 
-    assert 'Nothing is deleted' in row.locator('button.close').get_attribute('title')
-
-    row.locator('button.close').click()
-    launch.wait_for_selector('#toast:has-text("Closed Commissioning.")')
-
-    assert row.locator('td:nth-child(4)').inner_text() == ''
-    assert row.locator('button.close').count() == 0
+    assert 'The batches, their settings and the history stay' in asked[0]
+    assert row.locator('button').all_inner_texts() == ['Clear outputs', 'Remove']
 
 
 def test_the_batch_page_of_a_workspace_links_back_to_the_launch_page(

@@ -269,6 +269,26 @@ class Launcher:
         await opened.stack.aclose()
         return opened.title
 
+    async def clear(self, name: str) -> Notice:
+        """
+        Clear the outputs of every record of the workspace ``name``, to free
+        disk space (:meth:`.pages.Pages.clear`). Its batches, settings and
+        history stay.
+
+        The clear is an event of the workspace's log, so a workspace that is
+        not open is opened, and stays open.
+
+        Raises as :meth:`open` does, and :class:`~.errors.Rejected` if the
+        clear is refused, such as while a reduction runs.
+        """
+        async with self._lock:
+            self._closed.discard(name)
+            opened = await self._open_locked(name)
+            await to_thread.run_sync(opened.pages.clear)
+        return Notice(
+            notice=f'Cleared the outputs of {opened.title}. Reduce computes them again.'
+        )
+
     async def remove(self, name: str) -> Notice:
         """
         Delete the workspace ``name`` with its folder: its batches, history and
@@ -358,6 +378,11 @@ def create_launch_app(launcher: Launcher) -> FastAPI:
     @app.post('/api/workspaces/{name}/close')
     async def close(name: str) -> Notice:
         return await launcher.close(name)
+
+    @app.post('/api/workspaces/{name}/clear')
+    async def clear(name: str) -> Notice:
+        """Delete the stored outputs of the workspace; the rest stays."""
+        return await launcher.clear(name)
 
     @app.post('/api/workspaces/{name}/remove')
     async def remove(name: str) -> Notice:

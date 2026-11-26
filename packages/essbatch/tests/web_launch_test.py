@@ -261,6 +261,52 @@ def test_close_is_refused_while_a_record_is_pending_and_follow_goes_on(
     assert not opens(folder)
 
 
+def test_a_clear_of_a_workspace_deletes_its_outputs_and_keeps_its_batches(
+    http: TestClient, launcher: Launcher, sample: toys.Measure
+) -> None:
+    folder = create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    page = opened(http, 'commissioning')
+    sample(1, 'water')
+    wait_for(lambda: statuses(page) == ['done'])
+    stored = list((folder / 'store').rglob('*.h5'))
+
+    cleared = http.post('/api/workspaces/commissioning/clear')
+
+    assert cleared.json() == {
+        'notice': 'Cleared the outputs of Commissioning. Reduce computes them again.'
+    }
+    assert stored
+    assert list((folder / 'store').rglob('*.h5')) == []
+    assert statuses(page) == ['cleared']
+
+
+def test_a_clear_opens_a_workspace_that_is_not_open(
+    http: TestClient, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+
+    cleared = http.post('/api/workspaces/commissioning/clear')
+
+    assert cleared.status_code == 200
+    assert http.get('/api/workspaces').json()['rows'][0]['open'] is True
+
+
+def test_a_clear_of_a_workspace_is_refused_while_a_reduction_runs(
+    http: TestClient, launcher: Launcher, sample: toys.Measure, gate: toys.Gate
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    page = opened(http, 'commissioning')
+    gate.close()
+    sample(1, 'water')
+    wait_for(lambda: page.get('api/state').json()['rows'] != [])
+
+    cleared = http.post('/api/workspaces/commissioning/clear')
+    gate.open()
+
+    assert cleared.status_code == 422
+    assert 'still running' in cleared.json()['message']
+
+
 def test_a_removed_workspace_is_closed_and_its_folder_deleted(
     http: TestClient, launcher: Launcher
 ) -> None:

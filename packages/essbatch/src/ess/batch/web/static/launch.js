@@ -30,14 +30,9 @@ async function load() {
   if (!body.rows.length) openForm();
 }
 
-// What Close does, for a person who expects it to close a view.
-const CLOSES =
-  'Stop the workspace on the server. Nothing is deleted. ' +
-  'Its batches do not follow new runs until it is opened again. ' +
-  'Refused while a reduction runs.';
-
 function draw() {
-  const button = (text, title, onclick) => h('button', {type: 'button', class: `quiet ${text.toLowerCase()}`, text, title, onclick});
+  const button = (text, title, onclick) =>
+    h('button', {type: 'button', class: `quiet ${text.toLowerCase().split(' ')[0]}`, text, title, onclick});
   const rowOf = (workspace) =>
     listRow(
       workspace,
@@ -49,7 +44,8 @@ function draw() {
       h(
         'td',
         {},
-        workspace.open && button('Close', CLOSES, (event) => closeWorkspace(event, workspace)),
+        !workspace.problem &&
+          button('Clear outputs', `Delete the stored outputs, to free disk space. ${KEPT}`, (event) => clearWorkspace(event, workspace)),
         button('Remove', 'Delete the folder of the workspace, with its batches, history and outputs.', (event) => removeWorkspace(event, workspace)),
       ),
     );
@@ -75,9 +71,12 @@ async function act(name, verb) {
   await load();
 }
 
-function closeWorkspace(event, {name}) {
+// What a clear of the outputs keeps, as against Remove.
+const KEPT = 'The batches, their settings and the history stay, and a reduction of the same rows computes the outputs again.';
+
+async function clearWorkspace(event, {name, title}) {
   event.stopPropagation(); // not a click on the row
-  return act(name, 'close');
+  if (confirm(`Clear the outputs of the workspace "${title}", to free disk space? ${KEPT}`)) await act(name, 'clear');
 }
 
 async function removeWorkspace(event, {name, title}) {
