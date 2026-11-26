@@ -302,6 +302,15 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     assert SOURCE.load(definitions, 'a').considered == {'1', '2'}
 
 
+def test_a_row_that_a_person_removed_is_taken_again(made: Intake) -> None:
+    batch = made.manager.batch('a')
+    batch.put(batch.frame().drop('4'))
+
+    made.take('a', ['4'])
+
+    assert list(batch.frame().index) == ['3', 'mine', '4']
+
+
 @pytest.mark.parametrize('added_by', ['step', 'take'])
 def test_a_row_added_after_make_column_takes_the_setting(
     intake: Intake, client: Client, sample: Measure, added_by: str
@@ -532,6 +541,19 @@ def test_a_batch_made_to_follow_follows_in_place_of_the_one_before(
 
     assert two.following == 'c'
     assert _again(client, definitions).following == 'c'
+
+
+def test_a_refused_batch_made_to_follow_is_removed_and_the_one_before_follows(
+    two: Intake, refusing: Refusing, client: Client, definitions: FolderDefinitions
+) -> None:
+    refusing.part = SOURCE.key('c')
+
+    with pytest.raises(NotKept):
+        two.create('plain', title='C', source='pairs', label='c', follow=True)
+
+    assert (list(two.manager.headers()), two.following) == (['a', 'b'], 'a')
+    assert _follows(definitions) == ['a']
+    assert _again(client, definitions).following == 'a'
 
 
 def test_a_batch_that_follows_with_a_last_row_is_refused_and_nothing_changes(
