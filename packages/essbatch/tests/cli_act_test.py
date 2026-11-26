@@ -101,7 +101,7 @@ def test_remove_removes_the_batch_and_says_that_its_records_stay(
 ) -> None:
     assert main([*command, 'remove', '-l', 'x']) == 0
 
-    assert 'the folder keeps its 2 records under the label' in capsys.readouterr().err
+    assert 'its 2 records stay in the folder under the label' in capsys.readouterr().err
     with intake_on(reduced_once) as intake:
         assert intake.manager.headers() == {}
         assert len(intake.manager.client.records(label='x')) == 2
@@ -159,7 +159,7 @@ def test_follow_writes_an_object_per_line_with_json(
         'reducing',
         'ended',
         'failure',
-        'refused',
+        'submit_errors',
         'incomplete',
         'error',
     }
