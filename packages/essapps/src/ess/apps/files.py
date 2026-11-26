@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Naming files, and the file source that knows them.
+Names of files, and a file source over the files of a folder.
 
-A person names a file by what they know: a run number, a path, or a PID.
-The workspace asks its file source to resolve such a name to the file's
-identity when a request is submitted (see
+A person names a file by a run number, a path, or a PID. When a request is
+submitted, the workspace resolves the name to the file's identity (see
 :meth:`~ess.apps.protocol.FileSource.resolve`).
 """
 
@@ -23,18 +22,17 @@ def file(
     *, run: int | None = None, path: Path | str | None = None, pid: str | None = None
 ) -> FileRef:
     """
-    A file by its run number, its path, or the PID of the SciCat dataset
-    that holds it, as a request writes it::
+    The name of a file in a request, by run number, path, or SciCat PID::
 
         file(run=60339)
         file(path='/home/user/data/run1.h5')
         file(pid='20.500.12269/vanadium')
 
-    A relative path is relative to the working directory, and is made absolute
-    here. A path relative to the workspace's folder is written only as the
-    identity a record holds, ``FileRef(file='path:masks/main.xml')``.
+    A relative path is relative to the working directory and is made absolute
+    here. To name a file by its path relative to the workspace's folder, write
+    its identity: ``FileRef(file='path:masks/main.xml')``.
 
-    The record holds no metadata; read it with :meth:`ess.apps.Files.metadata`.
+    A record holds no metadata of the file. :meth:`ess.apps.Files.metadata` returns it.
     """
     given = {'run': run, 'path': path, 'pid': pid}
     named = {kind: value for kind, value in given.items() if value is not None}
@@ -48,14 +46,13 @@ def file(
 
 class Selector:
     """
-    Which files to take: those whose metadata has the given values.
-
-    A file has a kind, such as raw, derived, mask, or calibration; a
-    selector matches raw files unless it names another kind. A run has a
-    role, such as sample or background (see :class:`~ess.spec.File` for
-    the keys and their values). Each given value must equal the file's::
+    The files whose metadata has the given values::
 
         client.files.list(Selector(role='sample'))
+
+    A file has a kind, such as raw, mask, or calibration. A file without
+    ``kind`` is raw, and a selector without ``kind`` matches raw files.
+    :class:`~ess.spec.File` lists the keys and their values.
     """
 
     def __init__(self, kind: str = 'raw', **fields: Any) -> None:
@@ -64,15 +61,16 @@ class Selector:
     @classmethod
     def of(cls, marker: File) -> Selector:
         """
-        The files that may fill a field with ``marker``: those with each key and
-        value of its metadata, but for raw files not ``role``. The workspace refuses
-        any other file.
+        The files that may fill a field with ``marker``.
 
-        The role of a run says what the run is used for, which a request states by
-        the field it fills: one run can be the transmission run of a can and the
-        empty beam. So at a raw file field the role only narrows what a form offers
-        (see :meth:`ess.apps.Listing.files`). At a file of another kind, such as a
-        calibration, a role says what the file holds, as a kind does.
+        These are the files with each key and value of the marker's metadata,
+        except ``role`` for raw files. The workspace rejects any other file.
+
+        A request states what a run is used for by the field it fills, and one
+        run can be both the transmission run of a can and the empty beam. So at
+        a raw file field the role only narrows what a form offers (see
+        :meth:`ess.apps.Listing.files`). At a file of another kind, such as a
+        calibration, the role states what the file holds, as the kind does.
         """
         metadata = marker.metadata
         if metadata['kind'] == 'raw':
@@ -93,8 +91,9 @@ class Selector:
 
 def catalogue_identifier(uuid: str) -> str:
     """
-    The PID under which the catalogue lists the raw file that carries ``uuid``
-    in ``entry/entry_identifier_uuid``: ``20.500.12269/<uuid>``.
+    The PID of the raw file with ``uuid`` in ``entry/entry_identifier_uuid``.
+
+    ``catalogue_identifier('abc')`` returns ``'20.500.12269/abc'``.
     """
     return f'20.500.12269/{uuid}'
 
@@ -106,39 +105,36 @@ def readable(metadata: dict[str, Any], proposal: str) -> bool:
 
 class FolderFiles:
     """
-    A file source over the files of a folder, with a table a person fills.
+    A file source over the files of a folder, described by a table.
 
-    The table has a row per file: ``file``, its name in the folder, and its
-    metadata, such as ``run``, ``kind``, ``role``, and ``pid``. The order of the
-    rows is the order of measurement::
+    The table has a row per file: ``file``, its path in the folder, and its
+    metadata, such as ``run``, ``kind``, ``role``, and ``pid``. The rows are in
+    the order of measurement::
 
         FolderFiles('/data/test', [
             {'file': 'run-1.nxs', 'run': 1, 'role': 'sample'},
             {'file': 'masks/main.xml', 'kind': 'mask'},
         ], root='/data/test')
 
-    A file with a ``pid``, one the catalogue lists, is identified by it, written
-    in full, ``<prefix>/<suffix>``, so every source that lists the file gives it
-    one identity. Any other file is identified by its real path, with symbolic
-    links resolved: relative to the real path of ``root`` if it is inside it,
-    and absolute if not or without ``root``::
+    A file with a ``pid`` is identified by it, so that every file source that
+    lists the file returns one identity. Any other file is identified by its
+    real path, relative to the real path of ``root`` if it is inside it::
 
         pid:20.500.12269/<uuid>     a row with pid 20.500.12269/<uuid>
         path:masks/main.xml         a file inside root
-        path:/data/other/run-1.nxs  a file outside root
+        path:/data/other/run-1.nxs  a file outside root, or without root
 
-    ``root`` is the folder of a workspace (see :func:`ess.apps.folder.folder_files`),
-    so that moving the folder keeps the identity of each file in it. A file is
-    named by its identity, its ``run``, its ``pid``, or its absolute path, also
-    one through a symbolic link.
+    ``root`` is the folder of a workspace, so that moving the folder keeps the
+    identity of each file in it. A file is named by its identity, its ``run``,
+    its ``pid``, or its absolute path, also through a symbolic link.
 
     Raises
     ------
     FileNotFoundError
         If the folder lacks a file of the table.
     ValueError
-        If two rows name one file, give one run or one PID, or a PID is not
-        written in full.
+        If two rows have one file, one run, or one PID, or a PID lacks its
+        prefix, as in ``<uuid>`` for ``20.500.12269/<uuid>``.
     """
 
     def __init__(
@@ -194,9 +190,7 @@ class FolderFiles:
         return dict(self._metadata[self._known(ref)])
 
     def _known(self, ref: FileRef) -> FileRef:
-        """
-        ``ref``, if it is the identity of a file of the table.
-        """
+        """``ref``, if a row of the table has this identity."""
         if ref not in self._paths:
             raise KeyError(f'the file source does not know the file {ref.file}')
         return ref
@@ -207,10 +201,11 @@ class FolderFiles:
 
 def replace_at_once(path: Path, write: Callable[[Path], None]) -> None:
     """
-    Replace ``path`` with what ``write`` writes, at once: ``write`` writes a
-    file next to it, of the same suffix, which is then renamed to ``path``.
-    So a reader, such as one of ``files.csv`` while another process holds
-    the folder, sees the old file or the new one, never half of one.
+    Replaces ``path`` with the file that ``write`` writes, at once.
+
+    ``write`` writes a file with the same suffix next to ``path``, which is then
+    renamed to ``path``. A reader in another process sees the old file or the
+    new one, never half of one.
     """
     partial = path.with_name(f'.{path.stem}.partial{path.suffix}')
     try:

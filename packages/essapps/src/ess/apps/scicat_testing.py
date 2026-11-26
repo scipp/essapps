@@ -54,10 +54,11 @@ class _QueryingScicat(FakeScicatClient):
 
 class FakeCatalogue(FakeClient):
     """
-    A SciCat in memory that answers queries, and lists those it was asked in
-    :attr:`asked`: ``'datasets'`` for a query, ``'files of <pid>'`` for the
-    file list of a dataset. Like ``FakeClient``, a name in :attr:`disabled`
-    makes that method raise the error given.
+    A SciCat in memory that answers queries.
+
+    :attr:`asked` lists the queries: ``'datasets'`` for a query of datasets,
+    ``'files of <pid>'`` for the file list of a dataset. As in ``FakeClient``,
+    a method named in :attr:`disabled` raises the error stored there.
     """
 
     def __init__(self) -> None:
@@ -81,9 +82,12 @@ class FakeCatalogue(FakeClient):
         name: str = 'title {run} - Proposal:{proposal} - Run: {run}',
     ) -> FileRef:
         """
-        A raw dataset of ``run``, started ``minutes`` after :data:`START`,
-        listing ``files`` (``{run}`` is the run), named as the ingestor names
-        it unless ``name`` is given; returns the identity of its file.
+        Adds a raw dataset of ``run`` and returns the identity of its file.
+
+        The dataset starts ``minutes`` after :data:`START` and lists ``files``.
+        ``{run}`` in ``files`` and ``name`` is replaced by the run, and
+        ``{proposal}`` in ``name`` by the proposal. The default ``name`` is the
+        one that the ingestor writes.
         """
         pid = PID(prefix='20.500.12269', pid=f'{proposal}-{run}-{len(self.datasets)}')
         self.datasets[pid] = model.DownloadDataset(

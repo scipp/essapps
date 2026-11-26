@@ -1,22 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-An output as a scipp HDF5 file, which ``scipp.io.load_hdf5`` reads. It needs
-scipp and h5py.
+An output as a scipp HDF5 file, which ``scipp.io.load_hdf5`` reads.
 
-scipp writes arrays, ``DataGroup``, numbers, and text. So a file holds a value
-in its form as stored, which :meth:`ess.apps.protocol.Store.read` tables, and a
-value is read back by the type that the spec declares for the output, or
-without a type as the file holds it.
-
-A value that has no such form is refused with ``TypeError`` when it is written.
-A group is read back with the fields
-that were written, not validated again, as an instance of the declared type:
-a field the file lacks is ``None`` if ``None`` is a value of its type (an
-optional type, ``Any``, or ``object``), else its default.
-A file that lacks a required field, or holds a value an enum lacks, holds no
-value of the declared type, as a file changed or damaged outside the workspace
-would, and reading it raises ``ValueError``.
+It needs scipp and h5py. scipp writes arrays, ``DataGroup``, numbers, and text.
+So a file holds a value in its form as stored, which
+:meth:`ess.apps.protocol.Store.read` shows as a table.
 """
 
 from __future__ import annotations
@@ -37,7 +26,7 @@ _ARRAYS = (sc.Variable, sc.DataArray, sc.Dataset)
 
 
 def _plain(value: Any) -> Any:
-    """``value`` as the file holds it, but for a number or text alone."""
+    """``value`` as the file holds it, except a number or text alone."""
     if isinstance(value, BaseModel):
         value = {name: getattr(value, name) for name in type(value).model_fields}
     if isinstance(value, Enum):
@@ -55,8 +44,9 @@ def _plain(value: Any) -> Any:
 
 def _written(value: Any) -> Any:
     """
-    ``value``, if scipp writes it. scipp skips any other, and writes the rest. A
-    ``DataGroup`` is read back as it is, so it holds only what scipp writes.
+    ``value``, if scipp writes it, also at any depth of a ``DataGroup``.
+
+    scipp skips any other value without an error.
     """
     if isinstance(value, sc.DataGroup):
         return sc.DataGroup({k: _written(v) for k, v in value.items()})
@@ -100,7 +90,7 @@ def _typed(tp: Any, data: Any) -> Any:
 
 
 def stored(value: Any) -> Any:
-    """``value`` as :func:`write` writes it, and :func:`read` without a type reads."""
+    """``value`` in its form as stored, which :func:`write` writes."""
     plain = _plain(value)
     if not isinstance(plain, (*_ARRAYS, sc.DataGroup)):
         plain = sc.DataGroup({_ALONE: plain})
@@ -108,16 +98,26 @@ def stored(value: Any) -> Any:
 
 
 def write(value: Any, path: Path) -> None:
-    """Write ``value`` to ``path``, as the module says."""
+    """
+    Writes ``value`` to ``path`` in its form as stored.
+
+    Raises ``TypeError`` for a value that has no such form, such as a date.
+    """
     sc.io.save_hdf5(stored(value), path)
 
 
 def read(tp: Any | None, path: Path) -> Any:
     """
-    The value of type ``tp`` that :func:`write` wrote to ``path``, or, if
-    ``tp`` is ``None``, the file's data as scipp reads it, as the module's
-    table says. Raises ``ValueError`` if the file holds no value of ``tp``, as
-    the module says.
+    The value of type ``tp`` that :func:`write` wrote to ``path``.
+
+    If ``tp`` is ``None``, returns the value in its form as stored. A group is
+    read back with the fields that were written, without validation. A field
+    that the file lacks is ``None`` if ``None`` is a value of its type (an
+    optional type, ``Any``, or ``object``), else its default.
+
+    Raises ``ValueError`` if the file holds no value of ``tp``, such as when it
+    lacks a required field or holds a value that an enum lacks. A file changed
+    or damaged outside the workspace does this.
     """
     data = sc.io.load_hdf5(path)
     if tp is None:
