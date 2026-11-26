@@ -33,7 +33,7 @@ The spec must state these choices so that:
 - **`X | None` means *without X*, at any depth.** A form shows `X | None` as a choice that adds "None" to the alternatives of `X`, and "None" reads as "without X". So a value obtained in one of several ways is a union that names each, never `None` for one of them. The framework does not check this guideline, and it has no exception.
 - **A default never skips a correction that a correct reduction needs.** A correction that a request may still go without is typed `X | None` with no default, so the request writes `None` and its record shows it.
 - **`PipelineBinding` sets the key of the member that a value chose, and no key for `None`.** Setting `pipeline[X] = None` would replace a provider of `X`. Setting nothing would let `None` mean whatever the graph does without `X`, in a workflow factory often "compute X". So `make_pipeline` states what `None` means.
-- **`PipelineBinding` rejects a value that `make_pipeline` holds at a key of a union.** With a held `GivenCentre`, a request for `'find'` sets `FindCentre`, and `find_centre` never runs. The binding cannot tell which key leads to which, so it also rejects a held value that would be harmless.
+- **`PipelineBinding` rejects a value that `make_pipeline` holds at a key of a union whose members have keys of their own.** With a held `GivenCentre`, a request for `'find'` sets `FindCentre`, and `find_centre` never runs. The binding cannot tell which key leads to which, so it also rejects a held value that would be harmless.
 
 ## Consequences
 
@@ -41,7 +41,7 @@ The spec must state these choices so that:
 - An output carries no tag, and fits each `Referenced[T]` of its class in any spec.
 - One parameter states every way to obtain its value, so one spec serves a user who types it in, one who computes it in this graph, and one who takes it from a record.
 - An author who wraps a workflow factory that holds a value at a key of a union replaces that value with a provider, such as an adapter from `GivenCentre` to esssans' `BeamCenter`.
-- Neither a union nor `X | None` can be a blank of a stage, since `make_pipeline` may branch on it. A client that varies one submits plain requests, which compute everything each time.
+- Neither a union nor `X | None` can be a blank of a stage: the key of a union may depend on the value, and `X | None` has no key. A client that varies one submits plain requests, which compute everything each time.
 - An author tests that each alternative has its effect, and that `None` after a value gives the result without `X`.
 
 ## Alternatives considered
