@@ -42,8 +42,8 @@ def test_f1_publish_then_trace_six_months_later(
 
 
 @pytest.mark.xfail(
-    reason='records name no software versions, so upgrade takes no versions=; '
-    'client.recompute and Provenance.software are not implemented'
+    reason='upgrade takes no versions=; client.recompute and Provenance.software '
+    'are not implemented'
 )
 def test_f2_reproduce_after_two_upgrades(
     client: Client, measure: toys.Measure, upgrade: Callable[..., Client]

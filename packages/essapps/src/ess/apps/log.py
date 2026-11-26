@@ -4,12 +4,12 @@
 The workspace's history of one proposal: an append-only log of what ran, with
 which params, and what came of it.
 
-The log holds five events: :class:`Submitted`, :class:`Started`,
-:class:`Finished`, :class:`Opened` and :class:`Pushed`. Stages, output values,
-and anything a binding computed are not in the log. The workspace builds its
-views, such as the records by ID, by applying the events in order. It does so
-when an event is appended, and again when a workspace starts from an existing
-log.
+The log holds six events: :class:`Submitted`, :class:`Started`,
+:class:`Finished`, :class:`Environment`, :class:`Opened` and :class:`Pushed`.
+Stages, output values, and anything a binding computed are not in the log. The
+workspace builds its views, such as the records by ID, by applying the events in
+order. It does so when an event is appended, and again when a workspace starts
+from an existing log.
 
 A record starts when a worker begins its work, once what it reads is there. So
 a record that started and did not finish was running when its workspace ended.
@@ -27,14 +27,19 @@ holds the digest (:attr:`ess.spec.WorkflowSpec.digest`) of each spec that the
 log does not hold yet under that name and version, or holds with another
 digest. So the digest of a record's spec is the last one logged for its name
 and version before the record.
+
+A record that ran in the workspace's process finishes with the ID of the
+process's :class:`Environment`. The log holds each environment once, appended
+before the first record that finishes with it.
 """
 
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import datetime
 from io import FileIO
 from pathlib import Path
@@ -108,7 +113,9 @@ class Finished(BaseModel, frozen=True, extra='forbid'):
 
     ``failure`` is why it failed, or why the workspace cancelled it. ``omitted``
     names the optional outputs that the workflow of a completed record did not
-    return.
+    return. ``environment`` is the ID of the :class:`Environment` of the process
+    that ran the record, or ``None`` for a record whose workflow did not end in
+    the workspace's process, such as a cancelled one.
     """
 
     kind: Literal['finished'] = 'finished'
@@ -116,6 +123,24 @@ class Finished(BaseModel, frozen=True, extra='forbid'):
     status: Status
     failure: str | None = None
     omitted: tuple[str, ...] = ()
+    environment: str | None = None
+
+
+class Environment(BaseModel, frozen=True, extra='forbid'):
+    """
+    The software of a process: its installed distributions as ``name==version``,
+    and their digest as ``id``.
+    """
+
+    kind: Literal['environment'] = 'environment'
+    id: str
+    software: tuple[str, ...]
+
+    @classmethod
+    def of(cls, software: Sequence[str]) -> Environment:
+        """The environment of ``software``, with its digest as ``id``."""
+        digest = hashlib.sha256('\n'.join(software).encode()).hexdigest()
+        return cls(id=digest, software=tuple(software))
 
 
 class Opened(BaseModel, frozen=True, extra='forbid'):
@@ -149,7 +174,7 @@ class Pushed(BaseModel, frozen=True, extra='forbid'):
 
 
 Event = Annotated[
-    Submitted | Started | Finished | Opened | Pushed,
+    Submitted | Started | Finished | Environment | Opened | Pushed,
     Field(discriminator='kind'),
 ]
 _event: TypeAdapter[Event] = TypeAdapter(Event)
@@ -158,7 +183,7 @@ _event: TypeAdapter[Event] = TypeAdapter(Event)
 # the events, to the identities of files that requests hold (ADR 0010), to
 # what a spec's digest covers, or to the files of the store (ess.apps.hdf5),
 # since stored values are found through the log.
-FORMAT = 4
+FORMAT = 5
 _HEADER = json.dumps({'format': FORMAT}).encode() + b'\n'
 
 

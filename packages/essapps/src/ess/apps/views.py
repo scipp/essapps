@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 
 from .log import (
+    Environment,
     Event,
     Finished,
     NewRecord,
@@ -25,7 +26,7 @@ from .log import (
     Started,
     Submitted,
 )
-from .records import Changes, Record, Request, SpecId, Status
+from .records import Changes, Record, RecordStatus, Request, SpecId, Status
 
 
 class _Records(Mapping[str, Record]):
@@ -88,7 +89,8 @@ class Views:
     record persists. Their write is part of the record: pending while the record
     is, done once it completes. ``spec_digests`` holds the digest last logged for
     each spec, and ``digests`` the digest of each record's spec, the last logged
-    before the record.
+    before the record. ``environments`` holds the software of each environment
+    by ID.
 
     ``feed`` holds the ID of a record each time an event submits or finishes
     it, in event order. A position in it is a cursor of :meth:`changes`.
@@ -105,6 +107,7 @@ class Views:
         self.persisted: dict[str, tuple[str, ...]] = {}
         self.spec_digests: SpecDigests = {}
         self.digests: dict[str, str] = {}  # by record ID
+        self.environments: dict[str, tuple[str, ...]] = {}
         self.feed: list[str] = []
 
     def apply(self, event: Event) -> None:
@@ -121,6 +124,8 @@ class Views:
             case Finished():
                 self.feed.append(event.record)
                 self.finished[event.record] = event
+            case Environment():
+                self.environments[event.id] = event.software
             case Opened():
                 self.accumulators[event.accumulator] = event
             case Pushed():
@@ -185,6 +190,18 @@ class Views:
     def status(self, record_id: str) -> Status:
         finished = self.finished.get(record_id)
         return Status.PENDING if finished is None else finished.status
+
+    def record_status(self, record_id: str) -> RecordStatus:
+        """The status of a record, why it failed, and the software that ran it."""
+        finished = self.finished.get(record_id)
+        if finished is None:
+            return RecordStatus(Status.PENDING)
+        environment = finished.environment
+        return RecordStatus(
+            finished.status,
+            finished.failure,
+            None if environment is None else self.environments[environment],
+        )
 
     def omitted(self, key: tuple[str, str]) -> bool:
         """Whether the record completed without the output, as optional."""

@@ -8,7 +8,6 @@ It needs the extra ``scicat`` (scitacean).
 
 from __future__ import annotations
 
-import importlib.metadata
 import logging
 import math
 import time
@@ -84,16 +83,6 @@ def principal_investigator(catalogue: Catalogue, proposal: str) -> Person | None
     return Person(name=name, email=found.pi_email or '')
 
 
-def installed_software() -> list[str]:
-    """The installed Python distributions as ``name==version``, sorted."""
-    found = {
-        d.name.lower(): d.version
-        for d in importlib.metadata.distributions()
-        if d.name  # a dist-info folder left without its metadata has none
-    }
-    return [f'{name}=={version}' for name, version in sorted(found.items())]
-
-
 def publish(
     catalogue: Catalogue,
     client: Client,
@@ -107,8 +96,9 @@ def publish(
 
     The identity is ``pid:<pid>``, as for a file (ADR 0010). The input datasets
     are the files with a catalogue identifier that the record read, also
-    through upstream records. The used software is that of this process, since
-    a record holds no software versions.
+    through upstream records. The used software is that of the processes that
+    ran the record and its upstream records (:meth:`~ess.apps.Client.software`),
+    with ``unknown`` for a record without any.
 
     ``format`` is the name of the writer of ``files``. The dataset stores it,
     since files of two formats may have the same names, such as ``iofq.h5``.
@@ -116,6 +106,8 @@ def publish(
     """
     provenance = client.provenance(record)
     identities = [f.file for f in provenance.files()]
+    ran = client.software([record, *provenance.upstream])
+    software = sorted({s for found in ran for s in found or ('unknown',)})
     inputs = [i.removeprefix(_PID_PREFIX) for i in identities if _is_pid(i)]
     dataset = Dataset(
         type='derived',
@@ -130,7 +122,7 @@ def publish(
         creation_location=f'ESS:{catalogue.instrument.upper()}',
         creation_time=datetime.now(tz=UTC),
         input_datasets=[PID.parse(i) for i in inputs],
-        used_software=installed_software(),
+        used_software=software,
         source_folder=RemotePath(
             catalogue.folder.format(
                 proposal=record.proposal,
