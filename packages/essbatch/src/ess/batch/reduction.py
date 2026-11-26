@@ -177,6 +177,8 @@ class Batch:
         template.
     settings_fields:
         The other parameters of the spec, which no row gives itself.
+    definitions:
+        As given: where the entries of the label are kept, if anywhere.
     version:
         A number that moves whenever :meth:`frame`, :meth:`template` or
         :meth:`shown` may give something else: while it is the same, they
@@ -213,7 +215,7 @@ class Batch:
         self.spec = spec
         self.label = label
         self.fills = frozenset(fills)
-        self._definitions = definitions
+        self.definitions = definitions
         self._version = 0
         # A setting at fills, as definitions may hold, is never read: dropped.
         self._settings = copy.deepcopy(self.settable(settings or {}))
@@ -317,8 +319,8 @@ class Batch:
         data = data_of(rows)
         if to_json(data) == to_json(data_of(self._rows)):
             return
-        if self._definitions is not None:
-            self._definitions.save(definition.ROWS.key(self.label), data)
+        if self.definitions is not None:
+            self.definitions.save(definition.ROWS.key(self.label), data)
         self._set(rows)
 
     @property
@@ -431,28 +433,14 @@ class Batch:
             first.setdefault(to_json(cell), key)
         return {key: cells[key] for key in first.values()}
 
-    def publishing(self) -> definition.Publishing:
-        """
-        What the batch keeps of the catalogue: each upload; empty if not
-        kept. Only :class:`~.publish.Publisher` writes it.
-        """
-        kept = None
-        if self._definitions is not None:
-            kept = definition.PUBLISH.load(self._definitions, self.label)
-        return definition.Publishing() if kept is None else kept
-
-    def published(self) -> dict[str, str]:
-        """The catalogue identifier of each result published, by record ID."""
-        return {p.record: p.pid for p in self.publishing().published}
-
     def _save(self, settings: Mapping[str, Any]) -> None:
         """
         Write ``settings`` as the settings of the label, if kept, with
         :attr:`fills` as the blanks of the template.
         """
-        if self._definitions is not None:
+        if self.definitions is not None:
             kept = Template(self.spec, params=settings, blanks=sorted(self.fills))
-            definition.SETTINGS.save(self._definitions, self.label, kept)
+            definition.SETTINGS.save(self.definitions, self.label, kept)
 
     def template(self) -> Template:
         """

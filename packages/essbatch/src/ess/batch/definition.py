@@ -451,6 +451,16 @@ LABEL_ENTRIES = (HEADER, SOURCE, ROWS, SETTINGS, FORM, PUBLISH)
 """Every entry of a label: the header first, then the others."""
 
 
+def published(definitions: DefinitionStore, label: str) -> dict[str, str]:
+    """
+    The catalogue identifier of each result of ``label`` published, by record
+    ID; empty if none. Here, not in :mod:`.publish`, so that reading it needs
+    no catalogue; only :class:`~.publish.Publisher` writes it.
+    """
+    kept = PUBLISH.load(definitions, label)
+    return {} if kept is None else {p.record: p.pid for p in kept.published}
+
+
 def corrections_data(
     corrections: Mapping[FileRef, Mapping[str, Any]],
 ) -> dict[str, Any]:

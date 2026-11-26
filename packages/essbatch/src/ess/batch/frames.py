@@ -24,6 +24,7 @@ import pandas as pd
 from ess.apps.client import Client
 from ess.apps.records import Template
 
+from . import definition
 from .reduction import Batch
 from .state import RowState, Which, to_reduce
 from .table import RESULT
@@ -165,11 +166,12 @@ def with_results(
     row of each key. ``status`` is the row's status in the words of the page
     (:attr:`~.state.RowState.text`), ``record`` the ID of its result,
     ``failure`` why that failed, and ``published`` its catalogue identifier
-    (:meth:`~.reduction.Batch.published`); each text is empty where there is
+    (:func:`~.definition.published`); each text is empty where there is
     nothing to say.
     """
     client = batch.client
-    published = batch.published()
+    kept = batch.definitions
+    published = {} if kept is None else definition.published(kept, batch.label)
     frame = batch.frame()
     if keys is not None:
         frame = frame.loc[list(keys)]

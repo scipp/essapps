@@ -152,7 +152,7 @@ from ess.apps.errors import FieldError, SubmitError, said
 from ess.apps.fields import UNSET, Fields
 from ess.apps.records import Record, Status
 
-from .. import frames
+from .. import definition, frames
 from ..definition import Form
 from ..export import export_table
 from ..reduction import Batch
@@ -535,7 +535,9 @@ class Page:
         requested = batch.cells()
         named = names(frame, columns)
         notes = [n for n in frame.columns if n not in columns and n != NAME]
-        published = batch.published()
+        published = definition.published(
+            self.pages.intake.manager.definitions, self.label
+        )
         rows = [
             self._row(
                 key,

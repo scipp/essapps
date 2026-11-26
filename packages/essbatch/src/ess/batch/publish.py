@@ -32,7 +32,7 @@ from ess.apps.records import Record
 from ess.apps.scicat import Catalogue, publish
 from ess.apps.writers import About
 
-from .definition import PUBLISH, NotKept, Published, Publishing
+from .definition import PUBLISH, NotKept, Published, Publishing, published
 from .export import RowWriter
 from .writing import Writing
 
@@ -107,7 +107,7 @@ class Publisher:
             raise ValueError(
                 f'no result to publish, done and not outdated: {", ".join(lacking)}'
             )
-        done = batch.published()
+        done = published(self.writing.manager.definitions, label)
         if again := [k for k, r in records.items() if r.id in done]:
             raise ValueError(f'the result is published already: {", ".join(again)}')
         return records
@@ -141,7 +141,8 @@ class Publisher:
         return pid
 
     def _kept(self, label: str) -> Publishing:
-        return self.writing.manager.batch(label).publishing()
+        kept = PUBLISH.load(self.writing.manager.definitions, label)
+        return Publishing() if kept is None else kept
 
     def _keep(self, label: str, publishing: Publishing) -> None:
         PUBLISH.save(self.writing.manager.definitions, label, publishing)
