@@ -319,7 +319,9 @@ def test_a_row_without_a_partner_is_skipped_by_ready_and_refused_when_picked(
     assert ready(batch.state()) == ['1']
     with pytest.raises(SubmitError) as error:
         batch.reduce(['2'])
-    assert [(e.entry, e.loc) for e in error.value.errors] == [('2', ('transmission',))]
+    assert [(e.request_key, e.loc) for e in error.value.errors] == [
+        ('2', ('transmission',))
+    ]
 
 
 def test_every_refused_row_is_named_and_none_is_submitted(
@@ -330,7 +332,7 @@ def test_every_refused_row_is_named_and_none_is_submitted(
     with pytest.raises(SubmitError) as error:
         measured.reduce(['1', '2'])
 
-    assert [(e.entry, e.loc) for e in error.value.errors] == [
+    assert [(e.request_key, e.loc) for e in error.value.errors] == [
         ('1', ('thickness',)),
         ('2', ('thickness',)),
     ]
@@ -350,7 +352,9 @@ def test_a_reason_about_the_settings_is_named_once_without_a_key(
     with pytest.raises(SubmitError) as error:
         batch.reduce(['1', '2'])
 
-    assert [(e.entry, e.loc[0]) for e in error.value.errors] == [(None, 'binning')]
+    assert [(e.request_key, e.loc[0]) for e in error.value.errors] == [
+        (None, 'binning')
+    ]
     batch.close()
 
 
@@ -889,7 +893,9 @@ def test_settings_refused_are_raised_naming_no_row(
     with pytest.raises(SubmitError) as error:
         batch.state()
 
-    assert [(e.entry, e.loc[0]) for e in error.value.errors] == [(None, 'binning')]
+    assert [(e.request_key, e.loc[0]) for e in error.value.errors] == [
+        (None, 'binning')
+    ]
     assert batch.state(compare=False)['3'].problems == ()
 
 

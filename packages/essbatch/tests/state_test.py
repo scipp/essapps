@@ -66,7 +66,7 @@ def test_a_row_with_an_empty_required_cell_is_not_ready() -> None:
     found = states({'a': row(sample='x'), 'b': row()})
 
     assert ready(found) == ['a']
-    assert [(e.entry, e.loc) for e in found['b'].problems] == [('b', ('sample',))]
+    assert [(e.request_key, e.loc) for e in found['b'].problems] == [('b', ('sample',))]
 
 
 def test_a_cell_reading_a_failed_record_is_a_problem() -> None:

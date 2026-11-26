@@ -328,7 +328,7 @@ def _output_reads(params: Mapping[str, Any]) -> list[_OutputKey]:
 
 def _refused(index: int, error: SubmitError) -> SubmitError:
     """The reasons of ``error``, each naming the request at ``index``."""
-    return SubmitError(replace(e, entry=index) for e in error.errors)
+    return SubmitError(replace(e, request_key=index) for e in error.errors)
 
 
 def _each[T, R](

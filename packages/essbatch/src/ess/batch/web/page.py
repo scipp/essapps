@@ -422,7 +422,7 @@ class Page:
         problem = view.settings_problem(errors, self.draft.unfit, titles)
         unapplied = self.draft.unapplied()
         marks = self.draft.at_applied(
-            e for e in (*unusable, *self._refusals) if not e.entry
+            e for e in (*unusable, *self._refusals) if not e.request_key
         )
         empty = batch.empty()
         header = self.pages.intake.manager.headers()[self.label]
@@ -534,9 +534,12 @@ class Page:
         """Whether a cell of a row of ``keys`` or a setting shows ``error``."""
         if not error.loc:
             return False
-        if error.entry is None:
+        if error.request_key is None:
             return str(error.loc[0]) in self.draft.fields.fields
-        return error.entry in keys and str(error.loc[0]) in self.batch.parameter_columns
+        return (
+            error.request_key in keys
+            and str(error.loc[0]) in self.batch.parameter_columns
+        )
 
     # The rows
 
@@ -568,7 +571,7 @@ class Page:
         self._refusals = [
             e
             for e in self._refusals
-            if not (e.entry in keys and e.loc and str(e.loc[0]) == column)
+            if not (e.request_key in keys and e.loc and str(e.loc[0]) == column)
         ]
 
     @_action
@@ -756,7 +759,7 @@ class Page:
         self._show_settings()
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
-        self._refusals = [e for e in self._refusals if e.entry]
+        self._refusals = [e for e in self._refusals if e.request_key]
         self.pages.last_step.applied(self.label)
         return 'Applied the settings.'
 

@@ -21,7 +21,7 @@ format can carry it as it is::
         client.submit(batch)
     except SubmitError as error:
         for e in error.errors:
-            form.mark(e.entry, e.loc, e.msg)
+            form.mark(e.request_key, e.loc, e.msg)
 """
 
 from __future__ import annotations
@@ -46,20 +46,24 @@ class FieldError:
     :data:`ess.spec.refs.Loc`), and ``msg``, why.
 
     ``loc`` is empty for a reason that names no field, such as an unknown
-    spec. ``entry`` is the request's key, or its index, among the requests of
+    spec. ``request_key`` is the request's key, or its index, among the requests of
     one call, or ``None`` for a call with one request. It prints as::
 
         typo: reduction.bins: Input should be greater than 0
     """
 
-    entry: str | int | None
+    request_key: str | int | None
     loc: Loc
     msg: str
 
     def __str__(self) -> str:
-        entry = f'[{self.entry}]' if isinstance(self.entry, int) else self.entry
+        key = (
+            f'[{self.request_key}]'
+            if isinstance(self.request_key, int)
+            else self.request_key
+        )
         at = loc_text(self.loc) if self.loc else None
-        return ': '.join(p for p in (entry, at, self.msg) if p is not None)
+        return ': '.join(p for p in (key, at, self.msg) if p is not None)
 
 
 class SubmitError(ValueError):
@@ -74,12 +78,12 @@ class SubmitError(ValueError):
 
     @classmethod
     def at(cls, loc: Loc, msg: str) -> SubmitError:
-        """One reason, at the position ``loc``, with no entry."""
+        """One reason, at the position ``loc``, with no request key."""
         return cls([FieldError(None, loc, msg)])
 
     @classmethod
     def of(cls, error: ParamsError) -> SubmitError:
-        """The reasons of params that :mod:`ess.spec` refuses, with no entry."""
+        """The reasons of params that :mod:`ess.spec` refuses, with no request key."""
         return cls(FieldError(None, loc, msg) for loc, msg in error.errors)
 
     def __str__(self) -> str:

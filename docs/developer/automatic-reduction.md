@@ -50,7 +50,7 @@ What only `submit` refuses, and how a batch row meets it:
 | a stage that stopped, was released, or holds other values | a staged batch; `Batch` opens a new stage and submits once more |
 
 `Batch.reduce` is all or none, as a person needs it.
-A step instead drops the rows that the `SubmitError` names (`FieldError.entry`), and submits the rest.
+A step instead drops the rows that the `SubmitError` names (`FieldError.request_key`), and submits the rest.
 A reason that names no row refuses every row of the step.
 Settings that the workspace does not accept make `Batch.state()` raise a `SubmitError`.
 The step then submits nothing.

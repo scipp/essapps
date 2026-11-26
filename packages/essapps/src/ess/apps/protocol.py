@@ -165,7 +165,7 @@ class WorkspaceProtocol(Protocol):
             record of an unbound spec, whose type cannot be checked,
             or one whose data do not fit its field; or if ``persist`` names an
             output the spec lacks, or the workspace has no store. A reason's
-            ``entry`` is the request's index in
+            ``request_key`` is the request's index in
             ``entries``, or ``None`` if the reason is not about one request (see
             :class:`~ess.apps.errors.FieldError`).
         """

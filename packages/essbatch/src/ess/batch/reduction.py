@@ -807,7 +807,7 @@ class Batch:
         placed = [
             e
             if e.loc and e.loc[0] in self.parameter_columns
-            else replace(e, entry=None)
+            else replace(e, request_key=None)
             for e in errors
         ]
         return list(dict.fromkeys(placed))

@@ -264,7 +264,7 @@ def test_requests_through_a_stage_are_all_or_none_and_every_refusal_is_named(
             },
         )
 
-    assert [e.entry for e in raised.value.errors] == ['typo', 'typo2']
+    assert [e.request_key for e in raised.value.errors] == ['typo', 'typo2']
     assert len(client.records()) == before
 
 
@@ -276,7 +276,9 @@ def test_a_request_through_a_stage_without_its_blank_is_named_by_its_key(
     with pytest.raises(SubmitError) as raised:
         client.submit(stage, each={'empty': {}})
 
-    assert [(e.entry, e.loc) for e in raised.value.errors] == [('empty', ('shift',))]
+    assert [(e.request_key, e.loc) for e in raised.value.errors] == [
+        ('empty', ('shift',))
+    ]
 
 
 def test_each_goes_with_a_stage_in_place_of_params(client: Client) -> None:

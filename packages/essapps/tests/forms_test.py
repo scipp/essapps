@@ -459,7 +459,7 @@ def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None
     with pytest.raises(SubmitError) as raised:
         client.submit(RUNS, params={'runs': rows})
     (error,) = raised.value.errors
-    assert (error.entry, error.loc) == (None, ('runs', 1, 'offset'))
+    assert (error.request_key, error.loc) == (None, ('runs', 1, 'offset'))
     assert str(raised.value) == f'runs[1].offset: {error.msg}'
 
     rows[1] = {'@ref': 'run'}

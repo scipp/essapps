@@ -159,9 +159,11 @@ def refusal(
 ) -> Refused:
     """``error`` of a reduction refused, with its row named as ``named`` names it."""
     text = _said_at(error, titles)
-    if error.entry is not None:
-        text = f'{named.get(error.entry, error.entry)}: {text}'
-    return Refused(entry=error.entry, loc=list(error.loc), message=error.msg, text=text)
+    if error.request_key is not None:
+        text = f'{named.get(error.request_key, error.request_key)}: {text}'
+    return Refused(
+        entry=error.request_key, loc=list(error.loc), message=error.msg, text=text
+    )
 
 
 def problems(
@@ -169,7 +171,9 @@ def problems(
 ) -> dict[str, str]:
     """The reason of each of ``errors`` at a cell of row ``key``, by column."""
     return {
-        str(e.loc[0]): _said_at(e, titles) for e in errors if e.entry == key and e.loc
+        str(e.loc[0]): _said_at(e, titles)
+        for e in errors
+        if e.request_key == key and e.loc
     }
 
 

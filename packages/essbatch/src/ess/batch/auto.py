@@ -137,11 +137,11 @@ def _reduce(batch: Batch, keys: list[str]) -> tuple[dict[str, Record], dict[str,
         try:
             return batch.reduce(keys), refused
         except SubmitError as error:  # noqa: PERF203
-            named = set(keys).intersection(e.entry for e in error.errors)
+            named = set(keys).intersection(e.request_key for e in error.errors)
             if not named:
                 return {}, refused | dict.fromkeys(keys, str(error))
             for key in named:
-                errors = [e for e in error.errors if e.entry == key]
+                errors = [e for e in error.errors if e.request_key == key]
                 refused[key] = str(SubmitError(errors))
             keys = [k for k in keys if k not in named]
     return {}, refused
