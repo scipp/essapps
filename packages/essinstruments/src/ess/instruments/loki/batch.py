@@ -28,7 +28,7 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
         {'run': 2, 'role': 'transmission', 'sample': 'water'}
         {'run': 3, 'role': 'transmission', 'sample': 'water'}
 
-    give one row, keyed by the run::
+    make one row, keyed by the run::
 
         {'1': {'run': 1, 'name': 'water', 'sample': <file of run 1>,
                'sample_transmission': <file of run 3>}}

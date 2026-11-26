@@ -42,10 +42,10 @@ With ``--scicat``, the runs are the raw datasets of ``PROPOSAL`` in SciCat
 (:class:`~ess.apps.scicat.ScicatFiles`) in place of ``files.csv``, such as
 ``--scicat staging.ess --proposal 336349``. The login works as in :mod:`.scicat`.
 SciCat states no role, so the Runs view shows the runs without one until a person
-sets it. If no batch is listed, the page makes a batch of the bank histogram
-(:data:`~.specs.BANK_HISTOGRAM`), with a row per raw run. A run is read from the
-path SciCat states, such as ``/ess/raw/...``. So reducing works only where that
-path is mounted.
+sets it. If the workspace has no batch at the start, it gets a batch of the bank
+histogram (:data:`~.specs.BANK_HISTOGRAM`), with a row per raw run. A run is read
+from the path SciCat states, such as ``/ess/raw/...``. So reducing works only where
+that path is mounted.
 """
 
 from __future__ import annotations
@@ -103,8 +103,8 @@ def build(
     """
     Returns the app of the batch pages of ``client``.
 
-    If no batch is listed, ``build`` makes one from the source ``first``, with the
-    rows complete now. This holds also after a person removed the last batch.
+    If the workspace has no batch, such as after a person removed the last one,
+    ``build`` makes one from the source ``first``, with the rows complete now.
 
     Parameters
     ----------
@@ -184,7 +184,7 @@ def main() -> None:
 
 
 def _scicat(args: argparse.Namespace) -> tuple[FileSource | None, str]:
-    """The file source and the proposal that the arguments give."""
+    """The file source and the proposal that the arguments name."""
     if args.scicat is None:
         return None, 'local'
     import scitacean

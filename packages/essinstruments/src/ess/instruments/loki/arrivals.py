@@ -5,8 +5,8 @@ Serves the LoKI batch page (:mod:`.web`) on a new folder into which runs arrive
 over time, as if the instrument wrote them.
 
 It needs the extra ``[loki-app]`` and esssans' tutorial data, which
-``ess.loki.data`` downloads at the first start. The options are explained in the
-README of :mod:`ess.batch.web`.
+``ess.loki.data`` downloads at the first start.
+``python -m ess.instruments.loki.arrivals --help`` lists the options.
 
 The data and the I(Q) workflow are real. The run numbers, sample names and roles
 are made up here.

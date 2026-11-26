@@ -8,7 +8,7 @@ Specs and bindings of the reductions of ESS instruments, one subpackage per inst
 
 ## The LoKI application
 
-`pip install 'essinstruments[loki-app]'` adds Panel, plopp, and esssans. [docs/loki-app.ipynb](docs/loki-app.ipynb) starts the application in a notebook, on `local()` over a folder of the esssans tutorial files.
+`pip install 'essinstruments[loki-app]'` adds Panel, plopp, esssans, and the batch page. [docs/loki-app.ipynb](docs/loki-app.ipynb) starts the application in a notebook, on `local()` over a folder of the esssans tutorial files.
 To serve it in a browser, pass Panel a function that builds the app. Each session then builds its own app, which polls the client from a periodic callback of that session. An app built before `pn.serve` is never polled:
 
 ```python
