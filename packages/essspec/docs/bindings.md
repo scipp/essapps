@@ -371,8 +371,6 @@ Only `check_one_row` compares with an independent reference, the single-run bind
 
 ## Edge cases
 
-**Subclasses in a union.** An instance of a subclass of a member sets that member's key, such as an output of a subclass of `T` at `Referenced[T]`.
-
 **A union of one class.** A union whose members are of one class is that class to the binding, with one key, so it may be a blank:
 
 ```python

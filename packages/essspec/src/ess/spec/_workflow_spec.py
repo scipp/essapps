@@ -104,8 +104,8 @@ class _SpecFields(BaseModel, frozen=True):
     tables: tuple[str, ...] = Field(
         default=(),
         description=(
-            "The list parameters whose rows an accumulator takes a push at a "
-            "time, each a table."
+            "The list parameters whose rows an accumulator receives a push at "
+            "a time, each a table."
         ),
     )
 
@@ -165,7 +165,7 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
     params: type[P] = Field(  # type: ignore[assignment]
         default=NoParams,
         description=(
-            "Pydantic model class of everything the workflow takes, each "
+            "Pydantic model class of everything the workflow accepts, each "
             "field of a field type. Defaults to :class:`NoParams`."
         ),
     )
@@ -799,8 +799,8 @@ class _Undescribed(Exception):
 
 _SHORT_NAMED = (Path, *field_types.TIMES)
 """
-Classes outside ``builtins`` and scipp described by their name alone, which no
-other class of a spec takes.
+Classes outside ``builtins`` and scipp described by their name alone, a name
+that no other class of a spec has.
 """
 
 

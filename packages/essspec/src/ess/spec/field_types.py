@@ -537,7 +537,7 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
             for a in ('alias', 'validation_alias', 'serialization_alias')
         ):
             raise ValueError(f'{where}: a tag has no alias')
-        groups[tags[0]] = member  # pydantic refuses two alternatives of one tag
+        groups[tags[0]] = member  # pydantic rejects two alternatives of one tag
     return discriminator, groups
 
 

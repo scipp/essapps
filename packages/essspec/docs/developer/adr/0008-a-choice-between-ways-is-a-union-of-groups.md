@@ -42,7 +42,7 @@ The spec must state these choices so that:
 - One parameter states every way to obtain its value, so one spec serves a user who types it in, one who computes it in this graph, and one who takes it from a record.
 - An author who wraps a workflow factory that holds a value at a key of a union replaces that value with a provider, such as an adapter from `GivenCentre` to esssans' `BeamCenter`.
 - Neither a union nor `X | None` can be a blank of a stage: the key of a union may depend on the value, and `X | None` has no key. A client that varies one submits plain requests, which compute everything each time.
-- An author tests that each alternative has its effect, and that `None` after a value gives the result without `X`.
+- An author tests that each alternative has its effect, and that `None` after a value returns the result without `X`.
 
 ## Alternatives considered
 
