@@ -1,107 +1,115 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The workspace: it checks requests, logs records, runs them, and holds their
-output values. :mod:`ess.apps.protocol` states the rules a client relies on.
-This docstring states how the workspace implements them.
+The workspace: it checks requests, logs records, runs them on worker threads,
+and holds their output values in memory.
 
-A method whose name ends in ``_locked`` must be called with the workspace's lock
-(``_changed``) held. Any other method may be called without it, and takes the
-lock where it needs it.
+:mod:`ess.apps.protocol` states the rules that a client relies on. This
+docstring states what spans the functions of this module.
 
-What the workspace knows of history is its log (see ``log.py``): every
-submission, started and finished record, opened accumulator, and push is
-appended as one event and then applied to its views (see ``views.py``). A change
-is checked before its event is appended, so the log holds only events that
-apply. The log is
-the workspace's only record of history, so if an append fails, for example on a
-full disk, the workspace no longer knows its own state and stops: every call
-waiting in it, and every later call, raises ``RuntimeError`` from the append's
-error.
+Threads
+-------
+One lock, the condition ``_changed``, guards the workspace and its ``_Stage``
+and ``_Accumulator`` objects. A method whose name ends in ``_locked`` must be
+called with the lock held. Any other method takes the lock where it needs it.
 
-A record's start is logged before its workflow reads anything, and its
-persisted outputs are written before its finish is logged. At a restart
-(``_restart_locked``), nothing the earlier workspace kept survives, so only
-persisted work that had not started goes on. Each record pending in the log:
+Calls that may be slow run without the lock: the file source, the store,
+bindings, drivers, and validation. So a method that checks a request does what
+needs no history before it takes the lock, and the rest after.
+
+Three exceptions to the lock:
+
+- A stage's ``staging`` lock makes concurrent calls stage once. It is taken
+  before ``_changed``, never while ``_changed`` is held.
+- An accumulator's ``_computing`` lock guards the outputs of its state. It is
+  never taken while ``_changed`` is held.
+- While an accumulator is ``busy``, its worker uses the driver and the first
+  step without ``_changed``.
+
+History
+-------
+The log (``log.py``) is the workspace's only record of history. A change is
+checked, then appended to the log as an event, then applied to ``_views``
+(``_append_locked``). The log thus holds only events that apply. The views
+apply the event in the form the log stores, as a later read of the log would.
+If an append fails, for example on a full disk, the workspace no longer knows
+its own state and stops: every waiting and later call raises ``Stopped``, from
+the error of the append.
+
+Output values, stages, accumulators, readers, and waits are not history. They
+are held in memory and end with the process. The workspace logs only records of
+a bound spec. So a record of an unbound spec comes from the log the workspace
+started from, and none of its values is in memory.
+
+Restart
+-------
+A record's start is logged before its workflow reads anything. Its persisted
+outputs are written before its finish is logged. At a restart
+(``_restart_locked``), only persisted work that had not started goes on. Each
+record pending in the log:
 
 1. fails if it started, since it may have ended the process, as an
    out-of-memory kill does;
-2. otherwise is cancelled, unless it persists outputs or a pending record
-   that does reads it, directly or through other pending records;
-3. otherwise runs if it is of the bound spec and each output it reads is
-   persisted, of the bound spec, or of a record that runs; it fails if not.
+2. otherwise is cancelled, unless it persists outputs, or a pending record
+   that persists outputs reads it, directly or through other pending records;
+3. otherwise runs, if its spec is bound and each output it reads is of a bound
+   spec and either persisted or of a record that runs. Otherwise it fails.
    The record of a freeze fails, since its driver is gone. A call through a
    stage runs as its plain request, since the stage is gone.
 
 So a record that runs at a restart had not started, and has written nothing.
 
-Output values, stages, accumulators, and what waits for what are not history.
-The workspace keeps them in memory, so a workspace started from an existing log
-cannot read the outputs of the workspace that wrote it.
+Values and readers
+------------------
+The workspace holds in memory the outputs of the records in ``_in_memory``:
+those that a submission or a freeze made without persisting outputs, until they
+are released. Any other holder of a value is a *reader*, counted in
+``_readers``. The readers of an output are the pending records, the steps of
+accumulators, and the stages not yet staged that reference it. The readers of
+an accumulator's state are the reads of it in progress, a freeze while it is
+checked, and the record of a freeze until it has finished and its workflow, if
+it ran, has returned.
 
-Keepers and readers
+When the last reader of an output lets go (``_let_go_locked``), the output is
+dropped, unless it is in ``_in_memory``. A pending record that persists nothing,
+and whose outputs nothing would hold, is cancelled, since its outputs would be
+dropped once computed. Cancelling lets go of what the record reads, so this
+passes along a chain.
+
+A workflow reads an output from memory if the workspace holds it there, and
+from the store otherwise. Persisted outputs are written once the workflow has
+returned, and the record finishes after the write.
+
+Waits
+-----
+A record waits for the records it references (``_Plan.depends_on``), and so for
+the write of their persisted outputs. The record of a freeze waits for the
+accumulator to reach its state. An accumulator does its steps one at a time, in
+the order logged, on the workers (``_advance_locked``). A step waits for the
+records it references, and a push also for the readers of the state before it.
+If a step fails, or a record it references does not complete, the accumulator
+stops.
+
+Every wait is for work that came before the waiter, so no wait goes round in a
+circle. A record waits for records logged before it. A read, or the record of a
+freeze, waits for pushes logged before it took its state. A push waits for
+readers that took the state before the push was logged.
+
+Accumulator outputs
 -------------------
-The workspace holds in memory the outputs of the records that a submission or a
-freeze made without persisting them, until they are released (``_in_memory``).
-The pending records, steps of accumulators, and stages that have yet to read a
-value are its readers (``_readers``, see ``_Read``). A value is dropped when the
-workspace does not hold it in memory and no reader is left (``_drop_locked``). A
-pending record whose outputs nothing keeps is cancelled, since they would be
-dropped the moment they are computed; cancelling lets go of what it reads, so
-this passes along a chain. Once a stage has staged, or a step is done, what the
-binding holds is its own.
-
-A persist request made with a submission or a freeze replaces the workspace's
-hold: the worker writes the outputs named when the workflow returns, and the
-record finishes once they are written. The store may hold a value that no event
-names, written for a record cancelled meanwhile or by a write that failed
-part-way; nothing reads it.
-
-:meth:`Workspace._read_problem_locked` decides what may be read, in the request
-phase, from the record's existence, whether the workspace holds it in memory,
-and what it persists. So whether a call is accepted does not depend on how far
-other work has run. A read takes the outputs the workspace holds in memory from
-there, and persisted ones from the store, after the write; a workflow reads the
-outputs it references from memory while the workspace holds them.
-
-A request waits until every record it references has completed, the record
-of a freeze until the accumulator has reached its state, and an accumulator's
-steps as described below. This is the only scheduling there is.
-
-Every record that this workspace logs is of the bound spec, so a record of an
-unbound spec comes from the log it started from, and none of its values is in
-memory.
+The outputs of a state are computed once, without ``_changed``, when the first
+reader needs them, and held until the next push. The record of a freeze gets
+them without a copy, so they may share memory with the driver. A read copies
+them. A driver cannot go back to an earlier state, so the next push waits until
+the readers of the current state are done. This way no reader sees a value
+change.
 
 Stages
 ------
-The record of a request through a stage names the template's values, but once
-the stage has staged these references are provenance only: they are not checked
-against what the workspace keeps, waited for, or read, except by a restart,
-which runs the record as its plain request (see :meth:`Workspace._restart_locked`).
-
-Accumulators
-------------
-The driver gets each step's values as the log holds them, so that it and the
-record of a freeze agree.
-
-Each accumulator works through its steps one at a time, in the order logged, on
-the workers. A step starts once the records it references have completed, and a
-push once the readers of the state before it are done. If a step fails, or a
-record it references has not completed, the accumulator stops. Its driver is
-dropped once no reader holds the state the driver is in, without waiting for it
-to be released.
-
-The outputs of a state are computed outside the lock, all at once, the first time
-the record of a freeze or a read of its outputs needs them, and kept until the
-next push. The record of a freeze gets what the driver returns, not a copy, which
-may share memory with the driver; a read of the outputs copies them. So the next
-push waits until the readers of the state before it are done, since the driver
-cannot go back to that state and no reader may see its outputs change. Every
-wait is for work that came before the waiter: a request waits for records
-submitted before it, a read and the record of a freeze for the pushes logged
-before the read or the freeze took its state, and a push for the readers of the
-state before it, which took that state before the push was logged. So no wait
-goes round in a circle.
+Once a stage has staged, a call through it reads only the values of the blanks.
+The template's references in the call's record are then provenance only. They
+are not checked, waited for, or read, except at a restart, which runs the record
+as its plain request.
 """
 
 from __future__ import annotations
@@ -402,23 +410,32 @@ class _Plan:
 
 class Workspace(WorkspaceProtocol):
     """
-    Checks requests, keeps records, and runs requests of one ``proposal`` (see
-    the module docstring).
+    The workspace of one proposal, in this process (see the module docstring).
 
-    ``files`` is its file source, and ``bind`` lists a binding for each
-    spec it runs; each binding names its spec. Workflows, the steps of
-    accumulators, and writes share ``workers`` threads. A long step or
-    workflow holds one of them, so other work waits only once every worker is
-    busy; submissions are accepted meanwhile. The default is one thread: a
-    workflow that is parallel inside gains nothing from more, and the peak
-    memory grows with each request run at once. The best number depends on the
-    instrument, so an application may set it. ``log`` holds history, in
-    memory if not given, and ``store`` is where persisted outputs are
-    written. A workspace started on an existing log needs the store the earlier
-    workspace wrote to: without one, the persisted work it goes on with fails,
-    since it has no store. The workspace owns its log and closes it in
-    :meth:`close`. Raises ``ValueError`` for a log with an event of another
-    proposal, and closes the log.
+    Parameters
+    ----------
+    bind:
+        A binding for each spec the workspace runs. Each binding names its spec.
+    workers:
+        The number of threads that run workflows, accumulator steps, and writes.
+        Submissions are accepted while every worker is busy. The default is one:
+        a workflow that is parallel inside gains nothing from more, and the peak
+        memory grows with each request run at once.
+    log:
+        The history, held in memory if not given. The workspace owns the log,
+        and closes it in :meth:`close`.
+    store:
+        Where persisted outputs are written. A workspace started from an
+        existing log needs the store of the workspace that wrote the log.
+        Without it, the persisted work that goes on fails.
+
+    Raises
+    ------
+    ValueError
+        If the log holds an event of another proposal, which closes the log,
+        or if two bindings have the same spec.
+    TypeError
+        If ``bind`` is not a list of bindings.
     """
 
     def __init__(
@@ -486,18 +503,16 @@ class Workspace(WorkspaceProtocol):
 
     def close(self) -> None:
         """
-        Release everything the workspace keeps, wait until no record is pending
-        and no accumulator has a step to do, then let go of the workers and the
-        log. Closing again does nothing more. A workspace that has stopped lets go
-        without waiting, drops the work not yet started, and raises.
+        Release everything, wait until no record is pending and no accumulator
+        has a step to do, then shut down the workers and close the log.
 
-        Releasing cancels the pending work that persists nothing (see
-        :meth:`release`), so what is left to wait for is the work that writes
-        to the store, and what it reads. Once closing has started, every later
-        call raises ``RuntimeError``, and so does a call waiting in the
-        workspace. A call under way that does not wait returns or raises, by
-        how far it has got. If an append fails while releasing, the workspace
-        stops.
+        Releasing cancels the pending work that persists nothing. So closing
+        waits only for work that writes to the store, and for what that work
+        reads. A call under way that does not wait returns or raises, depending
+        on how far it has got. If an append fails while releasing, the
+        workspace stops. A workspace that has stopped does not wait: it drops
+        the work not yet started and raises ``Stopped``. Closing again does
+        nothing more.
         """
         try:
             with self._changed:
@@ -1721,21 +1736,26 @@ def local(
     workers: int = 1,
 ) -> Client:
     """
-    A client of its own workspace in this process, running the workflows bound here.
+    A client of a new workspace in this process, which runs the bindings given.
 
-    ``bind`` lists a binding for each spec the workspace runs, such as
-    ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``. Since the
-    code runs in this process, a binding may also be of code defined in a
-    notebook, such as ``function_binding(IOFQ, iofq)``.
+    The workspace holds history in memory, so its records end with the process.
+    Closing the client closes the workspace (see :meth:`Workspace.close`), which
+    waits until what is persisted is written.
 
-    Closing the client closes the workspace (see :meth:`Workspace.close`): it
-    releases everything the workspace keeps, which cancels the pending work that
-    persists nothing, and waits until what is persisted is written. A client that
-    is never closed ends with its process. Without a ``store``, persisting is
-    refused. The workspace keeps history in memory, so its records end with the
-    process. ``workers`` is the number of threads that run requests (see
-    :class:`Workspace`).
+    Parameters
+    ----------
+    bind:
+        A binding for each spec the workspace runs, such as
+        ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``. Since
+        the code runs in this process, a binding may be of code defined in a
+        notebook, such as ``function_binding(IOFQ, iofq)``.
+    store:
+        Where persisted outputs are written. Without one, ``persist`` raises
+        ``SubmitError``.
+    workers:
+        See :class:`Workspace`.
     """
+
     workspace = Workspace(
         proposal=proposal, files=files, bind=bind, workers=workers, store=store
     )
