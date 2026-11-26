@@ -39,7 +39,7 @@ and a download of the settings are refused, so that nothing is reduced or
 saved with settings other than those shown. The form has a field per
 parameter, also one that is a column: its value is the setting that each row
 with an empty cell takes, and a column may have none, so its field may be left
-unset (:func:`.forms.held`). Settings that the form cannot
+unset (:func:`.forms.params_and_missing`). Settings that the form cannot
 show, such as those kept for another version of the spec, are named in the
 state's ``settings_problem`` and kept until Apply. A ``Page`` writes the
 batch's settings only at Apply and at "Make this a setting": the form does
@@ -416,7 +416,7 @@ class Page:
             )
             for key, cells in frame.to_dict('index').items()
         ]
-        missing = self.draft.held()[1]
+        missing = self.draft.params_and_missing()[1]
         # A refusal of the batch's settings is said, and marked at its field,
         # while the form shows the value refused.
         errors = [*missing, *self.draft.at_applied(unusable)]
@@ -759,9 +759,11 @@ class Page:
     @_action
     def apply_settings(self) -> str:
         """Give the batch the settings of the form, unless one is missing."""
-        given, missing = self.draft.held()
+        given, missing = self.draft.params_and_missing()
         if missing:
-            raise Rejected(f'Not applied: {view.said(missing, self._titles)}.')
+            raise Rejected(
+                f'Not applied: {view.field_errors_text(missing, self._titles)}.'
+            )
         self.batch.settings = given
         self._show_settings()
         # A refusal of a setting was a refusal of the settings replaced, and
@@ -862,7 +864,7 @@ class Page:
         state = self._states([key])[0][key]
         record = state.record
         if record is None or state.spec_changed:
-            # another spec's params are not this one's
+            # an unbound spec's params are not this one's
             return RowDetail(key=key, reduced_with=None, created=None, differs=[])
         given = Fields(self.batch.spec.params, self.pages.runs.listing)
         given.set(record.request.params, self.pages.runs.listing)
@@ -956,7 +958,7 @@ class Page:
         """The batch's settings as a YAML template, those at the columns included."""
         if unapplied := self.draft.unapplied():
             raise Rejected(f'{unapplied} first.')
-        if missing := self.draft.held()[1]:
+        if missing := self.draft.params_and_missing()[1]:
             raise Rejected(f'Fill in the settings first: {SubmitError(missing)}')
         return settings_text(self.batch).encode()
 

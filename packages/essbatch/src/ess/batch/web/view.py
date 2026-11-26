@@ -131,12 +131,12 @@ def cell_text(listing: Listing, params: type[BaseModel], name: str, cell: Any) -
     return text(listing, as_request(params, {name: cell})[name])
 
 
-def said(errors: Sequence[FieldError], titles: Mapping[str, str]) -> str:
+def field_errors_text(errors: Sequence[FieldError], titles: Mapping[str, str]) -> str:
     """Errors of the settings in words, each with its setting's title."""
-    return '; '.join(_said_at(e, titles) for e in errors)
+    return '; '.join(_field_error_text(e, titles) for e in errors)
 
 
-def _said_at(error: FieldError, titles: Mapping[str, str]) -> str:
+def _field_error_text(error: FieldError, titles: Mapping[str, str]) -> str:
     if not error.loc:
         return error.msg
     name = str(error.loc[0])
@@ -150,7 +150,7 @@ def settings_problem(
     What the settings lack or what is refused of them, and the settings
     ``unfit`` that the form cannot show; ``None`` if nothing.
     """
-    told = [said(errors, titles)] if errors else []
+    told = [field_errors_text(errors, titles)] if errors else []
     if unfit:
         told.insert(0, f'Settings that this form cannot show: {_join(unfit)}')
     return '; '.join(told) or None
@@ -160,7 +160,7 @@ def refusal(
     error: FieldError, named: Mapping[str, str], titles: Mapping[str, str]
 ) -> SubmitProblem:
     """``error`` of a reduction refused, with its row named as ``named`` names it."""
-    text = _said_at(error, titles)
+    text = _field_error_text(error, titles)
     if error.request_key is not None:
         text = f'{named.get(error.request_key, error.request_key)}: {text}'
     return SubmitProblem(
@@ -173,7 +173,7 @@ def problems(
 ) -> dict[str, str]:
     """The reason of each of ``errors`` at a cell of row ``key``, by column."""
     return {
-        str(e.loc[0]): _said_at(e, titles)
+        str(e.loc[0]): _field_error_text(e, titles)
         for e in errors
         if e.request_key == key and e.loc
     }

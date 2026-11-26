@@ -25,10 +25,11 @@ from .models import Edit
 
 class Draft:
     """
-    The form of the settings of ``batch`` as it is now: a field per
-    parameter, but the columns that the source fills, which take no setting
-    (:attr:`~ess.batch.Batch.source_columns`); a field of a parameter column may be
-    left unset (:func:`.forms.held`). It starts showing the batch's settings.
+    The form of the settings of ``batch`` as it is now: a field per parameter,
+    but the columns that the source fills, which take no setting
+    (:attr:`~ess.batch.Batch.source_columns`); a field of a parameter column
+    may be left unset (:func:`.forms.params_and_missing`). It starts showing
+    the batch's settings.
 
     Attributes
     ----------
@@ -59,7 +60,7 @@ class Draft:
         # Settings kept for another version of the spec may not fit the form;
         # the batch keeps them, and the page names them, until Apply.
         self.unfit = self.fields.set_fitting(settings, listing)
-        self.shown = self.held()
+        self.shown = self.params_and_missing()
 
     def fill(self, params: Mapping[str, Any], listing: Listing) -> None:
         """Show ``params``, all or none; raises as :meth:`Fields.set`."""
@@ -75,16 +76,19 @@ class Draft:
         """Offer what ``listing`` lists in the pickers."""
         self.fields.refresh(listing)
 
-    def held(self) -> tuple[dict[str, Any], list[FieldError]]:
-        """What the form holds, and what is missing (:func:`.forms.held`)."""
-        return forms.held(self.fields, self._columns)
+    def params_and_missing(self) -> tuple[dict[str, Any], list[FieldError]]:
+        """
+        What the form holds, and what is missing
+        (:func:`.forms.params_and_missing`).
+        """
+        return forms.params_and_missing(self.fields, self._columns)
 
     def at_applied(self, errors: Iterable[FieldError]) -> list[FieldError]:
         """
         Those of ``errors`` that name no field, or a field that holds what
         it held at the last :meth:`reset`: the value refused is shown.
         """
-        given, shown = self.held()[0], self.shown[0]
+        given, shown = self.params_and_missing()[0], self.shown[0]
         return [
             e
             for e in errors
@@ -96,7 +100,7 @@ class Draft:
         What a person does first while the form holds a change, since a
         reduction would use settings other than those shown; else ``None``.
         """
-        held = self.held()
+        held = self.params_and_missing()
         if held == self.shown:
             return None
         return f'{"Fill in" if held[1] else "Apply"} or discard the settings'

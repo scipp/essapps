@@ -50,7 +50,7 @@ from ess.spec.refs import Loc
 from .models import Alternative, Edit, Editor, Node
 
 
-def held(
+def params_and_missing(
     fields: Fields, parameter_columns: Collection[str] = ()
 ) -> tuple[dict[str, Any], list[FieldError]]:
     """
@@ -73,9 +73,9 @@ def tree(
     """
     The nodes of ``fields``, each with what is missing or ``refused`` there;
     the node of a field of ``parameter_columns`` is marked as a column, and
-    misses nothing if left unset (:func:`held`).
+    misses nothing if left unset (:func:`params_and_missing`).
     """
-    _, missing = held(fields, parameter_columns)
+    _, missing = params_and_missing(fields, parameter_columns)
     said = {e.loc: message(e.msg) for e in (*missing, *refused) if e.loc}
     problems = {loc: m[:1].upper() + m[1:] for loc, m in said.items()}
     return [
