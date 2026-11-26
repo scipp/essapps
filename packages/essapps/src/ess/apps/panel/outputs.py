@@ -1,5 +1,6 @@
 """
-The outputs of the proposal's records, listed by type, to plot or remove.
+The outputs of the proposal's records, listed by type, to plot, to trace, or to
+remove.
 
 An output should be a group, so that its type shows what it is, such as
 ``BeamCentre``. The type of an array shows only ``DataArray``.
@@ -99,8 +100,9 @@ class Outputs:
         """
         Lists the outputs of ``listing``.
 
-        The output selected stays selected if listed. Its plots are drawn again
-        only if its status changed.
+        The output selected stays selected if listed. Its view is drawn again
+        only if its row changed, such as its status. A provenance graph is drawn
+        again in any case.
         """
         self._listing = listing
         self._records = {r.id: r for r in listing.records}
@@ -132,11 +134,7 @@ class Outputs:
         self._show_view()
 
     def _describe(self, record: Record, name: str) -> str:
-        """
-        The Markdown about an output.
-
-        Sets ``_fields`` once its record has completed.
-        """
+        """The Markdown about an output; sets ``_fields`` if its value is readable."""
         listing = self._listing
         spec = listing.specs.get(record.id)
         status = listing.status[record.id]
@@ -176,7 +174,7 @@ class Outputs:
             self._show_view()
 
     def _show_view(self) -> None:
-        """The view picked of the output selected."""
+        """Shows the view picked of the output selected."""
         self.view.objects = []
         if (selected := self.selected) is None:
             return
@@ -233,7 +231,7 @@ class Outputs:
         return views
 
     def remove(self) -> None:
-        """Releases the record of the output selected, and stops listing it."""
+        """Releases the record of the output selected, and stops listing its outputs."""
         if (selected := self.selected) is None:
             return
         record, _ = selected
@@ -321,7 +319,7 @@ def _summary(fields: Mapping[str, Any]) -> str:
 
 
 def _brief(value: Any) -> str:
-    """An array by its sizes, unit and coordinates, any other value by its repr."""
+    """An array by its sizes, unit and coordinates, a 0-D value with its unit."""
     if isinstance(value, ArrayInfo):
         unit = '' if value.unit is None else f' [{value.unit}]'
         sizes = ', '.join(f'{d}: {n}' for d, n in value.sizes.items())
