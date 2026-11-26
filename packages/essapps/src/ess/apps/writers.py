@@ -59,8 +59,9 @@ class Writer:
     Parameters
     ----------
     name:
-        The name of the format, such as ``'nxcansas'``. A stored form refers to
-        its writer by this name, so that the title may change.
+        The name of the format, such as ``'nxcansas'``. Stored output options
+        (``ess.batch.definition.OutputOptions``) refer to the writer by this
+        name, so that the title may change.
     title:
         The name of the format shown to a person, such as ``'NXcanSAS'``.
     description:

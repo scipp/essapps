@@ -4,8 +4,8 @@
 An output as a scipp HDF5 file, which ``scipp.io.load_hdf5`` reads.
 
 It needs scipp and h5py. scipp writes arrays, ``DataGroup``, numbers, and text.
-So a file holds a value in its form as stored, which
-:meth:`ess.apps.protocol.Store.read` shows as a table.
+So a file holds a value in its form as stored, as the docstring of
+:meth:`ess.apps.protocol.Store.read` lists.
 """
 
 from __future__ import annotations

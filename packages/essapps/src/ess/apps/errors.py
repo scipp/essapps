@@ -18,7 +18,7 @@ format can carry it unchanged::
         client.submit(batch)
     except SubmitError as error:
         for e in error.errors:
-            form.mark(e.request_key, e.loc, e.msg)
+            print(e.request_key, e.loc, e.msg)
 """
 
 from __future__ import annotations
@@ -78,12 +78,12 @@ class SubmitError(ValueError):
 
     @classmethod
     def at(cls, loc: Loc, msg: str) -> SubmitError:
-        """One reason, at the position ``loc``, with no request key."""
+        """One problem, at the position ``loc``, with no request key."""
         return cls([FieldError(None, loc, msg)])
 
     @classmethod
     def of(cls, error: ParamsError) -> SubmitError:
-        """The reasons of params that :mod:`ess.spec` rejects, with no request key."""
+        """The problems of params that :mod:`ess.spec` rejects, with no request key."""
         return cls(FieldError(None, loc, msg) for loc, msg in error.errors)
 
     def __str__(self) -> str:

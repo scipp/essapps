@@ -86,7 +86,7 @@ def test_cancelling_work_that_nothing_keeps_passes_along_a_chain_of_any_length(
     client.release(chain[:-1])
     assert set(client.status(chain)) == {Status.PENDING}  # the last reads them
 
-    client.release(chain[-1])  # now nothing keeps any of them
+    client.release(chain[-1])  # now nothing holds any of them
     loading.set()
     assert set(client.status(chain)) == {Status.CANCELLED}
 
@@ -100,7 +100,7 @@ def test_a_released_pending_record_that_nothing_reads_is_cancelled(
     loading.set()
 
     assert client.status(load) is Status.CANCELLED
-    assert client.failure(load) == 'nothing keeps its outputs'
+    assert client.failure(load) == 'nothing holds its outputs'
     with pytest.raises(SubmitError, match=rf'^source: record {load.id} cancelled$'):
         client.submit(toys.read_request(load))
 

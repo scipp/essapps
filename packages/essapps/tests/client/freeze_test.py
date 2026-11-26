@@ -122,7 +122,7 @@ def test_a_cancelled_freeze_leaves_the_accumulator_readable_and_shut(
     subtracting.compute.clear()
     cancelled = client.freeze(sides)
     subtracting.computing.wait(timeout=5)  # it runs, and holds the state
-    client.release(cancelled)  # nothing keeps it any more
+    client.release(cancelled)  # nothing holds it any more
     subtracting.compute.set()
 
     assert client.wait(cancelled) == Status.CANCELLED

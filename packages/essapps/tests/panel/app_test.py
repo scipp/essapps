@@ -53,7 +53,7 @@ def test_a_place_with_nothing_given_is_shown_and_nothing_is_submitted(
 
     assert app.submit() is None
     assert app.message.object == (
-        'Refused:\n\n- run: choose a file\n- sample.thickness: give a value'
+        'Rejected:\n\n- run: choose a file\n- sample.thickness: give a value'
     )
     assert client.records() == []
 
@@ -64,7 +64,7 @@ def test_a_refused_request_shows_each_reason_by_its_place(app: App) -> None:
 
     assert app.submit() is None
     assert app.message.object == (
-        'Refused:\n\n- direct_beam: a required parameter, not given'
+        'Rejected:\n\n- direct_beam: a required parameter, not given'
     )
 
 

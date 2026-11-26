@@ -399,7 +399,7 @@ def test_records_pending_in_the_log_are_cancelled_or_failed_at_a_restart(
     records = [running, frozen, read]
     assert again.status(records) == [
         Status.FAILED,  # it started
-        Status.CANCELLED,  # nothing keeps them
+        Status.CANCELLED,  # nothing holds them
         Status.CANCELLED,
     ]
     assert again.failure(records) == [

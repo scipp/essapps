@@ -108,6 +108,8 @@ class Views:
         self.feed: list[str] = []
 
     def apply(self, event: Event) -> None:
+        # Only a submission is checked. A start, finish or push that names an
+        # unknown record or accumulator is applied as it is.
         match event:
             case Submitted():
                 self.spec_digests.update(event.specs)

@@ -1247,7 +1247,7 @@ def test_a_limited_form_ignores_the_other_parameters_of_a_record(
     assert row.params['sample']['thickness'] == 2.0
 
 
-def test_held_leaves_out_what_has_something_missing(
+def test_params_and_missing_leaves_out_what_has_something_missing(
     client: Client, reduce_spec: Spec
 ) -> None:
     form = form_of(reduce_spec, client)

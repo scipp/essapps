@@ -69,7 +69,7 @@ class FolderStore:
 
 
 _OWN = ('files.csv', 'log.jsonl', 'store', 'definitions')
-"""The entries that the workspace writes in its folder, which a scan skips."""
+"""The entries of a workspace folder that hold no data files, which a scan skips."""
 
 
 def _measured(row: Mapping[str, Any]) -> tuple[bool, int, str]:
@@ -246,7 +246,8 @@ def open_folder(
     A wrapper of it, such as :class:`~ess.batch.CorrectedFiles`, corrects the
     metadata in ``files.csv`` while the client is open.
 
-    Raises ``FileNotFoundError`` if ``files.csv`` is missing, and
+    Raises ``FileNotFoundError`` if ``files`` is ``None`` and ``files.csv`` is
+    missing, and
     ``RuntimeError`` if another process holds the folder.
     """
     workspace = Workspace(
