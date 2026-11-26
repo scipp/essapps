@@ -3,15 +3,11 @@
 """
 What the workspace knows, built from its log.
 
-:meth:`Views.apply` is the only way the views change, and what it does
-depends on nothing but the events. A workspace that applies its log again
-therefore has the views of the workspace that wrote it. The workspace answers
-every query from the views, and reads the log only when it starts. So the
-views may change between versions, while the events must stay readable as
-long as a log is kept. What is not history, such as stages, accumulators, and
-output values, the workspace keeps elsewhere.
-
-A log, and so the views, hold the history of one proposal: the workspace's.
+:meth:`Views.apply` is the only way the views change, and it depends on
+nothing but the events. So a workspace that applies its log again has the views
+of the workspace that wrote it. The workspace answers every query from the
+views, and reads the log only when it starts. So the views may change between
+versions, while the events must stay readable as long as a log exists.
 """
 
 from __future__ import annotations
@@ -36,10 +32,9 @@ class _Records(Mapping[str, Record]):
     """
     The records by ID, in the order submitted.
 
-    The record of a freeze is held as the accumulator and its number of
-    pushes, and its request is listed from the accumulator's template and
-    pushes each time it is read, so the views grow by a constant amount per
-    freeze.
+    The record of a freeze is held as the accumulator and its number of pushes.
+    Its request is built from the accumulator's template and pushes each time
+    it is read, so the views grow by a constant amount per freeze.
     """
 
     def __init__(self, views: Views) -> None:
@@ -51,12 +46,12 @@ class _Records(Mapping[str, Record]):
         self._held[record_id] = held
 
     def outputs(self, record_id: str) -> tuple[str, ...]:
-        """The names of a record's outputs, without listing its request."""
+        """The names of a record's outputs, without building its request."""
         held = self._held[record_id]
         return held.outputs if isinstance(held, Record) else held[0].outputs
 
     def spec(self, record_id: str) -> SpecId:
-        """The spec of a record, without listing its request."""
+        """The spec of a record, without building its request."""
         held = self._held[record_id]
         if isinstance(held, Record):
             return held.spec
@@ -87,23 +82,16 @@ class Views:
     """
     The records, labels, accumulators, and pushes that the events describe.
 
-    ``finished`` holds the event that finished a record; a record without one
-    is pending. ``started`` names the records whose work began. ``states`` holds
-    the accumulator and number of pushes of each record of a freeze.
-    ``accumulators`` holds the event that opened each accumulator, and
-    ``pushes`` its pushes in order, each rows of its tables.
-
-    ``persisted`` names the outputs each record persists; their write is the
-    record's: pending while it is, done once it completes.
-
-    ``spec_digests`` holds the digest last logged for each spec by name and
-    version, as the log keys it, and ``digests`` the digest of each record's
-    spec: the one last logged for it before the record.
+    ``finished`` holds the event that finished each record. A record without
+    one is pending. ``states`` holds the accumulator and number of pushes of the
+    record of each freeze. ``persisted`` names the outputs that each record
+    persists. Their write is part of the record: pending while the record is,
+    done once it completes. ``spec_digests`` holds the digest last logged for
+    each spec, and ``digests`` the digest of each record's spec, the last logged
+    before the record.
 
     ``feed`` holds the ID of a record each time an event submits or finishes
-    it, in the order of the events. A position in it is a
-    cursor of :meth:`changes`. Starting a record, opening an accumulator, and
-    pushing to it are not in the feed.
+    it, in event order. A position in it is a cursor of :meth:`changes`.
     """
 
     def __init__(self) -> None:
@@ -167,9 +155,9 @@ class Views:
 
     def new_digests(self, digests: Mapping[SpecId, str]) -> SpecDigests:
         """
-        The ``digests`` of specs that an event naming them carries: those the
-        log does not hold under the spec's name and version, or holds with
-        another digest.
+        The ``digests`` that the log does not hold, or holds with another digest.
+
+        An event that names these specs carries their digests.
         """
         return {
             str(s): d for s, d in digests.items() if self.spec_digests.get(str(s)) != d
