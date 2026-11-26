@@ -80,11 +80,7 @@ def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     It adds an empty column for each source column that the rows lack, so
     that a batch made before any file is listed has its columns.
 
-    Raises
-    ------
-    ValueError
-        For a key that is not text, empty, or repeated, or a column that a
-        table cannot hold (:func:`~.table.typed`).
+    Raises ``ValueError`` if the rows cannot be a table (:func:`~.table.typed`).
     """
     frame = source.rows(_file_infos(client, source.selector))
     empty = {
@@ -103,11 +99,7 @@ def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     A row of a source is *complete* once it has a value in each source column,
     and *incomplete* until then.
 
-    Raises
-    ------
-    ValueError
-        If ``given`` lacks one of ``columns``, such as when the code of a source
-        no longer returns a column that a batch stores as a source column.
+    Raises ``ValueError`` if ``given`` lacks one of ``columns``.
     """
     if lacking := [c for c in columns if c not in given.columns]:
         raise ValueError(
@@ -133,11 +125,8 @@ class Range:
     With ``later``, the batch gets only rows added later, by Follow or by a
     person.
 
-    Raises
-    ------
-    ValueError
-        For ``later`` with an end. When called, for an end that is not a key of
-        the rows, or a ``first`` after ``last``.
+    Raises ``ValueError`` for ``later`` with an end, and when called with ends
+    that do not fit the rows.
     """
 
     first: str | None = None

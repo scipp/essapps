@@ -44,12 +44,8 @@ class Writing:
         The default owner and contact, such as the principal investigator of
         the proposal (:func:`ess.apps.scicat.principal_investigator`).
 
-    Raises
-    ------
-    ValueError
-        If the workspace binds no spec of a name in ``writers``, a writer reads
-        an output that its spec lacks, or two writers of a spec have one
-        format.
+    Raises ``ValueError`` if ``writers`` do not fit the specs that the
+    workspace binds.
     """
 
     def __init__(
@@ -103,9 +99,7 @@ class Writing:
         """
         Stores ``options`` for ``label``.
 
-        Raises ``ValueError`` for a format that :meth:`writers` lacks, an
-        output that the spec lacks, or no output for a writer of chosen
-        outputs.
+        Raises ``ValueError`` if ``options`` do not fit the writers or the spec.
         """
         writer = self._writer(label, options.format)
         spec = self.manager.batch(label).spec

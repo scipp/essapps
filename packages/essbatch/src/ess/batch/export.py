@@ -56,12 +56,8 @@ def export_table(
     temporary folder in ``directory`` first, so a row whose writing fails
     leaves the folder of its key as it was.
 
-    Raises
-    ------
-    ValueError
-        Before anything is written: if the table has no column ``record``,
-        refers to a record that the workspace lacks, or has a key twice or a
-        key that is not a folder name, such as ``a/b``.
+    Raises ``ValueError`` before anything is written if ``table`` cannot be
+    exported, such as a table without a column ``record``.
     """
     if 'record' not in table:
         raise ValueError('the table has no column record: reduce it first')

@@ -155,7 +155,7 @@ The status of a row:
                       leaves it, --settings-changed adds it
     outdated          reduced, but a cell changed since, or the bound spec has
                       another version, or the settings are invalid, so not compared
-    failed            the reduction failed; the column failure says why
+    failed            the reduction failed; the column failure states why
     cancelled         the reduction was cancelled
 
 follow -l water: water follows its row source, with a step every --interval
@@ -478,7 +478,7 @@ def _batches(given: _Context) -> pd.DataFrame:
     """
     A row per batch. The results are not compared with the rows
     (``Batch.state(compare=False)``), which would resolve every row of every
-    batch. A batch that cannot be read is said on stderr, and its row has no
+    batch. A batch that cannot be read is reported on stderr, and its row has no
     spec and no counts.
     """
     intake = given.intake()
@@ -577,10 +577,10 @@ def _reduce(given: _Context) -> pd.DataFrame:
             batch, remaining=args.remaining, settings_changed=args.settings_changed
         )
     except (SubmitError, ValueError):
-        # A refusal submits nothing, so the label is free again, unless a
+        # A rejected reduction submits nothing, so the label is free again, unless a
         # record has the label after all.
         if made and not client.records(label=label):
-            with suppress(DefinitionWriteError):  # the refusal is what to say
+            with suppress(DefinitionWriteError):  # the rejection is the error to report
                 manager.remove(label)
         raise
 
@@ -823,7 +823,7 @@ def follow(
         if state.record is not None and state.record_status is Status.PENDING
     }
     shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, incomplete
-    failed: str | None = None  # what the step before raised, as said
+    failed: str | None = None  # what the step before raised, as reported
     done = 0
     while steps is None or done < steps:
         if done:
@@ -833,7 +833,7 @@ def follow(
             break
         done += 1
         error = None  # why the step raised, for the line
-        told = ''  # what stderr says of it
+        told = ''  # what stderr reports of it
         try:
             # None only if no batch follows, which this process alone changes.
             stepped = intake.step()
@@ -1079,7 +1079,7 @@ def _publish_arguments(command: argparse.ArgumentParser) -> None:
 
 
 def _seconds(text: str) -> float:
-    """A number of seconds, 0 or more; argparse refuses another."""
+    """A number of seconds, 0 or more; argparse rejects another."""
     with suppress(ValueError):
         if math.isfinite(seconds := float(text)) and seconds >= 0:
             return seconds
@@ -1087,7 +1087,7 @@ def _seconds(text: str) -> float:
 
 
 def _steps(text: str) -> int:
-    """A number of steps, 1 or more; argparse refuses another."""
+    """A number of steps, 1 or more; argparse rejects another."""
     with suppress(ValueError):
         if (steps := int(text)) >= 1:
             return steps

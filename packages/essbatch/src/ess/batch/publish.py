@@ -55,10 +55,9 @@ class Publisher:
         KeyError
             If no batch has ``label``.
         ValueError
-            Before any upload: if the output options lack an owner or a
-            contact email, or name a format that this process lacks; if a row
-            is not in the batch, has no result to publish
-            (:func:`~.state.publishable`), or was published already.
+            Before any upload, if the output options cannot be used, or a row
+            has no result to publish (:func:`~.state.publishable`) or was
+            published already.
         UploadFailed
             If an upload fails. It names the rows published before it, which
             stay published.

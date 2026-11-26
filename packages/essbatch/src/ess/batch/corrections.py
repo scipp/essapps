@@ -146,8 +146,8 @@ def open_workspace(
     which reads ``files.csv`` again when it is replaced: a file that arrives
     while the client is open is listed.
 
-    Raises as :func:`ess.apps.folder.open_folder` does, and ``ValueError`` if
-    the definitions hold corrections that cannot be read.
+    Raises as :func:`ess.apps.folder.open_folder` and :class:`CorrectedFiles`
+    do.
     """
     definitions = FolderDefinitions(directory)
     files = CorrectedFiles(
