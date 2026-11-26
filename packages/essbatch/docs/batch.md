@@ -136,7 +136,7 @@ Other tables are always named with what they are of:
    In the batch table above with `batch.settings == {'thickness': 1.5, ...}`, row 60339 is reduced with thickness 1.5 and row 60340 with 2.0. A row with a `MISSING` value is incomplete and is not reduced.
 
    `batch.fills` names the parameter columns that the source of the batch fills, here `sample` and `sample_transmission`; it is empty for a batch made without a source. A row taken by hand before its transmission run is listed has an empty cell there. Without the second branch it would be reduced with the transmission run of another sample, from the settings.
-3. **The state is computed, never kept.** It is read from the records each time. Each rule (`ready`, `not_reduced`, `left_to_reduce`, `earlier_settings`, `to_reduce`) is a function from the states to keys.
+3. **The state is computed, never kept.** It is read from the records each time. Each rule (`ready`, `not_reduced`, `left_to_reduce`, `earlier_settings`, `to_reduce`, `publishable`) is a function from the states to keys.
 4. **A step never changes a row that the batch table has.** It adds rows, and reduces rows that have no result.
 5. **A batch is shown without its source and without the files.** A file that is not found is a problem of its row.
 6. **The rules are in the batch layer.** A refusal of what is asked is a `ValueError`, a label that no batch has a `KeyError`, and a write or delete that the definitions cannot do, such as a file the system refuses to write, a `NotKept`. The page and the command show them and copy no rule of the batch layer. The page refuses only a request that no call of the batch layer can express, such as Follow without a row source. The batch layer has no lock and no timer.
@@ -487,6 +487,7 @@ The rules, in `ess.batch`:
 | `earlier_settings(states)` | the rows with `earlier` |
 | `left_to_reduce(states)` | ready, and without a result, failed, cancelled or outdated; not those of `earlier_settings` |
 | `to_reduce(states, which)` | `left_to_reduce` for `'remaining'`, `earlier_settings` for `'earlier'`, `ready` for `'all'` |
+| `publishable(states)` | `done` or `earlier`: the rows whose result may be published |
 
 A change of settings applies to the rows not reduced yet, also to a row that takes a setting at a column: it reads `earlier`.
 A change of a cell applies to its row: it reads `outdated`.

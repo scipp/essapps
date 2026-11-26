@@ -270,3 +270,15 @@ def not_reduced(states: Mapping[str, RowState]) -> list[str]:
     cancelled. ``changed`` is not read, so ``states`` may be compared or not.
     """
     return [k for k in ready(states) if states[k].record is None]
+
+
+def publishable(states: Mapping[str, RowState]) -> list[str]:
+    """
+    The rows whose result may be published: those that read ``done`` or
+    ``earlier``, completed and not outdated.
+    """
+    return [
+        k
+        for k, s in states.items()
+        if s.text in ('done', 'earlier') and s.record is not None
+    ]

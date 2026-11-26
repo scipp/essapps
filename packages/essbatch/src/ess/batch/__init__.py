@@ -19,6 +19,7 @@ from .state import (
     earlier_settings,
     left_to_reduce,
     not_reduced,
+    publishable,
     ready,
     to_reduce,
 )
@@ -40,6 +41,7 @@ __all__ = [
     'earlier_settings',
     'left_to_reduce',
     'not_reduced',
+    'publishable',
     'ready',
     'rows_of',
     'to_reduce',

@@ -325,6 +325,7 @@ def output(
         else f'This application has no writer of the format {form.format} '
         'that the form names: pick a format and apply.'
     )
+    lacking = ', no '.join(form.lacking)
     outputs = spec.outputs.model_fields
     return OutputShown(
         form=form,
@@ -332,6 +333,9 @@ def output(
         outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
         catalogue=catalogue,
         problem=problem,
+        unpublishable=(
+            f'The form names no {lacking}: fill it in and apply it.' if lacking else ''
+        ),
     )
 
 

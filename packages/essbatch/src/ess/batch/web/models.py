@@ -129,7 +129,8 @@ class Row(BaseModel):
     ``current`` or ``outdated``. ``changed`` names, for a row that reads
     ``earlier``, the settings that changed since its result, such as
     ``'Binning changed'``. ``published`` is the catalogue identifier of its
-    result, if published.
+    result, if published, and ``publishable`` says whether its result may be
+    published and is not (:func:`~ess.batch.state.publishable`).
     """
 
     key: str
@@ -142,6 +143,7 @@ class Row(BaseModel):
     result: Literal['current', 'outdated'] | None
     cells: dict[str, Cell]
     published: str = ''
+    publishable: bool = False
 
 
 class Action(BaseModel):
@@ -231,7 +233,9 @@ class OutputShown(BaseModel):
     the default first, the ``outputs`` of its spec that the form may name,
     whether a ``catalogue`` is given, to publish to, and the ``problem`` of
     the form in words: why nothing is written by it, such as a kept format
-    that is not among ``formats``; empty if none.
+    that is not among ``formats``; empty if none. ``unpublishable`` says
+    what the form lacks to publish (:attr:`~ess.batch.definition.Form.lacking`);
+    empty if nothing.
     """
 
     form: Form
@@ -239,6 +243,7 @@ class OutputShown(BaseModel):
     outputs: list[Output]
     catalogue: bool
     problem: str
+    unpublishable: str
 
 
 class State(BaseModel):

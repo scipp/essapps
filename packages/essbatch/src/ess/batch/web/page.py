@@ -147,7 +147,7 @@ from .. import definition, frames
 from ..definition import Form
 from ..export import export_table
 from ..reduction import Batch
-from ..state import RowState, to_reduce
+from ..state import RowState, publishable, to_reduce
 from ..table import KEY, NAME, cell_of, names, read_table, write_table
 from ..templates import checked_settings, load_template, settings_text
 from . import forms, plots, view
@@ -398,6 +398,7 @@ class Page:
         published = definition.published(
             self.pages.intake.manager.definitions, self.label
         )
+        may = set(publishable(states))
         rows = [
             self._row(
                 key,
@@ -409,6 +410,7 @@ class Page:
                 unsubmitted.get(key, ''),
                 failures,
                 published,
+                key in may,
             )
             for key, cells in frame.to_dict('index').items()
         ]
@@ -495,6 +497,7 @@ class Page:
         unsubmitted: str,
         failures: Mapping[str, str],
         published: Mapping[str, str],
+        may_publish: bool,
     ) -> Row:
         titles = self._titles
         problems = view.problems(key, (*state.problems, *self._refusals), titles)
@@ -504,6 +507,7 @@ class Page:
         # An empty cell is shown empty, not as the setting or the default that
         # a request takes.
         given = {c: requested[c] for c in requested if c in state.own}
+        pid = '' if record is None else published.get(record.id, '')
         return Row(
             key=key,
             name=name,
@@ -513,7 +517,8 @@ class Page:
             changed=changed,
             record=None if record is None else record.id,
             result=view.result(state),
-            published='' if record is None else published.get(record.id, ''),
+            published=pid,
+            publishable=may_publish and not pid,
             cells={
                 c: Cell(
                     value=forms.cell(self._cells.fields[c], given.get(c, UNSET)),

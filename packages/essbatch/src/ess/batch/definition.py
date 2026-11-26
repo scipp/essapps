@@ -361,6 +361,15 @@ class Form(BaseModel, frozen=True):
             raise ValueError('a name is not empty')
         return name
 
+    @property
+    def lacking(self) -> list[str]:
+        """
+        What publishing by this form needs that it does not name: ``'owner'``,
+        ``'contact email'``, or neither.
+        """
+        given = [('owner', self.owner), ('contact email', self.contact_email)]
+        return [what for what, text in given if not text]
+
 
 _NAME_FIELDS = frozenset({'title', 'name', 'key'})
 

@@ -242,7 +242,7 @@ An application given a catalogue (`Pages(..., catalogue=Catalogue(...))`, `ess.a
 The result of a row is published as one derived dataset of SciCat (`ess.batch.publish.Publisher`, `ess.apps.scicat.publish`), with the files that the download writes.
 The rest is read from the result: the files it read with a catalogue identifier are its inputs, the proposal is the workspace's, and the software is that of the server now.
 **Publish N selected** publishes the selected rows that read `done` or `earlier` and are not published, with the form in force (`POST api/publish`, `Publisher.publish`); the column **Published** then shows the identifier of each dataset.
-The publisher decides which results may be published (`PUBLISHABLE`); the button only mirrors it, and waits, with a hint, while the form holds a change, names no owner or contact email, or a publication runs.
+The batch layer decides which results may be published (`ess.batch.publishable`, `Form.lacking`), and the server sends it, as `Row.publishable` and `OutputShown.unpublishable`; the button only mirrors it, and waits, with a hint, while the form holds a change, names no owner or contact email, or a publication runs.
 A result is published once; a row reduced again may be published again, as a new dataset.
 What the publisher refuses, such as a row whose result is outdated, publishes nothing; an upload that fails keeps those before it, which its message names.
 Which SciCat, and whether files are copied on a shared file system or sent over SFTP, is the `scitacean.Client` and its file transfer that the application gives (`ess.apps.scicat.Catalogue`); the transfer must have no `source_folder` of its own, so that each dataset has the folder of its record.
