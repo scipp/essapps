@@ -235,15 +235,6 @@ class Intake:
         """
         return rows_of(self.manager.client, self._source(source))
 
-    def _given(self, source: RowSource, fills: Collection[str]) -> pd.DataFrame:
-        """
-        What ``source`` makes now, with a column ``waits``: whether a cell of
-        ``fills`` is empty (:func:`~.source.filled`). A column of the source
-        named ``waits`` is replaced by it.
-        """
-        given = rows_of(self.manager.client, source)
-        return given.assign(waits=~filled(given, fills))
-
     def marked(
         self,
         source: str,
@@ -469,10 +460,11 @@ class Intake:
         source = self._source(made.source)
         batch = self.manager.batch(label)
         try:
-            given = self._given(source, batch.fills)
+            given = rows_of(self.manager.client, source)
+            waits = ~filled(given, batch.fills)
         except ValueError as error:  # as step says it
             raise ValueError(f'the source {made.source}: {said(error)}') from error
-        return given[~given.index.isin(batch.frame().index)]
+        return given.assign(waits=waits)[~given.index.isin(batch.frame().index)]
 
     def take(self, label: str, keys: Iterable[str]) -> None:
         """
