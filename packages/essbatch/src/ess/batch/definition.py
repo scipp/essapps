@@ -12,7 +12,7 @@ Each entry is validated when read: data of another shape raises ``ValueError``
 naming the field.
 
 The entries, their content and their writers: guide
-``packages/essbatch/docs/batch.md``, "What is kept on disk".
+``packages/essbatch/docs/batch.md``, "What is stored on disk".
 """
 
 from __future__ import annotations

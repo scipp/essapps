@@ -306,10 +306,10 @@ batch.make_setting('thickness', '60340')          # the column goes; the setting
 
 A batch made from a row source stores its source columns as the `blanks` of `settings.json`.
 So `manager.batch(label)` reads them without the row source, and the command without `-s` reads them too.
-The batch table keeps a column for each, and a setting there is never read:
+The batch table has a column for each, and a setting there is never read:
 
 ```python
-batch.set_table(table.drop(columns='sample_transmission'))  # ValueError: the table keeps the column
+batch.set_table(table.drop(columns='sample_transmission'))  # ValueError: the table must have the column
 batch.make_setting('sample_transmission')                   # ValueError, as set_table
 batch.settings = {'sample_transmission': 'run:60305'}       # ValueError: the source of the batch fills it
 batch.settable(settings)                                    # settings without the values at batch.source_columns
@@ -511,7 +511,7 @@ iofq.set_table(table)
 
 A cell may refer to a record that still runs. If that record failed or was cancelled, the row has the problem "the record it reads is failed".
 
-## What is kept on disk
+## What is stored on disk
 
 | File | Content | Writer |
 |---|---|---|

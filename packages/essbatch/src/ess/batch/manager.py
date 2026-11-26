@@ -7,7 +7,7 @@ removes them.
 The manager knows no row source: :class:`~.intake.Intake` brings the rows of a
 source into a batch. A label is a batch if and only if it has a header. The
 order of the writes that keeps this true when a process stops: guide
-``packages/essbatch/docs/batch.md``, "What is kept on disk".
+``packages/essbatch/docs/batch.md``, "What is stored on disk".
 
 Guide: "The batches of a workspace". Decisions: ``docs/developer/adr/0011``,
 ``0012`` and ``0013``.
@@ -53,7 +53,7 @@ class BatchManager:
     Makes, lists, changes and removes the batches of a workspace, and holds
     the one :class:`~.reduction.Batch` of each label.
 
-    It raises as ``batch.md``, "Errors", says. The headers are read once, when
+    It raises the errors of ``batch.md``, "Errors". The headers are read once, when
     the manager is made.
 
     Parameters

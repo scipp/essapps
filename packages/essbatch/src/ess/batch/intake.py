@@ -19,7 +19,7 @@ A process that stops between ``table.json`` and ``source.json`` leaves rows
 whose keys are not seen yet. The next step sees them: it
 sees every key of the source that the batch table has. The order of the
 writes of :meth:`Intake.create` and :meth:`Intake.follow` is in the guide,
-"What is kept on disk". ``Intake`` has no timer and no lock: whoever serves
+"What is stored on disk". ``Intake`` has no timer and no lock: whoever serves
 owns both.
 
 Guide: ``packages/essbatch/docs/batch.md``, "From a row source" and "Follow".
@@ -239,7 +239,7 @@ class Intake:
 
         The label, the spec, the source and whether the spec fits it are
         checked before the source is listed. Nothing is written if a check
-        fails. The order of the writes: ``batch.md``, "What is kept on disk".
+        fails. The order of the writes: ``batch.md``, "What is stored on disk".
 
         Parameters
         ----------

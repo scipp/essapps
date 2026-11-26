@@ -348,7 +348,7 @@ class Batch:
         Without ``key``, every row must take the same value (:meth:`values`).
         If the cell of the row is empty, the settings do not change. The
         settings are written before the batch table. If the definitions reject
-        the batch table, the batch keeps the column and the changed setting, as
+        the batch table, the batch still has the column and the changed setting, as
         a batch read again would.
 
         Raises ``ValueError`` if ``name`` is not a column or is one of
