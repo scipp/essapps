@@ -71,21 +71,21 @@ def note(name: str) -> Column:
 
 def listed(given: pd.DataFrame, source_columns: Collection[str]) -> SourceRows:
     """
-    The rows of ``given``, the rows of a source with a column
-    ``waits``, and maybe a column ``taken``, as a dialog lists them: each
-    named as :func:`names` names it, with the text of each note, the columns
-    but ``source_columns``, and its mark.
+    The rows of ``given``, the rows of a source with a column ``incomplete``,
+    and maybe a column ``taken``, as a dialog lists them: each named as
+    :func:`~..table.row_names` names it, with the text of each note, the
+    columns but ``source_columns``, and its mark.
     """
     named = row_names(given, ())
-    marks = {'waits', 'taken'}
+    marks = {'incomplete', 'taken'}
     shown = [c for c in given.columns if c not in {NAME, *source_columns, *marks}]
 
     def text(value: Any) -> str:
         return '' if pd.api.types.is_scalar(value) and pd.isna(value) else str(value)
 
     def mark(row: Mapping[str, Any]) -> str:
-        if row['waits']:
-            return 'waits'
+        if row['incomplete']:
+            return 'incomplete'
         if 'taken' not in row:
             return ''
         return 'taken' if row['taken'] else 'left out'

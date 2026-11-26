@@ -41,11 +41,11 @@ def added(
 ) -> tuple[pd.DataFrame, pd.Index]:
     """
     The rows of ``given`` to add to ``table``, with the columns of ``table``,
-    and the keys of the rows that wait.
+    and the keys of the rows that are incomplete.
 
     A row is added if its key is neither considered nor in ``table`` and it
     is complete: it has a value in each of ``source_columns``. A row with such a key
-    that is not complete waits.
+    that is not complete is incomplete.
     """
     is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
     is_ready = complete(given, source_columns)
@@ -72,7 +72,7 @@ class Step:
         none. If the settings are refused, every row without a result that is
         ready as given, also a row whose cell would be refused, since no cell
         is resolved then.
-    waiting:
+    incomplete:
         The keys of the new rows that are not complete yet.
     records:
         The records of the rows reduced, by key.
@@ -81,7 +81,7 @@ class Step:
     added: tuple[str, ...]
     considered: frozenset[str]
     submit_errors: Mapping[str, str]
-    waiting: tuple[str, ...]
+    incomplete: tuple[str, ...]
     records: Mapping[str, Record]
 
 
@@ -110,7 +110,7 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     table = batch.frame()
     try:
         given = rows_of(batch.client, source)
-        new, waiting = added(table, given, batch.source_columns, considered)
+        new, incomplete = added(table, given, batch.source_columns, considered)
         if len(new):
             batch.put(pd.concat([table, new]))
     except ValueError as error:
@@ -122,9 +122,9 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
         state = batch.state(candidates)
     except SubmitError as error:
         submit_errors = dict.fromkeys(candidates, str(error))
-        return Step(tuple(new.index), now, submit_errors, tuple(waiting), {})
+        return Step(tuple(new.index), now, submit_errors, tuple(incomplete), {})
     records, submit_errors = _reduce(batch, not_reduced(state))
-    return Step(tuple(new.index), now, submit_errors, tuple(waiting), records)
+    return Step(tuple(new.index), now, submit_errors, tuple(incomplete), records)
 
 
 def _reduce(batch: Batch, keys: list[str]) -> tuple[dict[str, Record], dict[str, str]]:

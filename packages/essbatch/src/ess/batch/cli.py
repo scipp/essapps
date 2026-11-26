@@ -173,9 +173,9 @@ one arrives (compare rows SOURCE with show). It reduces no failed row again
 (reduce --remaining does). A step that did something writes a line, or with
 --json an object, with "error" why the step raised (null if it did not):
 
-    14:03:05 added 70011 | reducing 70011 | done 70009 | waiting 70013
+    14:03:05 added 70011 | reducing 70011 | done 70009 | incomplete 70013
     {"time": "2026-11-23T14:03:05+01:00", "added": ["70011"], "reducing": ["70011"],
-     "ended": {"70009": "done"}, "failure": {}, "refused": {}, "waiting": ["70013"],
+     "ended": {"70009": "done"}, "failure": {}, "refused": {}, "incomplete": ["70013"],
      "error": null}
 
 ended: the status of each row whose reduction ended; failure, refused: why. A
@@ -681,7 +681,7 @@ def _publish(given: _Context) -> pd.DataFrame:
 
 
 def _offered(given: _Context) -> pd.DataFrame:
-    """The rows of the source of a batch that its batch table lacks, with ``waits``."""
+    """The rows of the source of a batch that its batch table lacks."""
     intake = given.intake()
     return intake.offered(_known(intake.manager, given.args.label))
 
@@ -815,14 +815,14 @@ def follow(
                     first step count too
         failure     why each of those failed or was cancelled, by key
         refused     why each row could not be submitted, by key
-        waiting     the rows of the source that are not complete yet
+        incomplete  the rows of the source that are not complete yet
 
         error       why the step raised, ``None`` if it did not
 
-    A step did something if it added or submitted rows, if a reduction
-    ended, if what is refused or waits changed since ``write_line`` was last called,
-    or if it raised something else than the step before. After the wait,
-    ``write_line`` is given the reductions that ended in it.
+    A step did something if it added or submitted rows, if a reduction ended,
+    if what is refused or incomplete changed since ``write_line`` was last
+    called, or if it raised something else than the step before. After the
+    wait, ``write_line`` is given the reductions that ended in it.
 
     A step may raise anything, as the code of the source may
     (:meth:`.intake.Intake.step`). It is said on stderr as the page says it
@@ -852,7 +852,7 @@ def follow(
         for key, state in batch.state(compare=False).items()
         if state.record is not None and state.record_status is Status.PENDING
     }
-    shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, waiting
+    shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, incomplete
     failed: str | None = None  # what the step before raised, as said
     done = 0
     while steps is None or done < steps:
@@ -877,16 +877,22 @@ def follow(
         if stepped is None:
             added: list[str] = []
             reducing: list[str] = []
-            refused, waiting = shown
+            refused, incomplete = shown
         else:
             added = list(stepped.added)
             reducing = list(stepped.records)
-            refused, waiting = dict(stepped.submit_errors), list(stepped.waiting)
+            refused, incomplete = dict(stepped.submit_errors), list(stepped.incomplete)
             running |= stepped.records
         line = _ended(batch, running)
-        if added or reducing or line['ended'] or (refused, waiting) != shown or fresh:
-            write_line(_line(added, reducing, line, refused, waiting, error))
-            shown = (refused, waiting)
+        if (
+            added
+            or reducing
+            or line['ended']
+            or (refused, incomplete) != shown
+            or fresh
+        ):
+            write_line(_line(added, reducing, line, refused, incomplete, error))
+            shown = (refused, incomplete)
     if running:
         batch.client.wait(list(running.values()))
         write_line(_line([], [], _ended(batch, running), *shown, None))
@@ -897,7 +903,7 @@ def _line(
     reducing: list[str],
     ended: Mapping[str, Mapping[str, str]],
     refused: Mapping[str, str],
-    waiting: list[str],
+    incomplete: list[str],
     error: str | None,
 ) -> dict[str, Any]:
     """A line of :func:`follow`, in its order."""
@@ -906,7 +912,7 @@ def _line(
         'reducing': reducing,
         **ended,
         'refused': refused,
-        'waiting': waiting,
+        'incomplete': incomplete,
         'error': error,
     }
 
@@ -956,7 +962,7 @@ def _line_text(line: Mapping[str, Any]) -> str | None:
             for status in dict.fromkeys(ended.values())
         ),
         ('refused', list(line['refused']), line['refused']),
-        ('waiting', line['waiting'], {}),
+        ('incomplete', line['incomplete'], {}),
     ]
     text = ' | '.join(f'{name} {keys(k, why)}' for name, k, why in parts if k)
     return f'{line["time"][11:19]} {text}' if text else None
@@ -1296,7 +1302,7 @@ _COMMANDS = {
     'offered': _Command(
         _offered,
         description='List the rows that the row source of the batch of LABEL '
-        'makes now and its batch table lacks, with a column waits: whether a '
+        'makes now and its batch table lacks, with a column incomplete: whether a '
         'parameter that the source fills is empty. follow adds a row once it '
         'is complete, unless the batch left it out when made or a person '
         'removed it; take adds any.',

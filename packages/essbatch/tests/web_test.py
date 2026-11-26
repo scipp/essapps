@@ -547,7 +547,7 @@ def test_a_column_that_the_source_fills_has_no_setting_on_the_page(
 
     form = [n['path'][0] for n in loaded['settings']]
     assert form == ['binning', 'thickness', 'offset']
-    assert [c['waits'] for c in loaded['columns']] == [True, True, False]
+    assert [c['from_source'] for c in loaded['columns']] == [True, True, False]
     assert batch.settings['thickness'] == 2.0
     assert 'transmission' not in batch.settings
     assert made.status_code == 422
@@ -1322,7 +1322,7 @@ def test_the_rows_offered_are_those_of_the_source_the_table_lacks(
 
     assert [(r['key'], r['name'], r['mark']) for r in listed['rows']] == [
         ('4', 'ethanol', ''),
-        ('5', 'acetone', 'waits'),
+        ('5', 'acetone', 'incomplete'),
     ]
 
 
@@ -1352,7 +1352,7 @@ def test_a_row_taken_then_removed_is_offered_again_and_follow_does_not_add_it(
     pages.tick()
 
     assert list(rows(following)) == ['1', '2', '5']
-    assert offered(following) == {'3': 'waits', '4': ''}
+    assert offered(following) == {'3': 'incomplete', '4': ''}
 
 
 def test_rows_the_manager_does_not_take_answer_422_and_none_is_added(
@@ -2234,7 +2234,7 @@ def test_the_rows_of_a_source_are_marked_as_a_range_takes_them(
     assert [(r['key'], r['name'], r['mark']) for r in listed['rows']] == [
         ('1', 'water', 'left out'),
         ('2', 'sds', 'taken'),
-        ('3', 'oil', 'waits'),
+        ('3', 'oil', 'incomplete'),
         ('4', 'ethanol', 'taken'),
     ]
     assert [c['name'] for c in listed['columns']] == ['run']
@@ -2247,7 +2247,7 @@ def test_the_rows_of_a_source_are_marked_as_a_range_takes_them(
         ({'first': '3'}, '3 is not a complete row'),
         ({'first': '2', 'last': '1'}, 'the row 2 comes after the row 1'),
     ],
-    ids=['waits', 'reversed'],
+    ids=['incomplete', 'reversed'],
 )
 def test_a_range_that_takes_no_row_of_its_ends_makes_no_batch(
     http: TestClient, manager: BatchManager, ends: dict[str, str], said: str
@@ -2295,7 +2295,7 @@ def test_a_batch_of_the_rows_that_arrive_later_takes_none_now_and_follow_adds_th
     assert [(r['key'], r['mark']) for r in listed] == [
         ('1', 'left out'),
         ('2', 'left out'),
-        ('3', 'waits'),
+        ('3', 'incomplete'),
     ]
     assert empty == []
     assert list(manager.batch(made['label']).frame().index) == ['3', '4']

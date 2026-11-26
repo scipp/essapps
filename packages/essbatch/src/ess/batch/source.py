@@ -13,13 +13,13 @@ their metadata and returns a frame, the form that ``Batch.put`` takes::
     60340   60340  sample A     run:60340   <NA>
 
 The key of each row as index, as text; a column per parameter that it fills,
-each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and
-notes, such as ``run`` and ``name``. :func:`rows_of` is what a source makes
-from the files now. A row is *complete* (:func:`complete`) once it has a value
-in each column that the source fills; until then it *waits*. A batch is made
+each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and notes,
+such as ``run`` and ``name``. :func:`rows_of` is what a source makes from the
+files now. A row is *complete* (:func:`complete`) once it has a value in each
+column that the source fills; until then it is *incomplete*. A batch is made
 from the complete rows, or from a range of them (:class:`Range`), and Follow
-adds the rows that are new and complete (:mod:`~.auto`). A batch never asks
-its source again: how its batch table was made is not part of it.
+adds the rows that are new and complete (:mod:`~.auto`). A batch never asks its
+source again: how its batch table was made is not part of it.
 """
 
 from __future__ import annotations
@@ -112,7 +112,7 @@ def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
 def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     """
     Whether each row of ``given`` has a value in each of ``columns``, such as
-    the columns that a source fills: a row that has not waits. Raises
+    the columns that a source fills: a row that has not is incomplete. Raises
     ``ValueError`` if ``given`` lacks one of ``columns``, as when the code of
     a source no longer fills a column that a batch keeps as a source column.
     """

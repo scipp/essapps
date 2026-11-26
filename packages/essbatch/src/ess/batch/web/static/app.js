@@ -283,7 +283,7 @@ function gridColumns(state) {
     current: () => view.state.columns,
     say: showMessage,
     // A column that the source fills stays a column: its rows wait for their runs.
-    menu: (column) => (column.waits ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
+    menu: (column) => (column.from_source ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
     columns: [named, ...notes, ...cells, statusColumn, ...(state.output.catalogue ? [publishedColumn] : [])],
@@ -295,7 +295,7 @@ function gridColumns(state) {
 // file loaded changes them.
 function showColumns(state) {
   // The options of a pick are read when its editor opens (`current`).
-  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.waits])]);
+  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.from_source])]);
   if (shown === view.columns) return;
   const first = view.columns === '';
   view.columns = shown;
@@ -711,7 +711,7 @@ async function loadSourceRows(name) {
   drawRange();
   const loaded = await markRange(name);
   if (!loaded) return;
-  const complete = loaded.rows.filter((row) => row.mark !== 'waits');
+  const complete = loaded.rows.filter((row) => row.mark !== 'incomplete');
   const option = (row) => h('option', {value: row.key, text: row.name === row.key ? row.key : `${row.name} (${row.key})`});
   elements.first.replaceChildren(
     h('option', {value: '', text: 'the first'}),
@@ -748,9 +748,9 @@ function drawRange(marked = true) {
   box.replaceChildren(sourceTable(sourceRows, (row) => (marked ? row.mark : '')));
   if (!marked) return;
   const n = (mark) => sourceRows.rows.filter((row) => row.mark === mark).length;
-  const waits = n('waits');
-  const waiting = waits ? `; ${count(waits)} ${waits === 1 ? 'waits' : 'wait'} for a run, which Follow adds once filled if the batch follows` : '';
-  $('new-rows').textContent = `The batch gets ${count(n('taken'))}${waiting}.`;
+  const incomplete = n('incomplete');
+  const later = incomplete ? `; ${count(incomplete)} incomplete, which Follow adds once complete if the batch follows` : '';
+  $('new-rows').textContent = `The batch gets ${count(n('taken'))}${later}.`;
   drawFollowChoice();
 }
 
@@ -760,7 +760,7 @@ function drawRange(marked = true) {
 function sourceTable({columns, rows: listed}, status, picked) {
   if (!listed.length) return h('div', {class: 'empty', text: 'No rows.'});
   const boxes = [];
-  const pills = {waits: 'st-incomplete', taken: 'st-done'};
+  const pills = {incomplete: 'st-incomplete', taken: 'st-done'};
   const body = listed.map((row) => {
     const said = status(row);
     const box = picked && h('input', {type: 'checkbox', value: row.key, 'aria-label': row.name});
@@ -818,7 +818,7 @@ async function makeBatch(event) {
 }
 
 // The dialog "Add rows from the runs": the rows of the source that the batch
-// table lacks, those that wait marked. The rows picked are added as the source makes
+// table lacks, those incomplete marked. The rows picked are added as the source makes
 // them now.
 async function openTake() {
   const listed = await request('rows/offered', {kind: 'offered'});
@@ -952,14 +952,14 @@ function renderSubmitErrors(errors) {
 
 // "Add rows from the runs", unless the batch has no source; and while the
 // batch follows, "Stop following" and why the last step failed, if it did,
-// else how many rows wait. A batch that does not follow has no Follow control.
+// else how many rows are incomplete. A batch that does not follow has no Follow control.
 function renderFollow(follow) {
   $('take-open').hidden = follow.source === null;
   $('follow-status').hidden = $('stop-follow').hidden = !follow.on;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
-  const waiting = follow.waiting ? `; ${count(follow.waiting)} of the source wait to be filled` : '';
-  status.textContent = follow.failure ?? `Following, every ${follow.interval} s${waiting}`;
+  const incomplete = follow.incomplete ? `; ${count(follow.incomplete)} of the source incomplete` : '';
+  status.textContent = follow.failure ?? `Following, every ${follow.interval} s${incomplete}`;
   status.title = status.textContent;
   rows.empty.textContent = follow.on ? 'No rows yet. Follow adds the rows of the runs that arrive.' : NO_ROWS;
 }

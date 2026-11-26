@@ -88,7 +88,7 @@ class Column(BaseModel):
     """
     A column of a table; ``default`` is the text of the value that an empty
     cell takes: the setting of the batch, else the default of the parameter.
-    ``waits`` says that the source of the batch fills it: an empty cell
+    ``from_source`` says that the source of the batch fills it: an empty cell
     there means that the row waits for its file, and "Make this a setting"
     is not offered.
     """
@@ -97,7 +97,7 @@ class Column(BaseModel):
     title: str
     editor: Editor | None = None
     default: str = ''
-    waits: bool = False
+    from_source: bool = False
 
 
 class Cell(BaseModel):
@@ -184,15 +184,15 @@ class Following(BaseModel):
     ``source`` names the source that the batch was made from, ``None`` if it
     was made without one, so that it offers no rows of a source.
     While this batch follows, ``failure`` says why the last step raised, and
-    ``waiting`` counts the rows of the source that the last step did not add
-    since they are not filled yet.
+    ``incomplete`` counts the rows of the source that the last step did not add
+    since they are not complete yet.
     """
 
     on: bool
     source: str | None
     interval: float
     failure: str | None
-    waiting: int = 0
+    incomplete: int = 0
 
 
 class HeaderShown(BaseModel):
@@ -382,14 +382,14 @@ class SourceRow(BaseModel):
     """
     One of the rows of a source: its key, its ``name`` (as
     :class:`Row` has it), the text of each note, and its ``mark``:
-    ``waits`` if a cell that the source fills is empty; for a range of a new
+    ``incomplete`` if a cell that the source fills is empty; for a range of a new
     batch, ``taken`` or ``left out``; else empty.
     """
 
     key: str
     name: str
     cells: dict[str, str]
-    mark: Literal['waits', 'taken', 'left out', '']
+    mark: Literal['incomplete', 'taken', 'left out', '']
 
 
 class SourceRows(BaseModel):

@@ -201,7 +201,7 @@ class Intake:
     ) -> pd.DataFrame:
         """
         The rows that the source registered as ``source`` makes now, with a
-        column ``waits``, whether the row waits, and a column ``taken``,
+        column ``incomplete``, whether the row is incomplete, and a column ``taken``,
         whether :meth:`create` takes it with ``choose``, such as
         ``Range(first='60339')`` (:class:`~.source.Range`); every row that
         does not wait if not given. Raises ``ValueError`` if no source is
@@ -209,10 +209,10 @@ class Intake:
         """
         found = self._source(source)
         given = rows_of(self.manager.client, found)
-        waits = ~complete(given, found.source_columns)
-        arrived = given[~waits]
+        incomplete = ~complete(given, found.source_columns)
+        arrived = given[~incomplete]
         taken = arrived.index if choose is None else choose(arrived).index
-        return given.assign(waits=waits, taken=given.index.isin(taken))
+        return given.assign(incomplete=incomplete, taken=given.index.isin(taken))
 
     def create(
         self,
@@ -366,8 +366,8 @@ class Intake:
         """
         The rows that the source of the batch of ``label`` makes now and its
         batch table lacks, with the columns of the source and a boolean column
-        ``waits``, true if a cell of :attr:`~.reduction.Batch.source_columns` is
-        empty. A column of the source named ``waits`` is replaced.
+        ``incomplete``, true if a cell of :attr:`~.reduction.Batch.source_columns` is
+        empty. A column of the source named ``incomplete`` is replaced.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, if its source is not registered, or
@@ -379,12 +379,14 @@ class Intake:
         batch = self.manager.batch(label)
         try:
             given = rows_of(self.manager.client, source)
-            waits = ~complete(given, batch.source_columns)
+            incomplete = ~complete(given, batch.source_columns)
         except ValueError as error:  # as step says it
             raise ValueError(
                 f'the source {made.source}: {error_text(error)}'
             ) from error
-        return given.assign(waits=waits)[~given.index.isin(batch.frame().index)]
+        return given.assign(incomplete=incomplete)[
+            ~given.index.isin(batch.frame().index)
+        ]
 
     def take(self, label: str, keys: Iterable[str]) -> None:
         """

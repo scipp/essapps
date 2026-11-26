@@ -93,7 +93,7 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_them(
     assert len(page.pages.runs.shown().rows) == 3
     # oil waits for its transmission run
     assert statuses(after) == {'water': 'running'}
-    assert (after.follow.failure, after.follow.waiting) == (None, 1)
+    assert (after.follow.failure, after.follow.incomplete) == (None, 1)
     gate.open()
     assert statuses(done(page, client)) == {'water': 'done'}
 
@@ -109,7 +109,7 @@ def test_a_row_that_waits_is_added_and_reduced_once_it_is_complete(
     page.pages.tick()
 
     shown = done(page, client)
-    assert (statuses(shown), shown.follow.waiting) == ({'oil': 'done'}, 0)
+    assert (statuses(shown), shown.follow.incomplete) == ({'oil': 'done'}, 0)
 
 
 def revisions(page: Page) -> tuple[int, int]:

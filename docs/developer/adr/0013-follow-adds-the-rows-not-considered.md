@@ -35,7 +35,7 @@ def step(batch, source, considered):
     new = given[is_new & is_ready].reindex(columns=table.columns)
     batch.put(pd.concat([table, new]))                     # ADR 0012: the table is changed with `put`
     considered |= set(new.index) | (set(given.index) & set(table.index))   # kept, after the table is
-    waiting = given.index[is_new & ~is_ready]              # shown on the page, not kept
+    incomplete = given.index[is_new & ~is_ready]           # shown on the page, not kept
     batch.reduce(not_reduced(batch.state()))              # ready, and without a result
 ```
 
@@ -94,7 +94,7 @@ table = arrived if choose is None else choose(arrived)
 considered = arrived.index                       # the rows taken and the rows left out
 ```
 
-- A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is complete, if the batch follows.
+- A row that is incomplete when the batch is made is neither taken nor considered. It stays incomplete, and Follow adds it once it is complete, if the batch follows.
 - A person picks a range of `arrived`: `Range(first, last, later)`, a value that `create` calls as `choose` and reads, each end open if not given, or no row now with `later`. `parameter_columns` adds an empty column for each parameter named, such as the thickness.
 - In code, `choose` may be any function that gives rows of `arrived`, with any columns, such as `lambda given: given[given.run >= 60339]`; `create` refuses a key that `arrived` lacks. Without `choose`, every complete row is taken as the source gives it.
 - A batch made from a source takes no `rows`: its rows come from the one listing, so no file listed in between is considered without being seen.
@@ -103,7 +103,7 @@ No scope is kept: "from run 60339 on" is the choice of rows at making, and what 
 
 ### A person adds rows of the source
 
-"Add rows from the runs" shows the rows that the source gives and the table lacks: the rows that wait, the rows left out at making, the rows a person removed, and, in a batch that does not follow, the rows complete after it was made or after it stopped. A person sees what they take, so the rows taken may be incomplete or waiting. The person picks rows, and they are put into the table as the source gives them now. This is also how a removed row is brought back.
+"Add rows from the runs" shows the rows that the source gives and the table lacks: the incomplete rows, the rows left out at making, the rows a person removed, and, in a batch that does not follow, the rows complete after it was made or after it stopped. A person sees what they take, so the rows taken may be incomplete or waiting. The person picks rows, and they are put into the table as the source gives them now. This is also how a removed row is brought back.
 
 ### What a step reduces
 
@@ -161,7 +161,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 | | What happens | Table | `considered` |
 |---|---|---|---|
 | 1 | the batch is made; runs 60337 to 60340 are listed | 60339, 60340 | 60337, 60338, 60339, 60340 |
-| 2 | sample run 60341 is listed; its transmission run is not | unchanged; 1 row waits | unchanged |
+| 2 | sample run 60341 is listed; its transmission run is not | unchanged; 1 row incomplete | unchanged |
 | 3 | transmission run 60342 is listed | 60341 is added and reduced | + 60341 |
 | 4 | a person removes row 60340 | 60339, 60341 | unchanged, so 60340 is not added again |
 | 5 | the application is restarted; sample run 60343 arrived meanwhile, with its transmission run | 60343 is added at the first step | + 60343 |
@@ -173,7 +173,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 - **Marks in the table**: a removed row kept with a mark, and who wrote each cell. The first version of ADR 0012. The table then carries what only a step needs.
 - **One mark, the highest run number considered.** It misses a file that is listed late, and it cannot let one row wait while later rows are added.
 - **A mark over files.** A source makes a row from several files: a transmission run is a new file and no new row, and it completes a row whose own file is old. The step compares rows either way, so the keys of rows are what it remembers.
-- **Add a row at once and fill its empty cells later.** It needs no memory of what waits. But it fills a cell again that a person emptied, and an empty cell of a parameter that takes `None` is a value (ADR 0012), so "not listed yet" and "none" cannot be told apart.
+- **Add a row at once and fill its empty cells later.** It needs no memory of what is incomplete. But it fills a cell again that a person emptied, and an empty cell of a parameter that takes `None` is a value (ADR 0012), so "not listed yet" and "none" cannot be told apart.
 - **A step changes cells that have a value**, as today, so that a transmission run measured again reaches the earlier rows and they are reduced again. It needs to know who wrote each cell, and results change with nobody asking. A person can do it for the rows they choose.
 - **A scope kept in the header** (ADR 0011): a slice of an index that a source gives each row. With `considered`, the start of the slice is the choice of rows at making, and it has no end: the next batch is made from the source and follows in its place. The index, its type, and the conversion of the ends go.
 - **Follow as a switch on the page of each batch**, in place of Follow in "New batch". The next batch would be two actions: make it, then turn Follow on. And a person who turns it on for an earlier batch may not expect that it takes the rows that another batch took since.
@@ -183,7 +183,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 
 - `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `RowSource.source_columns` stays, with a second use: it says when a row is complete.
 - The rule of a step is "ready and without a record". `RowState.changed_by_hand`, the columns `at` of `Automatic`, and the exception for cells set by hand go.
-- A row that only waits is not in the table. The page says how many rows wait, and a person can add them.
+- An incomplete row is not in the table. The page says how many rows are incomplete, and a person can add them.
 - A transmission run measured again reaches no earlier row, and a correction of a run changes no row that the table has.
 - A stop by mistake is undone with `intake.follow(label)` or `essbatch follow -l LABEL`, not on the page. On the page, a person adds the later rows with "Add rows from the runs", or makes a batch from the source, with Follow, that starts at the first row the stopped batch lacks.
 - A person who wants to try settings on a few rows first makes a batch without Follow, then the batch that follows with "Start with the settings of" the first. The rows tried are reduced again in the second batch.
@@ -195,5 +195,5 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 
 ## Open
 
-- **A row that waits for ever.** The page could say what each waiting row lacks. Not needed for the decision.
+- **A row that waits for ever.** The page could say what each incomplete row lacks. Not needed for the decision.
 - **Several workflows on one batch** (#222): a workflow that fills cells is the second thing besides a person that would write to the table. This ADR does not cover it.

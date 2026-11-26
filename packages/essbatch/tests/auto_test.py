@@ -59,7 +59,7 @@ class Stepping:
     """
     Steps of one batch on ``source``, each given the keys that the one before
     considered, as the manager keeps them; what the last step refused and
-    which rows wait.
+    which rows are incomplete.
     """
 
     def __init__(
@@ -68,13 +68,13 @@ class Stepping:
         self.batch, self.source = batch, source
         self.considered = frozenset(considered)
         self.submit_errors: Mapping[str, str] = {}
-        self.waiting: tuple[str, ...] = ()
+        self.incomplete: tuple[str, ...] = ()
 
     def step(self) -> Mapping[str, Record]:
         """A step; the records of the rows it reduced, by key."""
         done = step(self.batch, self.source, self.considered)
         self.considered = done.considered
-        self.submit_errors, self.waiting = done.submit_errors, done.waiting
+        self.submit_errors, self.incomplete = done.submit_errors, done.incomplete
         return done.records
 
 
@@ -154,10 +154,10 @@ def test_a_step_adds_the_rows_new_and_complete_with_the_columns_of_the_table() -
         d={'sample': 's', 'transmission': 't', 'note': 4},
     )
 
-    new, waiting = added(held, given, ('sample', 'transmission'), {'d'})
+    new, incomplete = added(held, given, ('sample', 'transmission'), {'d'})
 
     assert new.to_dict('index') == {'b': {'sample': 's', 'transmission': 't'}}
-    assert list(waiting) == ['c']
+    assert list(incomplete) == ['c']
 
 
 def test_a_row_waits_until_it_is_complete_and_is_not_in_the_table(
@@ -167,7 +167,7 @@ def test_a_row_waits_until_it_is_complete_and_is_not_in_the_table(
     fake.measure(1, 1.0, role='sample', sample='1')
 
     assert loop.step() == {}
-    assert loop.waiting == ('1',)
+    assert loop.incomplete == ('1',)
     assert list(loop.batch.frame().index) == []
 
 
@@ -602,7 +602,7 @@ def test_a_row_of_a_sample_measured_before_its_transmission_waits_then_is_added(
 
     assert isinstance(waits, Step)
     assert isinstance(adds, Step)
-    assert (waits.waiting, adds.waiting) == (('5',), ())
+    assert (waits.incomplete, adds.incomplete) == (('5',), ())
     assert list(following.manager.batch('a').frame().index) == ['3', '4', '5']
     assert '5' in {r.member for r in client.records(label='a')}
     assert considered(definitions) == {'1', '2', '3', '4', '5'}

@@ -85,8 +85,8 @@ def test_take_puts_offered_rows_into_the_batch_and_reduces_nothing(
     assert main([*act, 'offered', '-l', label, '-o', str(offered)]) == 0
     assert main([*act, 'take', '-l', label, '1', '-o', str(taken)]) == 0
 
-    assert read_text(offered)[['key', 'waits']].to_dict('records') == [
-        {'key': '1', 'waits': 'False'}
+    assert read_text(offered)[['key', 'incomplete']].to_dict('records') == [
+        {'key': '1', 'incomplete': 'False'}
     ]
     assert read_text(taken)[['key', 'status']].to_dict('records') == [
         {'key': '1', 'status': 'ready'}
@@ -160,7 +160,7 @@ def test_follow_writes_an_object_per_line_with_json(
         'ended',
         'failure',
         'refused',
-        'waiting',
+        'incomplete',
         'error',
     }
     assert [line['error'] for line in lines] == [None] * len(lines)

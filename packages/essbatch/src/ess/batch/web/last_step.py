@@ -66,14 +66,14 @@ class LastStep:
         if self._intake.following != label:
             return None
         step = self._step(label)
-        shown = None if step is None else (len(step.waiting), step.submit_errors)
+        shown = None if step is None else (len(step.incomplete), step.submit_errors)
         return self.failure, shown
 
     def shown(self, label: str) -> Following:
         """
         Follow, as the page of the batch of ``label`` shows it: whether the
         batch follows, and while it does, what the last step raised and how
-        many rows wait.
+        many rows are incomplete.
         """
         on = self._intake.following == label
         step = self._step(label)
@@ -82,7 +82,7 @@ class LastStep:
             source=self._intake.source(label),
             interval=self._interval,
             failure=self.failure if on else None,
-            waiting=0 if step is None else len(step.waiting),
+            incomplete=0 if step is None else len(step.incomplete),
         )
 
     def unsubmitted(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:

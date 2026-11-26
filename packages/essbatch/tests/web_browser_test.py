@@ -1692,7 +1692,9 @@ def test_rows_picked_in_the_dialog_are_added_from_the_runs(
     sample(5, 'acetone', partner=False)
 
     page.click('#take-open')
-    page.wait_for_selector('#take-rows tr:has-text("acetone") .pill:text-is("waits")')
+    page.wait_for_selector(
+        '#take-rows tr:has-text("acetone") .pill:text-is("incomplete")'
+    )
     page.check('#take-rows input[aria-label=ethanol]')
     page.click('#take [value=take]')
 

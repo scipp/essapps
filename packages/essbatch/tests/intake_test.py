@@ -64,7 +64,7 @@ def test_a_batch_made_from_a_source_takes_and_considers_its_complete_rows(
 
     assert list(made.manager.batch('a').frame().index) == ['3', '4', 'mine']
     assert made.source('a') == 'pairs'
-    assert kept.considered == {'1', '2', '3', '4'}  # not 5, which waits
+    assert kept.considered == {'1', '2', '3', '4'}  # not 5, which is incomplete
 
 
 def test_a_batch_made_from_a_source_keeps_its_fills_when_read_again(
@@ -149,7 +149,7 @@ def test_a_range_takes_the_complete_rows_between_its_ends_and_considers_all(
 
     assert list(batch.frame().index) == taken
     considered = SOURCE.load(definitions, batch.label).considered
-    assert considered == {'1', '2', '4'}  # not 3, which waits
+    assert considered == {'1', '2', '4'}  # not 3, which is incomplete
 
 
 @pytest.mark.parametrize(
@@ -158,7 +158,7 @@ def test_a_range_takes_the_complete_rows_between_its_ends_and_considers_all(
         (Range(first='3'), '3 is not a complete row'),
         (Range('2', '1'), 'the row 2 comes after the row 1'),
     ],
-    ids=['waits', 'reversed'],
+    ids=['incomplete', 'reversed'],
 )
 def test_a_range_that_takes_no_row_of_its_ends_is_refused_and_nothing_is_kept(
     four: Intake, definitions: FolderDefinitions, chosen: Range, said: str
@@ -261,23 +261,23 @@ def test_the_rows_offered_are_those_of_the_source_that_the_table_lacks(
 
     offered = made.offered('a')
 
-    assert offered['waits'].to_dict() == {
+    assert offered['incomplete'].to_dict() == {
         '1': False,
         '2': False,
         '4': False,
         '5': True,
     }
-    assert list(offered.columns) == [*made.rows_of('pairs').columns, 'waits']
+    assert list(offered.columns) == [*made.rows_of('pairs').columns, 'incomplete']
 
 
-def test_a_row_of_the_source_that_waits_is_offered_as_waiting(
+def test_an_incomplete_row_of_the_source_is_offered_as_incomplete(
     intake: Intake, sample: Measure
 ) -> None:
     sample(1, 'water')
     intake.create('plain', title='A', source='pairs', label='a')
     sample(2, 'oil', partner=False)
 
-    assert intake.offered('a')['waits'].to_dict() == {'2': True}
+    assert intake.offered('a')['incomplete'].to_dict() == {'2': True}
 
 
 def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
@@ -335,7 +335,7 @@ def test_a_row_added_after_make_column_takes_the_setting(
     assert batch.state()['1'].status == 'done'
 
 
-def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
+def test_an_incomplete_row_taken_or_stepped_stays_incomplete_whatever_the_settings_kept(
     intake: Intake,
     client: Client,
     sample: Measure,
@@ -599,7 +599,7 @@ def test_a_stopped_batch_gets_no_rows_at_a_step(
     intake.step()
 
     assert list(batch.frame().index) == ['1']
-    assert intake.offered('a')['waits'].to_dict() == {'2': False}
+    assert intake.offered('a')['incomplete'].to_dict() == {'2': False}
 
 
 def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_complete_since(

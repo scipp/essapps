@@ -173,7 +173,7 @@ batch = intake.create('loki-iofq', title='Afternoon', source='sample-runs',
 `intake.create` lists the source once and gives `choose` the rows that are complete; a `Range` picks those from 60339 on. In code, `choose` may be any function that picks rows and adds columns.
 On disk: `header.json`, `settings.json`, `rows.json` with rows 60339 and 60340, and `source.json` with `considered` = 60337 to 60340 and `"follows": true`.
 Rows 60337 and 60338 are considered and not in the batch table: they were left out when the batch was made, so Follow never adds them.
-A row that waits when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor considered: Follow adds it once it is complete.
+A row that is incomplete when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor considered: Follow adds it once it is complete.
 
 **2. A person edits a cell and reduces.**
 
@@ -205,14 +205,14 @@ A row added later, by a step of Follow, by `take` or by hand, takes 1.5 until it
 
 | | What happens | Batch table | `considered` |
 |---|---|---|---|
-| a | sample run 60341 is listed; its transmission run is not | unchanged; `done.waiting == ('60341',)` | unchanged |
+| a | sample run 60341 is listed; its transmission run is not | unchanged; `done.incomplete == ('60341',)` | unchanged |
 | b | transmission run 60342 is listed | 60341 is added and reduced | + 60341 |
 | c | a person removes row 60340 | 60339, 60341 | unchanged, so 60340 is not added again |
 | d | the transmission of sample 60339 is measured again | unchanged: row 60339 keeps its cell | unchanged |
 
 ```python
 done = intake.step()         # a Step, or None if no batch follows
-done.waiting                 # the keys of the rows that wait
+done.incomplete              # the keys of the incomplete rows
 done.submit_errors           # why rows of this step were refused, by key
 done.records                 # the records of the rows reduced, by key
 ```
@@ -514,7 +514,7 @@ batch = intake.create('loki-iofq', title='Afternoon', source='sample-runs',
                       choose=Range(first='60339'), parameter_columns=['thickness'])
 intake.rows_of('sample-runs')            # what the source makes now
 intake.marked('sample-runs', Range(first='60339'))
-                                         # rows_of, with columns waits and taken
+                                         # rows_of, with columns incomplete and taken
 intake.create(..., choose=Range(later=True), follow=True)
                                          # no row now: Follow adds the rows that arrive later
 intake.source(batch.label)               # 'sample-runs'; None for a batch made without a source: it cannot follow
@@ -532,7 +532,7 @@ batch = manager.create(spec, rows=table, source_columns=source.source_columns, .
 # then source.json: the source, considered, and whether it follows
 ```
 
-`Range` refuses an end that is not a key of the rows that arrived (a row that waits is not one), a first row after the last, and an end with `later=True`.
+`Range` refuses an end that is not a key of the rows that arrived (an incomplete row is not one), a first row after the last, and an end with `later=True`.
 `intake.create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the complete rows it leaves out are considered.
 It refuses a source that is not registered, a source that fills a parameter that the spec lacks (`fits`), and a key from `choose` that is not in `arrived`, and refuses as `manager.create` does.
 It checks the label, the title and the spec first, with `manager.check`, then the source and whether the spec fits it, so these refusals come before the source is listed.
@@ -561,7 +561,7 @@ intake.stop()               # none follows
 intake.follow(label)        # this batch follows; the batch that followed stops
 done = intake.step()        # a Step, or None if none follows
 done.submit_errors          # why rows were refused, by key; they do not hold back the others
-intake.offered(label)       # the rows of the source that the batch table lacks, with a boolean column `waits`
+intake.offered(label)       # the rows of the source that the batch table lacks, with a boolean column `incomplete`
 intake.take(label, keys)    # put these rows as the source gives them now, also considered ones; then consider them
 ```
 
@@ -570,7 +570,7 @@ A step (`auto.step(batch, source, considered)`), as code:
 ```python
 table = batch.frame()
 given = rows_of(batch.client, source)                  # every row the source makes now
-new, waiting = added(table, given, batch.source_columns, considered)
+new, incomplete = added(table, given, batch.source_columns, considered)
 batch.put(pd.concat([table, new]))                     # only the columns of the batch table
 considered |= set(new.index) | (set(given.index) & set(table.index))
 candidates = not_reduced(batch.state(compare=False))   # ready as given, no result
@@ -600,7 +600,7 @@ sequenceDiagram
         batch->>definitions: write rows.json
     end
     step->>batch: reduce(rows ready and without a result)
-    step-->>intake: Step: added, considered, submit_errors, waiting, records
+    step-->>intake: Step: added, considered, submit_errors, incomplete, records
     intake->>definitions: write source.json: considered, if it changed
     intake-->>timer: Step
 ```

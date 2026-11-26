@@ -120,7 +120,7 @@ the form holds; then :meth:`Page.after_step` shows what the step changed, if
 the page is open; a page made later shows the batch as it is then. The
 page of the batch that follows says what the last step raised, why rows were
 not reduced, at each such row, whose status stays that of its state, and how
-many rows of the source wait to be filled; the next step runs all the same. A
+many rows of the source are incomplete; the next step runs all the same. A
 row with a result is left to a person, also one that is outdated. An action
 submits only what a person asks to reduce, and the next step reduces what the
 rule gives after it. Apply forgets why Follow could not reduce rows, since its
@@ -447,7 +447,7 @@ class Page:
                     name=c,
                     title=titles[c],
                     editor=forms.editor(self._cells.fields[c]),
-                    waits=c in batch.source_columns,
+                    from_source=c in batch.source_columns,
                     # as a cell that holds it shows it
                     default=self._cell_text(c, cell_of(empty[c])) if c in empty else '',
                 )
@@ -594,7 +594,7 @@ class Page:
     @_locked
     def offered(self) -> SourceRows:
         """
-        The rows of the source that the batch table lacks, those that wait marked
+        The rows of the source that the batch table lacks, those incomplete marked
         (:meth:`~ess.batch.Intake.offered`), for :meth:`take`;
         what the source refuses is a :class:`~.errors.Rejected`
         (:func:`~.errors.reject_on_error`).
