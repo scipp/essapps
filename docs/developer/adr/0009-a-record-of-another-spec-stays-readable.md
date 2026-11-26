@@ -42,11 +42,11 @@ A submission, abridged:
 ```
 
 A record is *of the bound spec* if the workspace has a binding with the same name, version, and digest.
-Otherwise it is *of another spec*: the version was bumped, the models changed, or no binding is given.
+Otherwise it is *of an unbound spec*: the version was bumped, the models changed, or no binding is given.
 `client.bound(records)` tells an application which records are of the bound spec.
-A record of another spec stays in the history, and is readable without the classes that made it:
+A record of an unbound spec stays in the history, and is readable without the classes that made it:
 
-| Of a record of another spec | What a client gets |
+| Of a record of an unbound spec | What a client gets |
 |---|---|
 | its request | name and version, and the params as the stored dict, with files and references |
 | an output | the stored scipp data (`Store.read`): a `DataArray` as it is, a group as a `DataGroup` by field name, a number as `DataGroup({'value': 0.5})`, a list as a `DataGroup` with keys `'0'`, `'1'`, ... |
@@ -65,7 +65,7 @@ A technique package's tests compare each spec's digest with one kept in the pack
 
 ## Consequences
 
-- A result of another spec cannot feed a new request. A person who needs it as an input reduces again, or keeps the old spec installed.
-- An edit to a title or a description changes no digest, so no record becomes one of another spec.
+- A result of an unbound spec cannot feed a new request. A person who needs it as an input reduces again, or keeps the old spec installed.
+- An edit to a title or a description changes no digest, so no record becomes one of an unbound spec.
 - What the digest covers is part of the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
-- A batch shows a row whose result is of another spec as outdated (`RowState.spec_changed`), and the result stays the row's result, readable as stored, so that the results of two versions of a spec can be compared ([batch.md](../../../packages/essbatch/docs/batch.md#the-state-of-a-row-and-the-rules-over-it)).
+- A batch shows a row whose result is of an unbound spec as outdated (`RowState.spec_changed`), and the result stays the row's result, readable as stored, so that the results of two versions of a spec can be compared ([batch.md](../../../packages/essbatch/docs/batch.md#the-state-of-a-row-and-the-rules-over-it)).

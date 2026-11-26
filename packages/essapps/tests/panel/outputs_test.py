@@ -774,7 +774,7 @@ def block(params: CubeParams) -> Block:
 def stored_cube(tmp_path: Path) -> Iterator[tuple[Client, Record]]:
     """
     A client of a folder with a persisted record of ``CUBE``, opened again with
-    other outputs bound under the same version: a record of another spec.
+    other outputs bound under the same version: a record of an unbound spec.
     """
     (tmp_path / 'files.csv').write_text('file,run\n')
     with open_folder(tmp_path, [function_binding(CUBE, cube)]) as client:
@@ -784,7 +784,7 @@ def stored_cube(tmp_path: Path) -> Iterator[tuple[Client, Record]]:
         yield client, record
 
 
-def test_a_record_of_another_spec_lists_its_outputs_by_name(
+def test_a_record_of_an_unbound_spec_lists_its_outputs_by_name(
     stored_cube: tuple[Client, Record],
 ) -> None:
     client, record = stored_cube
@@ -793,7 +793,7 @@ def test_a_record_of_another_spec_lists_its_outputs_by_name(
     listing = Listing(client)
     outputs = Outputs(client, listing, plots=plots)
 
-    spec = '**Spec** `cube/v1`, another spec than the one bound'
+    spec = '**Spec** `cube/v1`, an unbound spec'
     assert spec in describe(client, listing, record)
     assert rows(outputs) == [
         ('cube', f'cube ({at(record)})', 'completed'),
@@ -804,7 +804,7 @@ def test_a_record_of_another_spec_lists_its_outputs_by_name(
     outputs.panel()  # builds, with the warnings of Panel as errors
 
 
-def test_a_group_of_a_record_of_another_spec_is_drawn_from_the_stored_data(
+def test_a_group_of_a_record_of_an_unbound_spec_is_drawn_from_the_stored_data(
     stored_cube: tuple[Client, Record],
 ) -> None:
     client, record = stored_cube
@@ -823,7 +823,7 @@ def test_a_group_of_a_record_of_another_spec_is_drawn_from_the_stored_data(
     assert low == position(time=3)
 
 
-def test_an_array_of_a_record_of_another_spec_is_drawn_from_the_stored_data(
+def test_an_array_of_a_record_of_an_unbound_spec_is_drawn_from_the_stored_data(
     stored_cube: tuple[Client, Record],
 ) -> None:
     client, record = stored_cube

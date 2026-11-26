@@ -1,6 +1,6 @@
 # ESS data-reduction framework
 
-**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). A record of another spec than the one bound reads as stored scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)). A file is identified by its catalogue identifier, or else by its path ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
+**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). A record of an unbound spec reads as stored scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)). A file is identified by its catalogue identifier, or else by its path ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
 
 This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
 The details live one level down:
@@ -130,7 +130,7 @@ for run in client.files.watch(Selector(scan='17')): ...   # existing ones first,
 It reads a value back by the type that the spec declares for the output, or as stored, in scipp's types, without one.
 A record names its spec by name, version, and digest, the digest of the spec's models, which the history logs.
 An output of a record of the bound spec, one the workspace runs with the same three, is read by its declared type.
-An output of a record of another spec, such as an older version or the same version with changed models, is read as stored, an array as it is and anything else as a `DataGroup`, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
+An output of a record of an unbound spec, such as an older version or the same version with changed models, is read as stored, an array as it is and anything else as a `DataGroup`, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 **Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as the cells of a notebook, the callbacks of an application's screen, or the loop of automatic reduction.

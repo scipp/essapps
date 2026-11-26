@@ -45,9 +45,9 @@ record is cancelled at once, and its outputs are dropped when it returns.
 
 A record names its spec by name, version, and digest
 (:attr:`ess.spec.WorkflowSpec.digest`). It is *of the bound spec* if the
-workspace has a binding of the same three, and otherwise *of another spec*:
+workspace has a binding of the same three, and otherwise *of an unbound spec*:
 the version was bumped, the models changed, or no binding is given. A record of
-another spec stays in history, and a client reads its persisted outputs as
+an unbound spec stays in history, and a client reads its persisted outputs as
 stored, in scipp's types, without the classes that made them. A request may not
 reference them, since their types cannot be checked
 (``docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md``).
@@ -162,7 +162,7 @@ class WorkspaceProtocol(Protocol):
             file that the file source cannot read (it raised ``OSError``), a
             reference at a field that the spec does not mark ``Referenced[...]``, a
             reference that may not be read, to an accumulator, to an output of a
-            record of another spec than the one bound, whose type cannot be checked,
+            record of an unbound spec, whose type cannot be checked,
             or one whose data do not fit its field; or if ``persist`` names an
             output the spec lacks, or the workspace has no store. A reason's
             ``entry`` is the request's index in
@@ -306,7 +306,7 @@ class WorkspaceProtocol(Protocol):
         is read from the store.
 
         A value is the one the workflow returned, not a copy, unless ``select`` is
-        given: the caller must not change it. An output of a record of another spec
+        given: the caller must not change it. An output of a record of an unbound spec
         (see :meth:`bound`) is read as stored (see :meth:`Store.read`): a scipp
         array as it is, and any other value as a ``scipp.DataGroup``, such as
         ``DataGroup({'value': 0.5})`` of a number.
@@ -346,7 +346,7 @@ class WorkspaceProtocol(Protocol):
     def describe(self, record_id: str, name: str) -> dict[str, Any]:
         """
         What an output is, without its data. A group gives its fields by name, any
-        other output gives ``{name: info}``. An output of a record of another spec
+        other output gives ``{name: info}``. An output of a record of an unbound spec
         is read as stored, so any output but an array gives the keys of its
         ``DataGroup``, such as ``{'value': 0.5}`` of a number, or ``{'0': ...,
         '1': ...}`` of a list. An array of at least one dimension is an
@@ -370,9 +370,9 @@ class WorkspaceProtocol(Protocol):
         """
         The outputs of each record that may be read now, in declared order: that
         :meth:`outputs` gives once the record has completed, and that a request
-        may reference, but for an output of a record of another spec than the one
-        bound (see :meth:`bound`), which :meth:`submit` refuses. Waits for nothing
-        and reads no value.
+        may reference, but for an output of a record of an unbound spec (see
+        :meth:`bound`), which :meth:`submit` refuses. Waits for nothing and reads
+        no value.
         """
         ...
 
@@ -594,7 +594,7 @@ class Store(Protocol):
         ``tp`` is the type that the spec declares for the output, by which a
         store whose format holds no types makes the value. ``None`` reads the
         value as stored, in scipp's types. The workspace reads so an output of
-        a record of another spec than the one bound, whose classes it lacks.
+        a record of an unbound spec, whose classes it lacks.
         Every store gives this form of a value as stored::
 
             as the workflow returned it          as stored

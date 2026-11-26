@@ -43,7 +43,7 @@ What only `submit` refuses, and how a batch row meets it:
 | a reference to a record that failed or was cancelled after the state was read | the record finished between `state` and `reduce`; the next step shows the row `incomplete` |
 | a reference to a record that the workspace does not know | a cell names a record of another proposal or one made up |
 | a reference to an accumulator | a cell references an accumulator in place of the record of its freeze |
-| a reference to an output of a record of another spec than the one bound | the first batch's records are of a spec version the workspace no longer binds |
+| a reference to an output of a record of an unbound spec | the first batch's records are of a spec version the workspace no longer binds |
 | a reference whose data do not fit the field | a cell references the wrong output |
 | a row still running | another client submitted the row between `state` and `reduce` |
 | `persist` names an output the spec lacks, or the workspace has no store | the batch is made with such a `persist`; the reason names no row |

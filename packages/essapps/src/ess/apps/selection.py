@@ -27,7 +27,7 @@ def check_select(
     Refuse a selection unless it names outputs, each declared by ``spec`` as
     an array or as a group with an array field. A selection names the
     dimensions of the outputs it reads, so it reads only outputs named.
-    ``spec`` is ``None`` for a record of another spec, whose outputs read as
+    ``spec`` is ``None`` for a record of an unbound spec, whose outputs read as
     stored are checked by slicing.
     """
     if names is None:

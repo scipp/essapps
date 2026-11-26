@@ -33,7 +33,7 @@ class Listing:
     ``specs`` holds the spec of each record of the bound spec
     (:meth:`~ess.apps.Client.bound`) by the record's id, ``status`` the status
     of each record, and ``readable`` the names of its outputs that may be read
-    (:meth:`~ess.apps.Client.readable`). A record of another spec has no
+    (:meth:`~ess.apps.Client.readable`). A record of an unbound spec has no
     entry in ``specs``: it is labelled by its spec's name and version, its
     outputs by their names, and none of them is offered to reference.
 
@@ -101,7 +101,7 @@ class Listing:
     def title(self, record: Record) -> str:
         """
         The title of a record's spec; its name and version, ``centre/v1``, if
-        the record is of another spec.
+        the record is of an unbound spec.
         """
         spec = self.specs.get(record.id)
         return str(record.spec) if spec is None else spec.title
@@ -109,7 +109,7 @@ class Listing:
     def type_name(self, record: Record, name: str) -> str:
         """
         The name of the type of an output, without ``| None``; the output's
-        name if its record is of another spec.
+        name if its record is of an unbound spec.
         """
         if (spec := self.specs.get(record.id)) is None:
             return name
@@ -119,8 +119,8 @@ class Listing:
     def is_group(self, record: Record, name: str) -> bool:
         """
         Whether an output of a record of the bound spec is a group, which
-        ``describe`` gives by field. Raises ``KeyError`` for a record of another
-        spec: only its stored value says whether it is a ``DataGroup``.
+        ``describe`` gives by field. Raises ``KeyError`` for a record of an
+        unbound spec: only its stored value says whether it is a ``DataGroup``.
         """
         info = self.specs[record.id].outputs.model_fields[name]
         return field_types.is_group(field_types.value_type(info.annotation))

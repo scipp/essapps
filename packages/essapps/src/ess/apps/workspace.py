@@ -61,18 +61,18 @@ A request waits until every record it references has completed, the record
 of a freeze until the accumulator has reached its state, and an accumulator's
 steps as described below. This is the only scheduling there is.
 
-Records of another spec
------------------------
+Records of an unbound spec
+--------------------------
 The log holds the digest of each record's spec (see ``log.py``). A record is
 of the bound spec if a binding has its spec's name, version, and digest, and
-otherwise of another spec (:meth:`Workspace._unbound_spec_problem`, which
+otherwise of an unbound spec (:meth:`Workspace._unbound_spec_problem`, which
 :meth:`Workspace.bound` answers to a client). Every record that this
-workspace logs is of the bound spec, so a record of another spec comes from
+workspace logs is of the bound spec, so a record of an unbound spec comes from
 the log it started from, and none of its values is in memory. Its persisted
 outputs are read from the store as stored, without a type, so ``select=`` and
 ``describe`` take them as plain scipp data. Its outputs are not readable to a
 request: a reference to one is refused, since its type cannot be checked, and
-at a restart a pending record of another spec fails, as does one that reads
+at a restart a pending record of an unbound spec fails, as does one that reads
 an output of one.
 
 Request and call phase
@@ -758,9 +758,9 @@ class Workspace(WorkspaceProtocol):
 
     def _unbound_spec_problem(self, record_id: str) -> str | None:
         """
-        Why a record is of another spec than the one bound, or ``None`` if it
-        is of the bound spec: one with the name, version, and digest of the
-        record's (see the module docstring). Needs no lock.
+        Why a record is of an unbound spec, or ``None`` if it is of the bound
+        spec: one with the name, version, and digest of the record's (see the
+        module docstring). Needs no lock.
         """
         spec_id = self._views.records.spec(record_id)
         if (bound := self._bound.get(spec_id)) is None:
@@ -1025,7 +1025,7 @@ class Workspace(WorkspaceProtocol):
             raise SubmitError.at(
                 loc,
                 f"the output's type cannot be checked: record {ref.record} is of "
-                f'another spec than the one bound: {other}',
+                f'an unbound spec: {other}',
             )
         return record.spec
 
@@ -1205,7 +1205,7 @@ class Workspace(WorkspaceProtocol):
         """
         The written value of an output, or its element if ``ref`` has a key:
         of the type the bound spec declares, or as stored for a record of
-        another spec. Needs no lock.
+        an unbound spec. Needs no lock.
         """
         if self._store is None:
             raise NotReadable(f'{ref}: the workspace has no store')

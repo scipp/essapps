@@ -384,7 +384,7 @@ write_digests([IOFQ, BEAM_CENTRE], path)  # once, to make the file: {"sans-iofq/
 
 The check names each spec whose digest differs from the file's, each spec the file lacks, with the entry the file needs, and each entry of the file that no spec given has.
 The file holds the given specs and nothing else, so a test that finds no specs fails.
-A changed interface gets a new version; the file is updated under the same version only for a change that is meant to keep it, knowing that records of the old models are then of another spec.
+A changed interface gets a new version; the file is updated under the same version only for a change that is meant to keep it, knowing that records of the old models are then of an unbound spec.
 
 ## What `WorkflowSpec` refuses
 

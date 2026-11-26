@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A record of another spec than the one bound: a folder written with one set of
+A record of an unbound spec: a folder written with one set of
 bindings and opened with another. Its request and its persisted outputs stay
 readable as stored, and a request may not reference its outputs.
 """
@@ -155,7 +155,7 @@ def _record(client: Client, record_id: str) -> Record:
     return record
 
 
-def test_the_request_of_a_record_of_another_spec_reads_back_as_stored(
+def test_the_request_of_a_record_of_an_unbound_spec_reads_back_as_stored(
     other: Client, written: str
 ) -> None:
     record = _record(other, written)
@@ -164,7 +164,7 @@ def test_the_request_of_a_record_of_another_spec_reads_back_as_stored(
     assert record.request.params == {'bins': 5}
 
 
-def test_an_output_of_a_record_of_another_spec_is_the_stored_scipp_data(
+def test_an_output_of_a_record_of_an_unbound_spec_is_the_stored_scipp_data(
     other: Client, written: str
 ) -> None:
     centre = other.output(_record(other, written), 'centre')
@@ -192,7 +192,7 @@ def test_describe_and_select_work_on_the_stored_data(
         other.output(record, 'centre', select={'z': 0})
 
 
-def test_a_request_referencing_an_output_of_a_record_of_another_spec_is_refused(
+def test_a_request_referencing_an_output_of_a_record_of_an_unbound_spec_is_refused(
     other: Client, written: str
 ) -> None:
     record = _record(other, written)
@@ -204,10 +204,10 @@ def test_a_request_referencing_an_output_of_a_record_of_another_spec_is_refused(
     (error,) = refused.value.errors
     assert error.loc == ('centre',)
     assert "the output's type cannot be checked" in error.msg
-    assert 'another spec than the one bound' in error.msg
+    assert 'an unbound spec' in error.msg
 
 
-def test_a_record_of_another_spec_is_listed_and_its_output_is_readable(
+def test_a_record_of_an_unbound_spec_is_listed_and_its_output_is_readable(
     other: Client, written: str
 ) -> None:
     record = _record(other, written)
@@ -219,7 +219,7 @@ def test_a_record_of_another_spec_is_listed_and_its_output_is_readable(
     assert other.provenance(record).records() == []
 
 
-def test_a_listing_shows_a_record_of_another_spec_by_its_spec_and_output_names(
+def test_a_listing_shows_a_record_of_an_unbound_spec_by_its_spec_and_output_names(
     other: Client, written: str
 ) -> None:
     record = _record(other, written)
@@ -261,7 +261,7 @@ def _unfinished(folder: Path, *record_ids: str) -> None:
     log.write_bytes(b''.join([header, *kept]))
 
 
-def test_at_a_restart_a_pending_record_of_another_spec_fails(
+def test_at_a_restart_a_pending_record_of_an_unbound_spec_fails(
     folder: Path, written: str, another: list[Binding]
 ) -> None:
     _unfinished(folder, written)
@@ -274,7 +274,7 @@ def test_at_a_restart_a_pending_record_of_another_spec_fails(
         )
 
 
-def test_at_a_restart_a_pending_record_reading_an_output_of_another_spec_fails(
+def test_at_a_restart_a_pending_record_reading_an_output_of_an_unbound_spec_fails(
     folder: Path, written: str, another: list[Binding]
 ) -> None:
     with open_folder(folder, WRITTEN) as client:
@@ -366,7 +366,7 @@ def test_a_log_whose_submission_names_a_spec_without_a_digest_is_refused(
         open_folder(folder, WRITTEN)
 
 
-def test_the_changes_after_a_restart_with_another_spec_are_those_before(
+def test_the_changes_after_a_restart_with_an_unbound_spec_are_those_before(
     folder: Path, written: str, another: list[Binding]
 ) -> None:
     with open_folder(folder, WRITTEN) as client:
