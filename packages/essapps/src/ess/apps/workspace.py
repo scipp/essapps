@@ -166,8 +166,9 @@ import copy
 import threading
 import uuid
 from collections import Counter, deque
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -193,7 +194,7 @@ from ess.spec.validation import OutputReads
 
 from .checks import Checks, check_fit, distinct
 from .client import Client
-from .errors import FieldError, NotReadable, RecordFailed, Stopped, SubmitError
+from .errors import NotReadable, RecordFailed, Stopped, SubmitError
 from .files import Selector, readable
 from .log import (
     Event,
@@ -203,7 +204,6 @@ from .log import (
     NewStateRecord,
     Opened,
     Pushed,
-    SpecDigests,
     Started,
     Submitted,
 )
@@ -355,21 +355,28 @@ def _refused(index: int, error: SubmitError) -> SubmitError:
     return SubmitError(replace(e, entry=index) for e in error.errors)
 
 
+def _each[T, R](
+    items: Sequence[T], check: Callable[[int, T], R]
+) -> list[R | SubmitError]:
+    """``check`` of each item, by its index, or the ``SubmitError`` it raised."""
+    results: list[R | SubmitError] = []
+    for i, item in enumerate(items):
+        try:
+            results.append(check(i, item))
+        except SubmitError as error:  # noqa: PERF203
+            results.append(error)
+    return results
+
+
 def _every[T, R](items: Sequence[T], check: Callable[[int, T], R]) -> list[R]:
     """
     ``check`` of each item, by its index. Raises one ``SubmitError`` with the
     reasons of all items, so that a caller learns of every refused request at once.
     """
-    results: list[R] = []
-    errors: list[FieldError] = []
-    for i, item in enumerate(items):
-        try:
-            results.append(check(i, item))
-        except SubmitError as error:  # noqa: PERF203
-            errors += error.errors
-    if errors:
-        raise SubmitError(errors)
-    return results
+    results = _each(items, check)
+    if refused := [r for r in results if isinstance(r, SubmitError)]:
+        raise SubmitError(e for r in refused for e in r.errors)
+    return [r for r in results if not isinstance(r, SubmitError)]
 
 
 @dataclass(frozen=True)
@@ -395,7 +402,7 @@ class _Stage:
     once it has staged.
 
     The template's values are as given, with file names resolved when the
-    stage was made. ``given`` names the values a call gives: the blanks.
+    stage was made. ``blanks`` names the values a call gives.
     ``reads`` are the outputs of records the
     template references, which the stage keeps as a reader until it has
     staged, has stopped, or is released; it is empty from then on. The first
@@ -405,13 +412,11 @@ class _Stage:
     that has stopped takes no more calls.
     """
 
-    def __init__(
-        self, binding: StageBinding, template: Template, given: frozenset[str]
-    ) -> None:
+    def __init__(self, binding: StageBinding, template: Template) -> None:
         self.spec = template.spec
         self.binding = binding
         self.template = template
-        self.given = given
+        self.blanks = frozenset(template.blanks)
         self.reads = _output_reads(template.params)
         self.call: StageCall | None = None
         self.stopped: str | None = None
@@ -425,7 +430,7 @@ class _Stage:
         """
         if self.call is None:
             return request
-        params = {k: v for k, v in request.params.items() if k in self.given}
+        params = {k: v for k, v in request.params.items() if k in self.blanks}
         return request.model_copy(update={'params': params})
 
 
@@ -840,29 +845,22 @@ class Workspace(WorkspaceProtocol):
                 lambda i, item: self._check_entry(i, item[0], item[1][0], item[1][1]),
             )
             ids = [uuid.uuid4().hex for _ in entries]
-            self._append(
-                Submitted(
-                    time=datetime.now(UTC),
-                    proposal=self._proposal,
-                    submitter=submitter,
-                    specs=self._unlogged(r.spec for r in requests),
-                    records=tuple(
-                        NewRecord(
-                            id=record_id,
-                            request=request,
-                            outputs=self._output_names(request.spec),
-                            label=e.label,
-                            member=e.member,
-                            persist=names,
-                        )
-                        for record_id, request, e, names in zip(
-                            ids, requests, entries, persisted, strict=True
-                        )
-                    ),
-                )
-            )
-            self._kept.update(
-                i for i, names in zip(ids, persisted, strict=True) if not names
+            self._log_submission(
+                submitter,
+                [r.spec for r in requests],
+                [
+                    NewRecord(
+                        id=record_id,
+                        request=request,
+                        outputs=self._output_names(request.spec),
+                        label=e.label,
+                        member=e.member,
+                        persist=names,
+                    )
+                    for record_id, request, e, names in zip(
+                        ids, requests, entries, persisted, strict=True
+                    )
+                ],
             )
             for record_id, entry in zip(ids, entries, strict=True):
                 if entry.stage is not None:
@@ -870,9 +868,27 @@ class Workspace(WorkspaceProtocol):
                 self._schedule(record_id)
             return [self._views.records[i] for i in ids]
 
-    def _unlogged(self, spec_ids: Iterable[SpecId]) -> SpecDigests:
-        """The digests an event naming the bound ``spec_ids`` carries; lock held."""
-        return self._views.unlogged({s: self._bound[s].digest for s in spec_ids})
+    def _log_submission(
+        self,
+        submitter: str,
+        spec_ids: Iterable[SpecId],
+        records: Sequence[NewRecord | NewStateRecord],
+    ) -> None:
+        """
+        Log a submission or a freeze of ``records`` of the bound ``spec_ids``,
+        and keep the outputs of those that persist none; lock held.
+        """
+        unlogged = self._views.unlogged({s: self._bound[s].digest for s in spec_ids})
+        self._append(
+            Submitted(
+                time=datetime.now(UTC),
+                proposal=self._proposal,
+                submitter=submitter,
+                specs=unlogged,
+                records=tuple(records),
+            )
+        )
+        self._kept.update(r.id for r in records if not r.persist)
 
     def _output_names(self, spec_id: SpecId) -> tuple[str, ...]:
         """The names of the outputs the spec declares; needs no lock."""
@@ -909,13 +925,7 @@ class Workspace(WorkspaceProtocol):
         workspace keeps; needs no lock.
         """
         self._check_running()
-        resolved: list[Request | Template | SubmitError] = []
-        for i, item in enumerate(items):
-            try:
-                resolved.append(self._resolved(i, item))
-            except SubmitError as error:  # noqa: PERF203
-                resolved.append(error)
-        return resolved
+        return _each(items, self._resolved)
 
     def _resolved(self, index: int, item: Request | Template) -> Request | Template:
         """
@@ -998,11 +1008,10 @@ class Workspace(WorkspaceProtocol):
             raise SubmitError.at(
                 (), f'the stage holds {stage.spec}, not {request.spec}'
             )
-        raw, template = entry.request, stage.template
-        given = {k: v for k, v in raw.params.items() if k not in stage.given}
-        fixed = template.params
-        differ = (given.keys() ^ fixed.keys()) | {
-            k for k in given.keys() & fixed.keys() if given[k] != fixed[k]
+        fixed = {k: v for k, v in entry.request.params.items() if k not in stage.blanks}
+        held = stage.template.params
+        differ = (fixed.keys() ^ held.keys()) | {
+            k for k in fixed.keys() & held.keys() if fixed[k] != held[k]
         }
         if differ:
             raise SubmitError.at(
@@ -1174,15 +1183,15 @@ class Workspace(WorkspaceProtocol):
             )
             returned = bound.binding.compute(params)
         else:
-            fixed = {n: v for n, v in request.params.items() if n not in stage.given}
+            fixed = {n: v for n, v in request.params.items() if n not in stage.blanks}
             call = self._staged(
                 stage,
                 lambda: stage.binding.make_stage(
                     self._typed(request.spec, fixed), stage.template.blanks
                 ),
             )
-            given = {n: v for n, v in request.params.items() if n in stage.given}
-            returned = call(self._typed(request.spec, given))
+            filled = {n: v for n, v in request.params.items() if n in stage.blanks}
+            returned = call(self._typed(request.spec, filled))
         return _outputs_of(request.spec, spec.outputs, returned)
 
     def _typed(self, spec_id: SpecId, values: Mapping[str, Any]) -> dict[str, Any]:
@@ -1525,8 +1534,7 @@ class Workspace(WorkspaceProtocol):
         with self._changed:
             self._check_running()
             self._check_reads(reads)
-            given = frozenset(stored.blanks)
-            stage = self._stages[stage_id] = _Stage(binding, stored, given)
+            stage = self._stages[stage_id] = _Stage(binding, stored)
             self._readers.update(stage.reads)
         return stage_id, stored
 
@@ -1651,25 +1659,20 @@ class Workspace(WorkspaceProtocol):
                 self._check_running()
                 self._pushed_into(accumulator_id)  # not released or stopped
                 record_id = uuid.uuid4().hex
-                self._append(
-                    Submitted(
-                        time=datetime.now(UTC),
-                        proposal=self._proposal,
-                        submitter=submitter,
-                        specs=self._unlogged([acc.template.spec]),
-                        records=(
-                            NewStateRecord(
-                                id=record_id,
-                                accumulator=accumulator_id,
-                                pushes=upto,
-                                outputs=self._output_names(acc.template.spec),
-                                persist=persisted,
-                            ),
-                        ),
-                    )
+                spec_id = acc.template.spec
+                self._log_submission(
+                    submitter,
+                    [spec_id],
+                    [
+                        NewStateRecord(
+                            id=record_id,
+                            accumulator=accumulator_id,
+                            pushes=upto,
+                            outputs=self._output_names(spec_id),
+                            persist=persisted,
+                        )
+                    ],
                 )
-                if not persisted:
-                    self._kept.add(record_id)
                 acc.frozen = record_id
                 self._state_of[record_id] = (acc, upto)
                 self._schedule(record_id)
@@ -1836,30 +1839,34 @@ class Workspace(WorkspaceProtocol):
                 return acc
             self._changed.wait()
 
-    def _logged_state(
-        self, accumulator_id: str, *, reader: bool
-    ) -> tuple[_Accumulator, int]:
+    def _logged_state(self, accumulator_id: str) -> tuple[_Accumulator, int]:
         """
         The accumulator and its number of pushes logged, which name its logged
-        state, the state a read is of; held as a reader holds it if ``reader``,
-        until the caller lets go of it. Raises ``NotReadable`` if the state may
-        not be read (see :meth:`_accumulator`).
+        state, the state a read is of; lock held. Raises ``NotReadable`` if
+        the accumulator takes no readers (see :meth:`_accumulator`).
+        """
+        self._check_running()
+        acc = self._accumulator(accumulator_id)
+        return acc, len(self._views.pushes.get(accumulator_id, ()))
+
+    @contextmanager
+    def _reading(self, accumulator_id: str) -> Iterator[tuple[_Accumulator, int]]:
+        """
+        The accumulator and its number of pushes logged (see
+        :meth:`_logged_state`), the state held as a reader holds it for the
+        block. Raises ``NotReadable`` if the state may not be read (see
+        :meth:`_check_state`).
         """
         with self._changed:
-            self._check_running()
-            acc = self._accumulator(accumulator_id)
-            upto = len(self._views.pushes.get(accumulator_id, ()))
-            if reader:
-                self._readers[(acc, upto)] += 1
-        try:
+            acc, upto = self._logged_state(accumulator_id)
+            self._readers[(acc, upto)] += 1
+        try:  # a validator may raise anything
             if (refused := self._check_state(acc, upto)) is not None:
                 raise NotReadable(refused)
-        except BaseException:  # a validator may raise anything
-            if reader:
-                with self._changed:
-                    self._let_go([(acc, upto)])
-            raise
-        return acc, upto
+            yield acc, upto
+        finally:
+            with self._changed:
+                self._let_go([(acc, upto)])
 
     # Queries and control
 
@@ -1908,7 +1915,10 @@ class Workspace(WorkspaceProtocol):
             ]
 
     def plain_request(self, accumulator_id: str) -> Request:
-        acc, upto = self._logged_state(accumulator_id, reader=False)
+        with self._changed:
+            acc, upto = self._logged_state(accumulator_id)
+        if (refused := self._check_state(acc, upto)) is not None:
+            raise NotReadable(refused)
         with self._changed:
             return self._views.plain(acc.id, upto)
 
@@ -1978,48 +1988,61 @@ class Workspace(WorkspaceProtocol):
         The values of :meth:`outputs`, not copied, in memory or read from the
         store; ``select`` is checked here and applied by the caller.
         """
-        views = self._views
         with self._changed:
             self._check_running()
             record = self._record(record_id)
             if select is not None:
                 typed = self._other(record_id) is None
                 self._check_select(record.spec if typed else None, names)
-
             wanted = record.outputs if names is None else names
             for name in wanted:
                 if name not in record.outputs:
                     raise KeyError(f'{record.spec} has no output {name!r}')
-
-            def ready() -> bool:
-                if record_id in views.finished:
-                    return True
-                if record_id in self._kept:
-                    return False
-                return not any(views.persists((record_id, n)) for n in wanted)
-
-            self._wait_for(ready)
+            self._wait_for(lambda: self._read_ready(record_id, wanted))
             kept = record_id in self._kept
-            every = names is None
-            if names is None:
-                names = [
-                    n for n in record.outputs if kept or views.persists((record_id, n))
-                ]
-                if not names:
-                    raise NotReadable(f'record {record_id} is not kept')
-            finished = views.finished.get(record_id)
-            if finished is not None and finished.status is not Status.COMPLETED:
-                raise RecordFailed(record_id, finished.status, finished.failure)
-            if every:
-                names = [n for n in names if not views.omitted((record_id, n))]
-            for name in names:
-                if (why := self._refusal((record_id, name))) is not None:
-                    raise NotReadable(why)
+            chosen = self._read_names(record, names)
             # from memory if kept, else from the store
-            values = {n: self._outputs[(record_id, n)] for n in names if kept}
+            values = {n: self._outputs[(record_id, n)] for n in chosen if kept}
         if not kept:
-            values = {n: self._stored(record.ref(n)) for n in names}
+            values = {n: self._stored(record.ref(n)) for n in chosen}
         return values
+
+    def _read_ready(self, record_id: str, wanted: Sequence[str]) -> bool:
+        """
+        Whether a read of the outputs ``wanted`` stops waiting: once the
+        record has finished, or at once if the workspace does not keep it and
+        it persists none of them, since there is nothing to wait for; lock
+        held.
+        """
+        if record_id in self._views.finished:
+            return True
+        if record_id in self._kept:
+            return False
+        return not any(self._views.persists((record_id, n)) for n in wanted)
+
+    def _read_names(self, record: Record, names: Sequence[str] | None) -> list[str]:
+        """
+        The outputs a read takes, once it has waited: ``names``, or if
+        ``None`` every output that the workspace keeps or the record persists
+        and that the workflow returned; lock held. Raises ``RecordFailed`` for
+        a record that failed or was cancelled, and ``NotReadable`` for an
+        output that may not be read (see :meth:`_refusal`).
+        """
+        views, record_id = self._views, record.id
+        if names is None:
+            kept = record_id in self._kept
+            held = [n for n in record.outputs if kept or views.persists((record_id, n))]
+            if not held:
+                raise NotReadable(f'record {record_id} is not kept')
+            # only a completed record omits outputs, so a failed one raises below
+            names = [n for n in held if not views.omitted((record_id, n))]
+        finished = views.finished.get(record_id)
+        if finished is not None and finished.status is not Status.COMPLETED:
+            raise RecordFailed(record_id, finished.status, finished.failure)
+        for name in names:
+            if (why := self._refusal((record_id, name))) is not None:
+                raise NotReadable(why)
+        return list(names)
 
     def _check_select(
         self, spec_id: SpecId | None, names: Sequence[str] | None
@@ -2055,8 +2078,7 @@ class Workspace(WorkspaceProtocol):
         checked, its outputs are computed if no reader has yet, and the outputs or
         their parts are copied (see the module docstring).
         """
-        acc, upto = self._logged_state(accumulator_id, reader=True)
-        try:
+        with self._reading(accumulator_id) as (acc, upto):
             if select is not None:
                 self._check_select(acc.template.spec, names)
             with self._changed:
@@ -2078,9 +2100,6 @@ class Workspace(WorkspaceProtocol):
             if select is None:
                 return copy.deepcopy(values)
             return {n: _selected(v, select) for n, v in values.items()}
-        finally:
-            with self._changed:
-                self._let_go([(acc, upto)])
 
     # Files, within the workspace's proposal
 
