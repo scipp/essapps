@@ -32,8 +32,8 @@ async function load() {
 
 // What Close does, for a person who expects it to close a view.
 const CLOSES =
-  'Let go of the folder of the workspace, so that the command essbatch can work on it. ' +
-  'Nothing is deleted. Its batches do not follow until it is opened again. ' +
+  'Stop the workspace on the server. Nothing is deleted. ' +
+  'Its batches do not follow new runs until it is opened again. ' +
   'Refused while a reduction runs.';
 
 function draw() {
