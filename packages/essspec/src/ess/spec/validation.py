@@ -38,9 +38,9 @@ from .refs import FileRef, Loc, OutputRef, ParamsError, Ref, iter_refs
 
 type LocalPath = Callable[[FileRef], Path]
 """
-The local path of a file, by its identity, from the file source. It looks the
-path up and never raises: a file that cannot be read fails the workflow that
-reads it.
+The local path of a file, by its identity, from the file source. It does not
+check that the file can be read: a file that cannot be read fails the workflow
+that reads it.
 """
 
 

@@ -350,7 +350,7 @@ A parameter that holds files and no reference is then validated whole, with vali
 A parameter that holds a reference, at any depth, is validated whole when the request runs, with the data read, since the output may not exist at submission.
 A failure then fails the record, or stops the accumulator for a push.
 
-A validator raises `ValueError` for a value it rejects.
+A validator raises `ValueError` or `AssertionError` for a value it rejects.
 Any other exception fails the call.
 pydantic tries the members of a union in order.
 So a validator of an inline member, such as a `model_validator(mode='before')` of `GivenCentre`, also sees a reference to an output, and must reject it with `ValueError`.
