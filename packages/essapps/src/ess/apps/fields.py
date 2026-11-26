@@ -16,8 +16,9 @@ client may reference now (``client.readable``), so a pending record is offered
 too.
 
 A field without a default starts unset, so that a value a correct reduction
-needs is never filled in for the user. A list starts unset until an element is
-added or removed, so that a table is never submitted without rows by mistake.
+needs is never filled in for the user. A list without a default stays unset
+until an element is added or removed, so that a table is never submitted without
+rows by mistake.
 """
 
 from __future__ import annotations
@@ -389,7 +390,7 @@ class ScalarsField(Field):
 
 
 class GroupField(Field):
-    """The fields of a group, each by its type. The tag of an alternative has none."""
+    """The fields of a group, except the tag field of an alternative of a union."""
 
     def __init__(
         self, group: type[BaseModel], tag: dict[str, str], listing: Listing
@@ -462,8 +463,8 @@ class NothingField(Field):
 
 class ChoiceField(Field):
     """
-    A field per alternative way to give a value, such as a group given inline,
-    an output of a record, or ``None``.
+    A choice between alternative ways to give a value, each a field, such as a
+    group given inline, an output of a record, or ``None``.
 
     ``tag`` is the tag field of a union of groups. ``chosen`` is the label of the
     chosen alternative, or ``None``. The selector is hidden if there is only one
@@ -530,10 +531,7 @@ class ChoiceField(Field):
         self._notify()
 
     def _label(self, value: Any) -> str | None:
-        """
-        The label of the alternative that writes ``value``, or ``None`` if unset.
-        Raises ``ValueError`` if no alternative writes it.
-        """
+        """The label of the alternative that writes ``value``, or ``None``."""
         if value is UNSET:
             return (
                 next(iter(self.alternatives)) if len(self.alternatives) == 1 else None
@@ -572,21 +570,16 @@ class RowsField(Field):
     the field of the element's type. The rows are held as a request writes
     them, so the number of fields does not grow with the rows.
 
-    The editor shows the selected row, and is empty if no row or several are
-    selected. :meth:`update_row` writes the editor back to the selected row, and
-    :meth:`add_row` appends it, each only if nothing is missing in it.
-    :meth:`remove_rows` removes the selected rows, with any changes to them in
-    the editor. :meth:`discard` shows the selection in the editor again.
-
-    While the editor differs from what it showed, the selection stays, and
-    :attr:`Fields.params` reports the changes as missing. So a change in the
-    editor is not lost unseen. A refresh is no change: a record gone from the
-    listing leaves its row as it is.
+    The editor shows the selected row, and the defaults if no row or several are
+    selected. While the editor differs from what it showed, the selection stays,
+    and :attr:`Fields.params` reports the changes as missing. So a change in the
+    editor is not lost unseen. A refresh does not count as a change, even if a
+    record of the selected row is gone from the listing.
 
     Unset, the field has no rows until one is added or :meth:`remove_rows` is
-    called, which makes it the empty list. A row that the editor cannot show whole,
-    such as a reference to an output that the client may not read now, stays
-    as given.
+    called, which makes it the empty list. A row that the editor cannot show
+    whole, such as a reference to an output that the client may not read now,
+    stays as given.
     """
 
     def __init__(self, element: Any, default: Any, listing: Listing) -> None:
@@ -646,7 +639,7 @@ class RowsField(Field):
 
     @contextmanager
     def _loads(self) -> Iterator[None]:
-        """Loads the editor without notifying the subscribers of each field."""
+        """Within this block, editor changes do not notify this field's subscribers."""
         self._loading = True
         try:
             yield
@@ -842,8 +835,8 @@ class Fields:
     def watch(self, on_change: Changed) -> None:
         """
         Calls ``on_change`` when a person changes what the fields hold or what is
-        missing. Selecting a row changes neither. :meth:`set` and :meth:`refresh`
-        never call it.
+        missing. Selecting a row changes neither. :meth:`set`, :meth:`set_fitting`
+        and :meth:`refresh` never call it.
         """
         self._on_change = on_change
         self._last = self.params_and_missing()
