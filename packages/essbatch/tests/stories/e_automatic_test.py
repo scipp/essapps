@@ -27,7 +27,7 @@ def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:
     )
 
 
-PER_RUN = RowSource(per_run, fills=('sample',))
+PER_RUN = RowSource(per_run, source_columns=('sample',))
 
 
 def iofq_batch(client: Client) -> Batch:
@@ -68,7 +68,7 @@ def test_e1_series_grows_reduction_follows(
     client: Client, connect: Callable[..., Client], measure: toys.Measure
 ) -> None:
     reference = measure(1, [1.0, 1.0], role='reference')
-    source = RowSource(angles, fills=('runs',))
+    source = RowSource(angles, source_columns=('runs',))
     batch = Batch(
         client,
         toys.STITCH,

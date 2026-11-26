@@ -59,7 +59,9 @@ def first_transmission(files: Sequence[FileInfo]) -> pd.DataFrame:
     ).set_index(KEY)
 
 
-FIRST_TRANSMISSION = RowSource(first_transmission, fills=('sample', 'transmission'))
+FIRST_TRANSMISSION = RowSource(
+    first_transmission, source_columns=('sample', 'transmission')
+)
 
 type Opened = Callable[[], AbstractContextManager[tuple[Intake, CorrectedFiles]]]
 

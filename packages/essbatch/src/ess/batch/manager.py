@@ -13,7 +13,7 @@ each batch. A batch is kept as these entries of the definitions
 (:mod:`.definition`), each with one writer::
 
     header      title, description                      BatchManager
-    settings    the template, with the fills as blanks  the Batch
+    settings    the template, with the source columns as blanks  the Batch
     rows        the batch table                         the Batch
     source      the source, the keys considered, and    Intake; only for a
                 whether the batch follows               batch made from a source
@@ -104,7 +104,7 @@ class BatchManager:
         The settings that a new batch of a spec starts with, by the name of
         the spec; none for a spec not named. They are copied when a batch is
         made, so a change of them leaves the batches made before as they are.
-        :meth:`create` leaves out those at ``fills``.
+        :meth:`create` leaves out those at ``source_columns``.
     staged:
         The names of the specs whose batches run their rows through a stage,
         as :class:`~.reduction.Batch` takes it. It is read each time the
@@ -148,7 +148,7 @@ class BatchManager:
         *,
         title: str,
         rows: pd.DataFrame | None = None,
-        fills: Collection[str] = (),
+        source_columns: Collection[str] = (),
         parameter_columns: Collection[str] = (),
         description: str = '',
         settings: Mapping[str, Any] | None = None,
@@ -176,9 +176,9 @@ class BatchManager:
             The first batch table, as :meth:`~.reduction.Batch.put` takes it;
             its parameter columns are the blanks of the template. One without
             rows or columns if not given.
-        fills:
+        source_columns:
             The parameters that a row source fills
-            (:attr:`.reduction.Batch.fills`), kept as the blanks of the
+            (:attr:`.reduction.Batch.source_columns`), kept as the blanks of the
             settings: each is a column of ``rows``, an empty cell there means
             that the row waits for its file, and the settings given are left
             out there (:meth:`.reduction.Batch.settable`).
@@ -190,7 +190,7 @@ class BatchManager:
             What a person says of the batch.
         settings:
             The settings to start with, in place of those that the manager
-            was given for the spec; those at ``fills`` are left out.
+            was given for the spec; those at ``source_columns`` are left out.
         label:
             The label of the batch. If not given, the time of making,
             ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if that is
@@ -203,7 +203,7 @@ class BatchManager:
             digits, ``_``, ``.`` and ``-``, starting with none of the last
             two, or has definitions or records; if the workspace binds no
             spec ``spec``; or if the rows are refused, as ``put`` refuses
-            them, also for a batch table without a column of ``fills``.
+            them, also for a batch table without a column of ``source_columns``.
         """
         self.check(spec, title=title, label=label)
         if label is None:
@@ -220,7 +220,7 @@ class BatchManager:
         empty = [c for c in parameter_columns if c not in table.columns]
         # Refused here, before anything is written.
         table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
-        batch = self._new_batch(label, bound, {}, None, fills)
+        batch = self._new_batch(label, bound, {}, None, source_columns)
         # what to delete if a write is refused
         written = [entry.key(label) for entry in LABEL_ENTRIES[1:]]
         try:
@@ -285,7 +285,7 @@ class BatchManager:
         the batch cannot be shown either.
 
         The blanks of the settings kept are the parameters that the source of
-        the batch filled when it was made (:attr:`.reduction.Batch.fills`).
+        the batch filled when it was made (:attr:`.reduction.Batch.source_columns`).
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
@@ -308,7 +308,7 @@ class BatchManager:
         spec: WorkflowSpec[Any, Any],
         settings: Mapping[str, Any],
         rows: pd.DataFrame | None,
-        fills: Collection[str],
+        source_columns: Collection[str],
     ) -> Batch:
         """The ``Batch`` of ``label``, which writes to the definitions."""
         return Batch(
@@ -320,7 +320,7 @@ class BatchManager:
             staged=spec.name in self._staged,
             persist=True,
             definitions=self.definitions,
-            fills=fills,
+            source_columns=source_columns,
         )
 
     def change(

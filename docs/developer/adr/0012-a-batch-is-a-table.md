@@ -166,7 +166,7 @@ A cell that names a file that is not found is marked when the table is shown, an
 
 ```
 definitions/labels/20261118-130204/header.json     title, description
-definitions/labels/20261118-130204/settings.json   the settings, as a template file: spec, params, and as its blanks the parameters that the row source fills (batch.fills)
+definitions/labels/20261118-130204/settings.json   the settings, as a template file: spec, params, and as its blanks the parameters that the row source fills (batch.source_columns)
 definitions/labels/20261118-130204/rows.json       the table: {"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}, ...]}
 ```
 
@@ -273,7 +273,7 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 - A cell emptied after its row was reduced counts its value as a setting: the row reads `settings changed`, not `outdated`.
 - A batch made from a source keeps the names that its source fills with it, as the blanks of `settings.json`, as they were when it was made; the batch, the command without the sources, and Follow read them there. A step asks the batch which names a row waits for.
 - The table of a batch made from a source keeps a column for each name that its source fills: `put`, a table file loaded, and "Make this a setting" refuse to drop one.
-- `settings.json` holds every setting, those at the columns too, as a template whose blanks are `batch.fills`. A folder written before, whose templates had other blanks, is refused when opened (`FolderDefinitions`, `format.json`).
+- `settings.json` holds every setting, those at the columns too, as a template whose blanks are `batch.source_columns`. A folder written before, whose templates had other blanks, is refused when opened (`FolderDefinitions`, `format.json`).
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).
 - The command and the page need no translation of a table: a table file is the table.
 - `put` writes the whole table. At 3000 rows that is tens of milliseconds.

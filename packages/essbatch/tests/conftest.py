@@ -370,8 +370,10 @@ def pair(files):
     return pd.DataFrame.from_records(rows, columns=columns).set_index('key')
 
 
-PAIRS = RowSource(pair, fills=('sample',), description='A row per sample run.')
-BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
+PAIRS = RowSource(pair, source_columns=('sample',), description='A row per sample run.')
+BROKEN = RowSource(
+    lambda files: [f.metadata['nope'] for f in files], source_columns=('sample',)
+)
 SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
 
 
@@ -381,7 +383,8 @@ class Metadata(BaseModel):
 
 REFUSING = {
     'refusing': RowSource(
-        lambda files: Metadata.model_validate({'run': 'water'}), fills=('sample',)
+        lambda files: Metadata.model_validate({'run': 'water'}),
+        source_columns=('sample',),
     )
 }
 '''

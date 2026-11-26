@@ -687,13 +687,13 @@ function chooseFollow() {
 // columns, the others a person may make columns. On the page of a batch, its
 // columns are ticked, and its settings offered.
 function chooseSpec() {
-  const {name, fills} = chosenSource();
+  const {name, source_columns: sourceColumns} = chosenSource();
   const spec = chosenSpec();
   const batch = view.state;
   const ticked = batch ? batch.columns.map((c) => c.name) : [];
   $('new-columns').replaceChildren(
     ...(spec?.params ?? []).map((p) => {
-      const fixed = fills.includes(p.name);
+      const fixed = sourceColumns.includes(p.name);
       const box = h('input', {type: 'checkbox', name: 'column', value: p.name, checked: fixed || ticked.includes(p.name), disabled: fixed});
       return h('label', {title: fixed ? `Filled by ${name}` : null}, box, p.title);
     }),

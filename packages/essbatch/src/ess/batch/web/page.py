@@ -447,7 +447,7 @@ class Page:
                     name=c,
                     title=titles[c],
                     editor=forms.editor(self._cells.fields[c]),
-                    waits=c in batch.fills,
+                    waits=c in batch.source_columns,
                     # as a cell that holds it shows it
                     default=self._cell_text(c, cell_of(empty[c])) if c in empty else '',
                 )
@@ -601,7 +601,7 @@ class Page:
         """
         with reject_on_error('The rows of the source cannot be listed'):
             given = self.pages.intake.offered(self.label)
-        return view.listed(given, self.batch.fills)
+        return view.listed(given, self.batch.source_columns)
 
     @_action
     def take(self, keys: Sequence[str]) -> str:

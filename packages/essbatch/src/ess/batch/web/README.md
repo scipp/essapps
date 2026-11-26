@@ -47,7 +47,7 @@ The rows a person picks are added as the source makes them now (`Intake.take`), 
 The setting stays: a row whose cell is empty takes it, also a row added later, by Follow or by a person, until its cell is set.
 The grid shows such a cell in grey as the value it takes: the setting, or the default of the parameter if the batch has none.
 The field of a parameter column in the Settings tab has **Default**, which sets it back to the default of the parameter, for every kind of field; once applied, that default is the setting, and a parameter without a default has no setting, so a row whose cell is empty is incomplete.
-A parameter column that the row source of the batch fills has no field in the Settings tab and no "Make this a setting": its empty cell means that the row waits for a run (`Batch.fills`), and the batch table keeps the column, so a table file loaded without it is refused.
+A parameter column that the row source of the batch fills has no field in the Settings tab and no "Make this a setting": its empty cell means that the row waits for a run (`Batch.source_columns`), and the batch table keeps the column, so a table file loaded without it is refused.
 "Make this a setting", in the menu of the header of a column, drops the column (`Batch.make_setting`): the setting becomes the value that every row takes, or, where the rows differ, the value a person chooses in a dialog, which lists the values that the rows take (`GET api/columns/values?name=...`).
 Both are refused while the settings form holds a change, since the page then builds the form and the cell editors again.
 **Download as CSV** and **Download as XLSX** give the batch table with the results of its rows (`frames.with_results`).
@@ -181,7 +181,7 @@ settings = manager.batch(other).settings                        # thickness amon
 batch = intake.create(spec, title=title, source=source,
                       choose=Range(first, last, later),
                       parameter_columns=['thickness'],          # ticked: an empty column
-                      settings=settings,                        # less those at the fills of the row source
+                      settings=settings,                        # less those at the source columns
                       follow=follow)                            # Follow ticked
 batch = manager.create(spec, title=title, rows=table,           # from a table file, or rows=None
                        parameter_columns=['thickness'], settings=settings)

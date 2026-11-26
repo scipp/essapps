@@ -164,9 +164,13 @@ def test_a_batch_has_no_setting_at_a_column_of_its_fills(
 ) -> None:
     sample(1, 'water')
     settings = {'thickness': 3.0, 'transmission': 'run:1001'}
-    fills = ('sample', 'transmission')
+    source_columns = ('sample', 'transmission')
     batch = with_defaults.create(
-        'plain', title='Morning', rows=rows(client), fills=fills, settings=settings
+        'plain',
+        title='Morning',
+        rows=rows(client),
+        source_columns=source_columns,
+        settings=settings,
     )
 
     assert batch.settings == {'thickness': 3.0}
@@ -179,13 +183,22 @@ def test_the_fills_of_a_batch_are_kept_as_the_blanks_of_its_settings(
     sample: Measure,
 ) -> None:
     sample(1, 'water')
-    fills = ('transmission', 'sample')
-    manager.create('plain', title='Morning', rows=rows(client), fills=fills, label='b')
+    source_columns = ('transmission', 'sample')
+    manager.create(
+        'plain',
+        title='Morning',
+        rows=rows(client),
+        source_columns=source_columns,
+        label='b',
+    )
 
     kept = SETTINGS.load(definitions, 'b')
 
     assert kept.blanks == ('sample', 'transmission')
-    assert _again(client, definitions).batch('b').fills == {'sample', 'transmission'}
+    assert _again(client, definitions).batch('b').source_columns == {
+        'sample',
+        'transmission',
+    }
 
 
 def test_a_table_without_a_column_of_its_fills_is_refused_and_nothing_is_kept(
@@ -194,7 +207,7 @@ def test_a_table_without_a_column_of_its_fills_is_refused_and_nothing_is_kept(
     table = rows(client).drop(columns='transmission')
 
     with pytest.raises(ValueError, match='fills transmission: a row waits'):
-        manager.create('plain', title='M', rows=table, fills=['transmission'])
+        manager.create('plain', title='M', rows=table, source_columns=['transmission'])
     assert definitions.labels() == []
 
 

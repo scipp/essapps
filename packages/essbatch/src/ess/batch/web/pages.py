@@ -284,12 +284,12 @@ class Pages:
             listing = self.runs.listing
 
             def choice(name: str | None, source: RowSource | None) -> SourceChoice:
-                fills = () if source is None else source.fills
+                source_columns = () if source is None else source.source_columns
                 return SourceChoice(
                     name=name,
-                    fills=list(fills),
+                    source_columns=list(source_columns),
                     specs=[
-                        _spec_choice(spec, fills, listing)
+                        _spec_choice(spec, source_columns, listing)
                         for spec in specs
                         if fits(spec, source)
                     ],
@@ -317,7 +317,7 @@ class Pages:
         with self.lock:
             with reject_on_error():
                 given = self.intake.marked(source, Range(first, last, later))
-            return view.listed(given, self.intake.sources[source].fills)
+            return view.listed(given, self.intake.sources[source].source_columns)
 
     def create(self, new: NewBatch, file: tuple[str, bytes] | None = None) -> Made:
         """
@@ -434,14 +434,17 @@ class Pages:
 
 
 def _spec_choice(
-    spec: WorkflowSpec[Any, Any], fills: Sequence[str], listing: Listing
+    spec: WorkflowSpec[Any, Any], source_columns: Sequence[str], listing: Listing
 ) -> SpecChoice:
     """
-    ``spec`` as a choice of the source that fills ``fills``: those first,
+    ``spec`` as a choice of the source that fills ``source_columns``: those first,
     then each other parameter whose cell the page edits.
     """
     form = Fields(spec.params, listing)
-    named = [*fills, *(n for n in forms.edited(form) if n not in fills)]
+    named = [
+        *source_columns,
+        *(n for n in forms.edited(form) if n not in source_columns),
+    ]
     return SpecChoice(
         name=spec.name,
         title=spec.title,

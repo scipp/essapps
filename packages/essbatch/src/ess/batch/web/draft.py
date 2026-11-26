@@ -27,7 +27,7 @@ class Draft:
     """
     The form of the settings of ``batch`` as it is now: a field per
     parameter, but the columns that the source fills, which take no setting
-    (:attr:`~ess.batch.Batch.fills`); a field of a parameter column may be
+    (:attr:`~ess.batch.Batch.source_columns`); a field of a parameter column may be
     left unset (:func:`.forms.held`). It starts showing the batch's settings.
 
     Attributes
@@ -43,7 +43,9 @@ class Draft:
 
     def __init__(self, batch: Batch, listing: Listing) -> None:
         self._params = batch.spec.params
-        self._names = [n for n in self._params.model_fields if n not in batch.fills]
+        self._names = [
+            n for n in self._params.model_fields if n not in batch.source_columns
+        ]
         self._columns = batch.parameter_columns
         self.fields = self._form(listing)
         self.reset(batch.settings, listing)

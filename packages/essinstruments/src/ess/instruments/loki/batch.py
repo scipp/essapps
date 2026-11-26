@@ -116,7 +116,7 @@ def _measured(f: FileInfo) -> tuple[int, str]:
 
 SAMPLE_RUNS = RowSource(
     pair_by_sample,
-    fills=('sample', 'sample_transmission'),
+    source_columns=('sample', 'sample_transmission'),
     description='A row per run of role sample in files.csv, keyed by its run '
     'number. Its sample_transmission is the run of role transmission whose '
     'sample in files.csv is that of the sample run; of several, the one with '
@@ -126,7 +126,7 @@ SAMPLE_RUNS = RowSource(
 """A row per sample run, paired by :func:`pair_by_sample`."""
 RAW_RUNS = RowSource(
     per_run,
-    fills=('run',),
+    source_columns=('run',),
     description='A row per raw run, keyed by its run number, with no pairing '
     'and no role needed; for the bank histogram.',
 )

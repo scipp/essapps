@@ -74,7 +74,7 @@ def test_a_batch_made_from_a_source_keeps_its_fills_when_read_again(
 
     again = BatchManager(client, definitions=definitions).batch('a')
 
-    assert again.fills == {'sample', 'transmission'}
+    assert again.source_columns == {'sample', 'transmission'}
 
 
 def test_a_source_json_with_fills_is_refused_when_read(
@@ -462,7 +462,7 @@ def _broken(files: Any) -> pd.DataFrame:
 def test_a_spec_title_or_label_is_refused_before_the_source_is_looked_up(
     manager: BatchManager, spec: str, title: str, label: str | None, said: str
 ) -> None:
-    intake = Intake(manager, sources={'broken': RowSource(_broken, fills=())})
+    intake = Intake(manager, sources={'broken': RowSource(_broken, source_columns=())})
 
     for source in ('broken', 'nope'):
         with pytest.raises(ValueError, match=said):

@@ -16,7 +16,7 @@ or the parameter is no column, the setting; if the batch has none, the default
 of the parameter. But in a batch made from a source, a column that the source
 fills takes its value from the cell only: an empty cell there means that the
 row waits for its file, and the row is incomplete, whatever the settings hold
-(:attr:`Batch.fills`, :meth:`Batch.empty`). A template cannot fix a value and
+(:attr:`Batch.source_columns`, :meth:`Batch.empty`). A template cannot fix a value and
 leave it blank, so the template of the requests and of the stage holds the
 settings without the columns, its blanks are the columns, and each row fills
 every column::
@@ -25,7 +25,7 @@ every column::
     row = rows[columns].loc[[key]].to_dict('index')[key]      # each cell of its type
     cells = as_request(model, {c: v for c, v in row.items() if v is not None})
     for c in columns - cells.keys():                          # the empty cells
-        if c in fills: continue                               # waits for its file
+        if c in source_columns: continue                    # waits for its file
         elif c in settings: cells[c] = settings[c]
         elif has_default(c): cells[c] = default(c)
         elif takes_none(c): cells[c] = None
@@ -201,10 +201,10 @@ class Batch:
     settings:
         The value of each parameter for the batch, where it is not left to
         its default; none if not given. A value at a column is the value of
-        each row whose cell is empty; one at :attr:`fills` is left out.
+        each row whose cell is empty; one at :attr:`source_columns` is left out.
     rows:
         The batch table, as :meth:`put` takes it; if not given, one without
-        rows, with a column for each of :attr:`fills`.
+        rows, with a column for each of :attr:`source_columns`.
     staged:
         Run the rows through a stage, so that what they share is computed
         once. The spec's binding must make stages.
@@ -213,12 +213,12 @@ class Batch:
     definitions:
         Where the settings and the rows of the label are written at each
         change (:mod:`~.definition`). Nothing is read from them: the manager
-        reads them and gives them as ``settings``, ``rows`` and ``fills``
+        reads them and gives them as ``settings``, ``rows`` and ``source_columns``
         (:meth:`.manager.BatchManager.batch`). A ``Batch`` made in code
         without them keeps nothing.
-    fills:
+    source_columns:
         The parameters that the source of the batch fills, if it was made
-        from a row source (:attr:`~.source.RowSource.fills`); they are kept
+        from a row source (:attr:`~.source.RowSource.source_columns`); they are kept
         as the blanks of its settings. Each is a column, and an empty cell
         there means that the row waits for its file: the row is incomplete,
         whatever the settings hold and whatever the default of the parameter
@@ -247,7 +247,7 @@ class Batch:
     ------
     ValueError
         If ``rows`` are refused, as :meth:`put` refuses them, also for a
-        table without a column of :attr:`fills`, so that each of them is a
+        table without a column of :attr:`source_columns`, so that each of them is a
         column of every batch.
     """
 
@@ -262,21 +262,21 @@ class Batch:
         staged: bool = False,
         persist: bool | Sequence[str] = False,
         definitions: DefinitionStore | None = None,
-        fills: Collection[str] = (),
+        source_columns: Collection[str] = (),
     ) -> None:
         self.client = client
         self.spec = spec
         self.label = label
-        self.fills = frozenset(fills)
+        self.source_columns = frozenset(source_columns)
         self.definitions = definitions
         self._revision = 0
-        # A setting at fills, as definitions may hold, is never read: dropped.
+        # A setting at a source column, as definitions may hold, is never read: dropped.
         self._settings = copy.deepcopy(self.settable(settings or {}))
         self._template = Template(spec, params=self._settings)
         if rows is None:
-            rows = pd.DataFrame(columns=sorted(self.fills))
+            rows = pd.DataFrame(columns=sorted(self.source_columns))
         rows = typed(rows, spec.params)
-        self._keeps_fills(rows.columns)
+        self._keeps_source_columns(rows.columns)
         self._set(rows)
         self._staged = staged
         self._persist = persist
@@ -315,15 +315,15 @@ class Batch:
 
     def settable(self, settings: Mapping[str, Any]) -> dict[str, Any]:
         """
-        ``settings`` without the values at :attr:`fills`, which an assignment
+        ``settings`` without the values at :attr:`source_columns`, which an assignment
         of :attr:`settings` refuses: to tidy settings taken from elsewhere,
         such as those of another batch, of a record or of a template file.
         """
-        return {k: v for k, v in settings.items() if k not in self.fills}
+        return {k: v for k, v in settings.items() if k not in self.source_columns}
 
-    def _keeps_fills(self, columns: Collection[str]) -> None:
-        """Raise ``ValueError`` if ``columns`` lack one of :attr:`fills`."""
-        if lacking := [c for c in sorted(self.fills) if c not in columns]:
+    def _keeps_source_columns(self, columns: Collection[str]) -> None:
+        """Raise ``ValueError`` if ``columns`` lack one of :attr:`source_columns`."""
+        if lacking := [c for c in sorted(self.source_columns) if c not in columns]:
             raise ValueError(
                 f'the source of the batch fills {", ".join(lacking)}: a row waits '
                 'until its cell there is filled, so the table keeps the column'
@@ -356,13 +356,13 @@ class Batch:
         Raises ``ValueError``, and changes nothing, for a table that
         :func:`~.table.typed` refuses: a key that is not text, empty, or
         given twice, or a cell that is not of the kind of its column; and for
-        a table that lacks a column of :attr:`fills`.
+        a table that lacks a column of :attr:`source_columns`.
 
         Raises :class:`~.definition.DefinitionWriteError` if the definitions refuse the
         table, and then nothing changes.
         """
         rows = typed(frame, self.spec.params)
-        self._keeps_fills(rows.columns)
+        self._keeps_source_columns(rows.columns)
         self._resolved.clear()
         data = data_of(rows)
         if to_json(data) == to_json(data_of(self._rows)):
@@ -388,7 +388,7 @@ class Batch:
         :meth:`state` resolves them, and refuses a name that is not a
         parameter; a setting at a column is checked as a cell of each row
         that takes it. Raises ``ValueError``, and changes nothing, for a
-        value at :attr:`fills`, which no row takes: use :meth:`settable` for
+        value at :attr:`source_columns`, which no row takes: use :meth:`settable` for
         settings taken from elsewhere. Such a value that ``settings`` of the
         constructor holds is left out.
         """
@@ -396,7 +396,7 @@ class Batch:
 
     @settings.setter
     def settings(self, settings: Mapping[str, Any]) -> None:
-        if at := sorted(settings.keys() & self.fills):
+        if at := sorted(settings.keys() & self.source_columns):
             raise ValueError(
                 f'the source of the batch fills {", ".join(at)}: an empty cell '
                 'there waits for its file, so it takes no setting'
@@ -437,13 +437,13 @@ class Batch:
         chosen.
 
         Raises ``ValueError`` if ``name`` is not a column, or one of
-        :attr:`fills`, as :meth:`put` refuses a table without it; if the
+        :attr:`source_columns`, as :meth:`put` refuses a table without it; if the
         table has no row of ``key``, or if ``key`` is not given and the rows
         take different values; :class:`~.definition.DefinitionWriteError` if the
         definitions refuse a write.
         """
         self._check_column(name)
-        self._keeps_fills([c for c in self.parameter_columns if c != name])
+        self._keeps_source_columns([c for c in self.parameter_columns if c != name])
         if key is None:
             values = self.values(name)
             if len(values) > 1:
@@ -484,10 +484,12 @@ class Batch:
     def _save(self, settings: Mapping[str, Any]) -> None:
         """
         Write ``settings`` as the settings of the label, if kept, with
-        :attr:`fills` as the blanks of the template.
+        :attr:`source_columns` as the blanks of the template.
         """
         if self.definitions is not None:
-            kept = Template(self.spec, params=settings, blanks=sorted(self.fills))
+            kept = Template(
+                self.spec, params=settings, blanks=sorted(self.source_columns)
+            )
             definition.SETTINGS.save(self.definitions, self.label, kept)
 
     def template(self) -> Template:
@@ -502,14 +504,14 @@ class Batch:
         """
         The value that an empty cell gives, by column, as a request takes it:
         the setting, else its parameter's default, or ``None`` if it takes
-        ``None``. Nothing at a column of :attr:`fills`, where the row waits
+        ``None``. Nothing at a column of :attr:`source_columns`, where the row waits
         for its file, whatever its default, nor where the parameter gives
         nothing.
         """
         fields = self.spec.params.model_fields
         empty = {}
         for c in self.parameter_columns:
-            if c in self.fills:
+            if c in self.source_columns:
                 continue
             if c in self._settings:
                 empty[c] = copy.deepcopy(self._settings[c])

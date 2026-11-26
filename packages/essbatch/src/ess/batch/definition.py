@@ -9,7 +9,8 @@ rows of a batch are written by its ``Batch``, which the manager makes:
 
     corrections     metadata of a file set by hand, by file    CorrectedFiles
     header          title, description                         BatchManager
-    settings        the template: spec, settings, fills        Batch.settings
+    settings        the template: spec, settings, source       Batch.settings
+                    columns
     rows            the batch table                            Batch.put
     source          the row source a batch was made from, the  Intake
                     keys of it that the batch has considered,
@@ -57,7 +58,7 @@ The settings are a template in the format of the file that a person saves
 from a page: its params are the settings of the batch, also those at the
 columns, which each row with an empty cell takes; its blanks are the
 parameters that the row source of the batch fills
-(:attr:`~.reduction.Batch.fills`), which take no setting and which each row
+(:attr:`~.reduction.Batch.source_columns`), which take no setting and which each row
 must fill. The template that the rows fill has other blanks, all the
 parameter columns of the rows (:meth:`~.reduction.Batch.template`).
 The rows are :func:`~.table.data_of` of the batch table. Each entry is checked when
@@ -129,8 +130,8 @@ class DefinitionStore(Protocol):
 _NAME_MAX = 255
 """The bytes of a file name, on the file systems of Linux and macOS."""
 
-# Moves with every change of what the kept files mean, such as where the fills
-# of a batch are kept, so that a folder of another format is refused, not read
+# Moves with every change of what the kept files mean, such as where the source
+# columns of a batch are kept, so that a folder of another format is refused, not read
 # wrong. No folder is migrated.
 FORMAT = 2
 """The format of the files of :class:`FolderDefinitions`, in ``format.json``."""

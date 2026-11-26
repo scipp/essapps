@@ -216,7 +216,9 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
 
 
-SOURCES = {'sample-runs': RowSource(pair_by_sample, fills=('sample', 'transmission'))}
+SOURCES = {
+    'sample-runs': RowSource(pair_by_sample, source_columns=('sample', 'transmission'))
+}
 """The sources of the demo's batches, by name."""
 STAGED = frozenset({DEMO.name})
 """The specs whose batches run through a stage: the demo's."""

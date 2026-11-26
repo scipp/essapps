@@ -2113,13 +2113,13 @@ def test_the_sources_offer_the_specs_that_fit_and_the_parameters_a_cell_edits(
 
     assert pairs == {
         'name': 'pairs',
-        'fills': ['sample', 'transmission'],
+        'source_columns': ['sample', 'transmission'],
         'specs': [
             {'name': 'staged', 'title': 'Staged', 'params': STAGED_PARAMS},
             {'name': 'plain', 'title': 'Plain', 'params': STAGED_PARAMS},
         ],
     }
-    assert (none['name'], none['fills']) == (None, [])
+    assert (none['name'], none['source_columns']) == (None, [])
     assert [s['name'] for s in none['specs']] == [
         'staged',
         'plain',
@@ -2137,7 +2137,7 @@ def test_the_sources_offer_the_specs_that_fit_and_the_parameters_a_cell_edits(
 def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
     client: Client, definitions: DefinitionStore
 ) -> None:
-    odd = RowSource(pair, fills=('sample', 'background'))
+    odd = RowSource(pair, source_columns=('sample', 'background'))
     manager = BatchManager(client, definitions=definitions)
 
     pages = Pages(Intake(manager, sources={'odd': odd}))

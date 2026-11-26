@@ -619,7 +619,9 @@ def from_source(client: Client, sample: Measure) -> Batch:
     sample(1, 'water')
     table = rows(client).assign(transmission=None, offset=None)
     stale = {'transmission': 'run:1001'}
-    return Batch(client, PLAIN, label='s', rows=table, settings=stale, fills=FILLS)
+    return Batch(
+        client, PLAIN, label='s', rows=table, settings=stale, source_columns=FILLS
+    )
 
 
 def test_a_column_that_the_source_fills_takes_its_value_from_the_cell_only(
@@ -660,7 +662,7 @@ def test_a_batch_is_not_made_on_a_table_without_a_column_of_its_fills(
     table = from_source.frame().drop(columns='offset')
 
     with pytest.raises(ValueError, match='fills offset: a row waits'):
-        Batch(from_source.client, PLAIN, label='s', rows=table, fills=FILLS)
+        Batch(from_source.client, PLAIN, label='s', rows=table, source_columns=FILLS)
 
 
 def test_a_changed_setting_at_a_column_reads_settings_changed_for_rows_that_take_it(

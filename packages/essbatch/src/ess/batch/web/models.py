@@ -374,7 +374,7 @@ class SourceChoice(BaseModel):
     """
 
     name: str | None
-    fills: list[str]
+    source_columns: list[str]
     specs: list[SpecChoice]
 
 

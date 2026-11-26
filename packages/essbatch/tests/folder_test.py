@@ -31,7 +31,7 @@ def _runs(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame({'sample': [str(f.ref) for f in files]}, index=keys)
 
 
-RUNS = RowSource(_runs, fills=('sample',))
+RUNS = RowSource(_runs, source_columns=('sample',))
 """A row per run."""
 
 

@@ -194,7 +194,7 @@ def template_to_fill(
     """
     filled: dict[str, list[str]] = {}
     for name, source in (sources or {}).items():
-        for parameter in source.fills:
+        for parameter in source.source_columns:
             filled.setdefault(parameter, []).append(name)
     title = f'A template of {spec.name}, version {spec.version}: {spec.title}.'
     lines = [*_comment(f'{title} {spec.description}', 0), '#']

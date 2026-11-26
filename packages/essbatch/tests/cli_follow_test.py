@@ -61,7 +61,9 @@ def test_a_step_that_raises_is_said_while_it_changes_and_the_steps_go_on(
             raise raising[0]
         return toys.pair(files)
 
-    intake = Intake(manager, sources={'pairs': RowSource(rows, toys.PAIRS.fills)})
+    intake = Intake(
+        manager, sources={'pairs': RowSource(rows, toys.PAIRS.source_columns)}
+    )
     sample(1, 'water')
     label = toys.from_pairs(intake, 'plain', title='A', follow=True)
     after = [

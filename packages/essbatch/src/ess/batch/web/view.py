@@ -69,16 +69,16 @@ def note(name: str) -> Column:
     return Column(name=name, title=name.replace('_', ' ').capitalize())
 
 
-def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
+def listed(given: pd.DataFrame, source_columns: Collection[str]) -> SourceRows:
     """
     The rows of ``given``, the rows of a source with a column
     ``waits``, and maybe a column ``taken``, as a dialog lists them: each
     named as :func:`names` names it, with the text of each note, the columns
-    but ``fills``, and its mark.
+    but ``source_columns``, and its mark.
     """
     named = row_names(given, ())
     marks = {'waits', 'taken'}
-    shown = [c for c in given.columns if c not in {NAME, *fills, *marks}]
+    shown = [c for c in given.columns if c not in {NAME, *source_columns, *marks}]
 
     def text(value: Any) -> str:
         return '' if pd.api.types.is_scalar(value) and pd.isna(value) else str(value)

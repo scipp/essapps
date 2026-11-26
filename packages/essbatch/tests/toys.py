@@ -255,8 +255,8 @@ def samples(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=[KEY, 'sample']).set_index(KEY)
 
 
-PAIRS = RowSource(pair, fills=('sample', 'transmission'))
-SAMPLES = RowSource(samples, fills=('sample',))
+PAIRS = RowSource(pair, source_columns=('sample', 'transmission'))
+SAMPLES = RowSource(samples, source_columns=('sample',))
 SOURCES = {'pairs': PAIRS}
 STAGED_NAMES = frozenset({STAGED.name})
 """The specs whose batches run through a stage."""

@@ -57,8 +57,8 @@ def fits(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> bool:
 
 def _lacked(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> list[str]:
     """The parameters that ``source`` fills and ``spec`` lacks."""
-    fills = () if source is None else source.fills
-    return [f for f in fills if f not in spec.params.model_fields]
+    source_columns = () if source is None else source.source_columns
+    return [f for f in source_columns if f not in spec.params.model_fields]
 
 
 def not_registered(name: str, registered: Iterable[str]) -> str:
@@ -209,7 +209,7 @@ class Intake:
         """
         found = self._source(source)
         given = rows_of(self.manager.client, found)
-        waits = ~filled(given, found.fills)
+        waits = ~filled(given, found.source_columns)
         arrived = given[~waits]
         taken = arrived.index if choose is None else choose(arrived).index
         return given.assign(waits=waits, taken=given.index.isin(taken))
@@ -233,7 +233,7 @@ class Intake:
         its ``Batch``. The source is listed once::
 
             given = rows_of(client, source)
-            arrived = given[filled]          # a value in each of source.fills
+            arrived = given[filled]          # a value in each of source.source_columns
             rows = arrived if choose is None else choose(arrived)
             considered = arrived.index       # the rows taken and those left out
 
@@ -284,7 +284,7 @@ class Intake:
                 f'source {source} fills'
             )
         given = rows_of(self.manager.client, found)
-        arrived = given[filled(given, found.fills)]
+        arrived = given[filled(given, found.source_columns)]
         rows = arrived if choose is None else choose(arrived)
         _check_chosen(rows, arrived)
         before = self.following
@@ -292,7 +292,7 @@ class Intake:
             spec,
             title=title,
             rows=rows,
-            fills=found.fills,
+            source_columns=found.source_columns,
             parameter_columns=parameter_columns,
             description=description,
             settings=settings,
@@ -366,7 +366,7 @@ class Intake:
         """
         The rows that the source of the batch of ``label`` makes now and its
         batch table lacks, with the columns of the source and a boolean column
-        ``waits``, true if a cell of :attr:`~.reduction.Batch.fills` is
+        ``waits``, true if a cell of :attr:`~.reduction.Batch.source_columns` is
         empty. A column of the source named ``waits`` is replaced.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
@@ -379,7 +379,7 @@ class Intake:
         batch = self.manager.batch(label)
         try:
             given = rows_of(self.manager.client, source)
-            waits = ~filled(given, batch.fills)
+            waits = ~filled(given, batch.source_columns)
         except ValueError as error:  # as step says it
             raise ValueError(
                 f'the source {made.source}: {error_text(error)}'

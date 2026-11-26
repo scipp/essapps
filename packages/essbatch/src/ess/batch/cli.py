@@ -467,10 +467,10 @@ def _template(given: _Context) -> str:
 def _row_sources(given: _Context) -> pd.DataFrame:
     """A row per row source: its name, what it fills, and its description."""
     sources = [
-        [name, _names(given, source.fills), source.description]
+        [name, _names(given, source.source_columns), source.description]
         for name, source in given.sources.items()
     ]
-    return pd.DataFrame(sources, columns=['name', 'fills', 'description'])
+    return pd.DataFrame(sources, columns=['name', 'source_columns', 'description'])
 
 
 def _rows(given: _Context) -> pd.DataFrame:

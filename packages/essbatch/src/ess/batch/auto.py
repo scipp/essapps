@@ -36,7 +36,7 @@ class SourceError(ValueError):
 def added(
     table: pd.DataFrame,
     given: pd.DataFrame,
-    fills: Collection[str],
+    source_columns: Collection[str],
     considered: Collection[str],
 ) -> tuple[pd.DataFrame, pd.Index]:
     """
@@ -44,11 +44,11 @@ def added(
     and the keys of the rows that wait.
 
     A row is added if its key is neither considered nor in ``table`` and it
-    is filled: it has a value in each of ``fills``. A row with such a key
+    is filled: it has a value in each of ``source_columns``. A row with such a key
     that is not filled waits.
     """
     is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
-    is_ready = filled(given, fills)
+    is_ready = filled(given, source_columns)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     return new, given.index[is_new & ~is_ready]
 
@@ -110,7 +110,7 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     table = batch.frame()
     try:
         given = rows_of(batch.client, source)
-        new, waiting = added(table, given, batch.fills, considered)
+        new, waiting = added(table, given, batch.source_columns, considered)
         if len(new):
             batch.put(pd.concat([table, new]))
     except ValueError as error:

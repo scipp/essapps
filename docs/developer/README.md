@@ -303,7 +303,7 @@ def transmission_runs(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=['key', 'run']).set_index('key')
 
 manager = BatchManager(client, definitions=FolderDefinitions(folder))
-intake = Intake(manager, sources={'transmission-runs': RowSource(transmission_runs, fills=('run',))})
+intake = Intake(manager, sources={'transmission-runs': RowSource(transmission_runs, source_columns=('run',))})
 intake.create('transmission', title='Transmissions', source='transmission-runs',
               follow=True)
 intake.step()         # called by a timer of the application

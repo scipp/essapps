@@ -29,7 +29,7 @@ To do the third, a batch has to know who wrote each cell. To do the first withou
 def step(batch, source, considered):
     given = rows_of(batch.client, source)                  # every row the source makes from the files now
     table = batch.frame()
-    filled = list(batch.fills)                             # source.fills as at making; each is a column of the table
+    filled = list(batch.source_columns)                             # source.source_columns as at making; each is a column of the table
     is_new = ~given.index.isin(considered) & ~given.index.isin(table.index)
     is_ready = given[filled].notna().all(axis=1)
     new = given[is_new & is_ready].reindex(columns=table.columns)
@@ -71,7 +71,7 @@ What removes a bad run from the later rows is a correction of the run, which the
 
 ### A row waits until the source has filled it
 
-A source says which columns it fills (`RowSource.fills`, such as `sample` and `sample_transmission`), and a batch made from it keeps them as `batch.fills`. A row is added once it has a value in each of `batch.fills`. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
+A source says which columns it fills (`RowSource.source_columns`, such as `sample` and `sample_transmission`), and a batch made from it keeps them as `batch.source_columns`. A row is added once it has a value in each of `batch.source_columns`. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
 
 - A sample run measured before its transmission run is added when the transmission run is listed.
 - A row is added whatever its other columns hold. A column that the source does not fill is empty in a new row, and the row is incomplete if the template needs it.
@@ -89,7 +89,7 @@ intake.create('loki-iofq', title='Afternoon', source='sample-runs',
 
 # in create:
 given = rows_of(client, source)                  # one listing
-arrived = given[filled]                          # the rows that have a value in each of source.fills
+arrived = given[filled]                          # the rows that have a value in each of source.source_columns
 table = arrived if choose is None else choose(arrived)
 considered = arrived.index                       # the rows taken and the rows left out
 ```
@@ -181,7 +181,7 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 
 ## Consequences
 
-- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `RowSource.fills` stays, with a second use: it says when a row is filled.
+- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `RowSource.source_columns` stays, with a second use: it says when a row is filled.
 - The rule of a step is "ready and without a record". `RowState.changed_by_hand`, the columns `at` of `Automatic`, and the exception for cells set by hand go.
 - A row that only waits is not in the table. The page says how many rows wait, and a person can add them.
 - A transmission run measured again reaches no earlier row, and a correction of a run changes no row that the table has.

@@ -71,10 +71,10 @@ class RowSource:
     ----------
     rows:
         Makes the rows of the source from the files.
-    fills:
+    source_columns:
         The columns that ``rows`` fills, each named as a parameter of the
         specs it fits (:func:`~.intake.fits`). A batch made from the source
-        keeps them as parameter columns (:attr:`~.reduction.Batch.fills`),
+        keeps them as parameter columns (:attr:`~.reduction.Batch.source_columns`),
         and Follow adds a row once it has a value in each.
     selector:
         The files that ``rows`` is given; raw files if not given.
@@ -85,7 +85,7 @@ class RowSource:
     """
 
     rows: RowFunction
-    fills: tuple[str, ...]
+    source_columns: tuple[str, ...]
     selector: Selector | None = None
     description: str = ''
 
@@ -93,7 +93,7 @@ class RowSource:
 def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     """
     The rows that ``source`` makes from the files of ``client`` now, with an
-    empty column for each of :attr:`RowSource.fills` that it lacks, so that a
+    empty column for each of :attr:`RowSource.source_columns` that it lacks, so that a
     batch made from it has its columns also when no file is listed yet.
 
     Raises ``ValueError`` for a key that is not text, empty, or given twice,
@@ -102,7 +102,7 @@ def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     frame = source.rows(_file_infos(client, source.selector))
     empty = {
         c: pd.Series(pd.NA, index=frame.index, dtype='string')
-        for c in source.fills
+        for c in source.source_columns
         if c not in frame.columns
     }
     # Every column a note: the source knows no spec.
