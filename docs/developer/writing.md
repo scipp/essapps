@@ -17,7 +17,7 @@ Take the first row that fits. Prose is the last resort.
 | the parts of a tuple | a dataclass or `NamedTuple` | `acc.steps.pop()[1]` → a named field |
 | the allowed values of a string | `Literal` or an enum | the eight statuses of a row |
 | "`None` means not compared" | a type of its own, or two functions | — |
-| a precondition ("lock held", "not empty") | one stated convention, a name suffix, or an `assert` | 46 docstrings say "lock held" |
+| a precondition ("lock held", "not empty") | one stated convention, a name suffix, or an `assert` | 46 docstrings said "lock held" |
 | a consequence of a rule ("So a removed row stays away") | a test whose name is that sentence | `test_a_row_that_a_person_removes_stays_away` |
 | what went wrong and what to do | the error message | — |
 | why it is built this way, what was rejected | an ADR, linked from the module | — |
@@ -73,7 +73,7 @@ A guide section that is a copy of a module docstring, of `--help` or of an ADR i
 |---|---|
 | the function *gives* | returns |
 | the function *takes* | accepts; has a parameter |
-| the row *reads* `earlier` | has status `earlier` |
+| the row *reads* `settings changed` | has status `settings changed` |
 | the page / the table *says* | shows; contains; states |
 | the route *answers* | returns |
 | a request *writes* `file(run=611)` | specifies |
@@ -90,13 +90,13 @@ One idea per sentence. A first sentence has at most 25 words. Then check for the
 
 | Pattern | Before | After |
 |---|---|---|
-| chain of "of" and "that/whose" | "the rows of the source whose keys are not considered" | name it or use code: "new rows: `key not in considered`" |
+| chain of "of" and "that/whose" | "the rows of the source whose keys are not considered" | name it or use code: "new rows: `key not in seen_keys`" |
 | ellipsis | "So is reading the latest state already added" | repeat subject and verb |
 | negative as a noun | "parameters that are no column" | "parameters without a column" |
 | content in parentheses | "(`batch.empty()`, which `batch.cells()` and so the state read)" | its own sentence, or delete |
 | "but" for "except", "so" for "this way" | "each model in it, but a reference, as a dict" | "each model except a reference, as a dict" |
 | rule, then a clause that reverses it | "A role is never refused … At a file of another kind, a role is checked" | state the scope first; the exception gets its own sentence |
-| a function name as grammar | "`set_table` a frame with a column" | "call `batch.set_table(frame)`" |
+| a function name as grammar | "`set_table` a frame with a column" | "call `batch.set_table(table)`" |
 | abstract subject | "A refused reduce makes no batch" | "If `reduce` fails, no batch is created" |
 
 ## 5. Shape

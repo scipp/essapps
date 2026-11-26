@@ -13,7 +13,7 @@ A record under the batch's label, with a row's key as its member, is that row's 
 It may come from any submitter or any batch.
 A step reduces only the ready rows without a result.
 A row with a result, also a failed or cancelled one, is left to a person.
-So two batches on one label share their results: what one reduces, the other does not.
+So two `Batch` objects on one label, such as two made in code, share their results: what one reduces, the other does not.
 
 ## What survives a failure
 

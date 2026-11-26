@@ -59,6 +59,9 @@ A push specifies rows as a request specifies them in that table: a group as a mo
 A push may reference a pending record, and does not wait for it.
 `client.accumulator` and `push` return once logged.
 The workspace creates the driver and adds each push later, once the records it references have completed.
+The `Accumulator` class of sciline and of `StreamProcessor` holds one key and is part of a driver, not an accumulator in this sense.
+Structure below a row, such as detector banks, belongs to the driver ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)).
+The framework cannot tell a bank index from a per-run value, so nothing checks this rule.
 
 **Distinct rows.** A push raises for a row that its table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared as the record stores them: a value written inline by its JSON form, a file by its identity, and a reference by record, output, and key.

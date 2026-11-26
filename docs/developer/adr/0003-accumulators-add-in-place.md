@@ -48,4 +48,5 @@ A failed push stops the accumulator, since skipping it would make state n differ
 - A slow read delays the next addition, not the controller's `push` call.
 - A fit or an export of a growing sum either freezes the accumulator, which ends accumulation, or submits its plain request (`client.provenance(acc).request`), which reduces every run again.
 - A failure to add reaches the controller at its next push, read, or freeze.
+- The first read or freeze of each state builds the state's plain request, in time proportional to the rows pushed so far. A read after each of N pushes costs time that grows as N².
 - A binding must not return an output that shares memory with a value it receives ([README, Components](../README.md#components)).

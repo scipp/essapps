@@ -32,11 +32,11 @@ An instrument's specs and bindings change when its users or its workflow package
 
 - `essspec` (`ess.spec`) holds everything a workflow author writes against: the spec vocabulary, the binding protocol, and the bindings. It needs only pydantic, with sciline and scipp behind extras.
 - `essapps` (`ess.apps`) holds what notebooks and apps use: the client, the workspace, files, and fakes for tests. Its subpackages behind extras, such as `ess.apps.panel`, are released with it.
-- `essinstruments` (`ess.instruments`) holds the specs and bindings of each instrument, released on its own schedule, with each instrument's workflow package behind an extra such as `[loki]`.
+- `essinstruments` (`ess.instruments`) holds the specs and bindings of each instrument, released on its own schedule, with each instrument's workflow package behind an extra such as `[loki]`. Specs and bindings are separate modules, so that a spec may move into its workflow package without its binding, and a type checker checks the binding against the spec.
 - An application that science users run is a distribution of its own ([ADR 0014](0014-applications-for-science-users-are-distributions-of-their-own.md)).
-- Names follow the ess monorepo: distribution `essX`, package `ess.X`.
-- `essapps` finds bindings through the entry-point group `ess.apps.workflows`, so a distribution registers its workflows without importing the framework. This is not built yet ([#155](https://github.com/scipp/essapps/issues/155)): `essbatch` accepts the bindings with `-b module:BINDINGS`.
-- GUI code has one subpackage per toolkit, and no toolkit-independent GUI package.
+- Names follow the ess monorepo: distribution `essX`, package `ess.X`. A second distribution cannot install into a regular package such as `ess.apps`, and a namespace package could not export `local`, so a subpackage such as `ess.apps.panel` is part of its parent's distribution.
+- `essapps` finds bindings through the entry-point group `ess.apps.workflows`, so a distribution registers its workflows without importing the framework. An entry whose extra is not installed is skipped. Two entries for one spec name and version fail the load, naming both, since picking one would leave records ambiguous about what ran.
+- GUI code has one subpackage per toolkit, and no toolkit-independent GUI package. An instrument's app goes with its specs: in `essinstruments` behind an extra such as `[loki-app]`, and with them into a `gui` extra of the workflow package.
 
 ## Alternatives considered
 
