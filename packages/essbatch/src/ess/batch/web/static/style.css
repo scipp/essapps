@@ -419,7 +419,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .add-form { display: flex; gap: 4px; }
 .add-form input { width: 220px; }
 
-/* The list of batches: a plain table, styled as the grids */
+/* The lists of batches and of workspaces: plain tables, styled as the grids */
 
 .list { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
 .list table { width: 100%; border-collapse: collapse; }
@@ -437,9 +437,9 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .list a:hover, .batch-links a:hover { text-decoration: underline; }
 .list td small { margin-left: 8px; }
 .list td .pill { margin: 0 4px 2px 0; }
-.list tr.batch { cursor: pointer; }
-.list tr.batch:not([aria-current]):hover { background: #f5f8fc; }
-.list tr.batch .text { cursor: text; }
+.list tr.item { cursor: pointer; }
+.list tr.item:not([aria-current]):hover { background: #f5f8fc; }
+.list tr.item .text { cursor: text; }
 .list tr[aria-current="page"] { background: var(--accent-soft); }
 .list tr[aria-current="page"] a { font-weight: 600; }
 .list .follows { color: var(--done); font-weight: 600; }

@@ -170,7 +170,7 @@ The page without a batch polls no state; it reloads the list of batches with eac
 
 ## The browser
 
-`static/` holds the page as ES modules, with no build step: `app.js`, `tables.js` (Tabulator grids), `form.js`, `dom.js`.
+`static/` holds the page as ES modules, with no build step: `app.js`, `tables.js` (Tabulator grids), `form.js`, `list.js` (the row of a list and the fields Title and Description), `dom.js`.
 `vendor.sh` fetches Tabulator and Plotly into `static/vendor/`.
 
 The document loads once.
