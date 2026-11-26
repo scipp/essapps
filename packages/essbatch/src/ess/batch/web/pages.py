@@ -34,8 +34,9 @@ before answers :class:`~.refusals.Missing` from then on.
 step of it (:meth:`~ess.batch.Intake.step`), with or without a
 page open, plus what the page shows of the step
 (:class:`~.last_step.LastStep`): why rows were refused, how many rows wait,
-and what the step raised; then the page of the batch that follows shows
-what the step changed.
+and what the step raised; then the page of the batch that follows, if it
+is open, shows what the step changed, and otherwise the files are listed
+again, so that every page sees the files that arrived at its next poll.
 :func:`~.api.create_app` owns the timer that calls it, every
 :attr:`Pages.interval` seconds.
 """
@@ -46,16 +47,20 @@ import threading
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
+
+from ess.apps.fields import Fields
+from ess.apps.listing import Listing
+from ess.spec import WorkflowSpec
 
 from ..corrections import CorrectedFiles
 from ..intake import Intake, fits, step_failure
 from ..source import Range, RowSource
 from ..table import read_table
 from ..writing import Writing
-from . import view
+from . import forms, view
 from .last_step import LastStep
 from .models import (
     BatchCounts,
@@ -64,8 +69,10 @@ from .models import (
     Made,
     NewBatch,
     Notice,
+    Param,
     SourceChoice,
     SourceRows,
+    SpecChoice,
 )
 from .page import Page
 from .refusals import Missing, Problem, kept, refused, why
@@ -276,7 +283,7 @@ class Pages:
                     name=name,
                     fills=list(fills),
                     specs=[
-                        view.spec_choice(spec, fills, listing)
+                        _spec_choice(spec, fills, listing)
                         for spec in specs
                         if fits(spec, source)
                     ],
@@ -418,3 +425,19 @@ class Pages:
                 rows[label] = dict(Counter(s.text for s in states.values()))
                 files[label] = sorted(ref.file for ref in named)
             return BatchCounts(rows=rows, files=files, failed=failed)
+
+
+def _spec_choice(
+    spec: WorkflowSpec[Any, Any], fills: Sequence[str], listing: Listing
+) -> SpecChoice:
+    """
+    ``spec`` as a choice of the source that fills ``fills``: those first,
+    then each other parameter whose cell the page edits.
+    """
+    form = Fields(spec.params, listing)
+    named = [*fills, *(n for n in forms.edited(form) if n not in fills)]
+    return SpecChoice(
+        name=spec.name,
+        title=spec.title,
+        params=[Param(name=n, title=form.titles[n]) for n in named],
+    )

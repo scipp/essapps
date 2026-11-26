@@ -115,7 +115,8 @@ not follow has no action of Follow. While a batch follows, :meth:`Pages.tick
 source that are new and filled, and reduces the rows that
 :func:`~ess.batch.not_reduced` gives, the rows that are ready and have
 no result, under the lock of all pages, with the batch's settings, whatever
-the form holds; then :meth:`Page.stepped` shows what the step changed. The
+the form holds; then :meth:`Page.stepped` shows what the step changed, if
+the page is open; a page made later shows the batch as it is then. The
 page of the batch that follows says what the last step raised, why rows were
 not reduced, at each such row, whose status stays that of its state, and how
 many rows of the source wait to be filled; the next step runs all the same. A

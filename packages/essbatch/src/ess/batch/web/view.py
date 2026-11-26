@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-How what the batch layer gives reads on a page, as the models of
+How the state of the page of one batch reads, as the models of
 :mod:`.models`, and how a cell sent back reads: functions of their arguments
-only. :class:`~.page.Page` and :class:`~.pages.Pages` gather the arguments
-and do the actions.
+only. :class:`~.page.Page` gathers the arguments and does the actions. The
+rows of a source in a dialog (:func:`listed`) and a cell (:func:`read`,
+:func:`text`) read the same in the list of batches and the Runs view.
 
 A parameter has one title wherever the page names it, in a column, a field
 of the settings or a message (:func:`titles`).
@@ -23,7 +24,7 @@ from ess.apps.errors import FieldError
 from ess.apps.fields import UNSET, Fields
 from ess.apps.listing import Listing
 from ess.apps.records import Status
-from ess.spec import FileRef, WorkflowSpec, field_types
+from ess.spec import WorkflowSpec, field_types
 
 from ..definition import Form
 from ..state import RowState, left_to_reduce, ready
@@ -36,20 +37,14 @@ from .models import (
     Format,
     Output,
     OutputShown,
-    Param,
     Refused,
-    RunCell,
-    RunRow,
     SourceRow,
     SourceRows,
-    SpecChoice,
 )
 from .refusals import Problem, say, why
 
 if TYPE_CHECKING:
     from ess.apps.writers import Writer
-
-    from ..corrections import CorrectedFiles
 
 ORDER = (
     'ready',
@@ -155,7 +150,7 @@ def settings_problem(
     """
     told = [said(errors, titles)] if errors else []
     if unfit:
-        told.insert(0, f'Settings that this form cannot show: {join(unfit)}')
+        told.insert(0, f'Settings that this form cannot show: {_join(unfit)}')
     return '; '.join(told) or None
 
 
@@ -234,7 +229,7 @@ def _outdated(state: RowState, titles: Mapping[str, str]) -> str:
 
 def _changed(state: RowState, titles: Mapping[str, str]) -> str:
     """The titles of the parameters that changed, in words."""
-    return join([t for n, t in titles.items() if n in (state.changed or ())])
+    return _join([t for n, t in titles.items() if n in (state.changed or ())])
 
 
 def result(state: RowState) -> str | None:
@@ -339,42 +334,6 @@ def output(
     )
 
 
-def run(ref: FileRef, marks: Fields, files: CorrectedFiles, listing: Listing) -> RunRow:
-    """
-    The run of the file ``ref`` in the Runs view: at each field of ``marks``,
-    its value now, whether a person corrected it, and what the file says.
-    """
-    metadata = files.metadata(ref)
-    original = files.source.metadata(ref)
-    corrected = files.corrections(ref)
-    cells = {
-        name: RunCell(
-            value=forms.cell(field, metadata.get(name, UNSET)),
-            text=text(listing, metadata.get(name, UNSET)),
-            edited=name in corrected,
-            original=text(listing, original.get(name, UNSET)),
-        )
-        for name, field in marks.fields.items()
-    }
-    return RunRow(key=ref.file, file=listing.file_label(ref), cells=cells)
-
-
-def spec_choice(
-    spec: WorkflowSpec[Any, Any], fills: Sequence[str], listing: Listing
-) -> SpecChoice:
-    """
-    ``spec`` as a choice of the source that fills ``fills``: those first,
-    then each other parameter whose cell the page edits.
-    """
-    form = Fields(spec.params, listing)
-    named = [*fills, *(n for n in forms.edited(form) if n not in fills)]
-    return SpecChoice(
-        name=spec.name,
-        title=spec.title,
-        params=[Param(name=n, title=form.titles[n]) for n in named],
-    )
-
-
-def join(words: Sequence[str]) -> str:
+def _join(words: Sequence[str]) -> str:
     """``['a', 'b', 'c']`` as ``'a, b and c'``."""
     return ' and '.join([', '.join(words[:-1]), words[-1]] if len(words) > 1 else words)

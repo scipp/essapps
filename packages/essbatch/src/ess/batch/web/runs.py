@@ -37,7 +37,7 @@ from ess.spec import File, FileRef
 
 from ..corrections import CorrectedFiles
 from . import forms, models, view
-from .models import CellEdit, Cells, Column, Notice
+from .models import CellEdit, Cells, Column, Notice, RunCell, RunRow
 from .refusals import Problem, kept
 
 
@@ -179,8 +179,7 @@ class Runs:
                     for n, f in marks.fields.items()
                 ],
                 rows=[
-                    view.run(ref, marks, corrected, listing)
-                    for ref in listing.files_listed
+                    _run(ref, marks, corrected, listing) for ref in listing.files_listed
                 ],
                 problem=listing.failure,
             )
@@ -224,3 +223,25 @@ class Runs:
         self.list_again()
         if (error := self._listing.error) is not None:
             raise Problem(f'Corrected, but the runs cannot be listed: {error}')
+
+
+def _run(
+    ref: FileRef, marks: Fields, files: CorrectedFiles, listing: Listing
+) -> RunRow:
+    """
+    The run of the file ``ref`` in the Runs view: at each field of ``marks``,
+    its value now, whether a person corrected it, and what the file says.
+    """
+    metadata = files.metadata(ref)
+    original = files.source.metadata(ref)
+    corrected = files.corrections(ref)
+    cells = {
+        name: RunCell(
+            value=forms.cell(field, metadata.get(name, UNSET)),
+            text=view.text(listing, metadata.get(name, UNSET)),
+            edited=name in corrected,
+            original=view.text(listing, original.get(name, UNSET)),
+        )
+        for name, field in marks.fields.items()
+    }
+    return RunRow(key=ref.file, file=listing.file_label(ref), cells=cells)
