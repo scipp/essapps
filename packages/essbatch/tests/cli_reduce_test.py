@@ -683,8 +683,8 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
             [*SOURCES, 'reduce', '--source', 'p', '-l', 'x'],
             'the source p is not registered; registered: pairs, broken',
         ),
-        (['rows', 'pairs'], 'rows needs -s/--sources'),
-        (['reduce', '--source', 'pairs', '-l', 'x'], '--source needs -s/--sources'),
+        (['rows', 'pairs'], 'rows needs -s/--row-sources'),
+        (['reduce', '--source', 'pairs', '-l', 'x'], '--source needs -s/--row-sources'),
     ],
 )
 def test_main_refuses_a_wrong_name_in_a_line_before_the_folder_is_opened(

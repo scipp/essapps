@@ -42,7 +42,7 @@ def step(batch, source, seen_keys):
 ### What is kept
 
 ```
-definitions/labels/20261118-130204/source.json     {"source": "sample-runs", "seen_keys": ["60337", "60338", "60339"], "follows": true}
+definitions/labels/20261118-130204/source.json     {"row_source": "sample-runs", "seen_keys": ["60337", "60338", "60339"], "follows": true}
 ```
 
 - A key is *seen* by a batch once a row of that key was put into the batch from the source, or was complete and left out when the batch was made.

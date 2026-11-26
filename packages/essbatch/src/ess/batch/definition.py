@@ -48,7 +48,8 @@ The plain data of each entry, as its :class:`Entry` below writes and reads it
     header          {'title': 'Sample runs', 'description': ''}
     settings        {'spec': ..., 'params': {...}, 'blanks': ['sample']}
     table           {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
-    source          {'source': 'sample-runs', 'seen_keys': ['60337', '60338'],
+    source          {'row_source': 'sample-runs',
+                     'seen_keys': ['60337', '60338'],
                      'follows': True}
     output_options  {'format': 'scipp-hdf5', 'outputs': ['iofq'],
                      'name': '{title} {name}', ...}
@@ -302,7 +303,7 @@ class Header:
 
 
 @dataclass(frozen=True)
-class FromSource:
+class SourceEntry:
     """
     What a batch made from a row source keeps of it: the name of the source;
     the keys of its rows that the batch has seen, those put into the
@@ -313,7 +314,7 @@ class FromSource:
 
     __pydantic_config__ = ConfigDict(extra='forbid')
 
-    source: str
+    row_source: str
     seen_keys: frozenset[str]
     follows: bool
 
@@ -446,10 +447,10 @@ def template_of(data: Any) -> Template:
     return _checked(_TEMPLATE, data)
 
 
-def _source_data(made: FromSource) -> dict[str, Any]:
+def _source_data(made: SourceEntry) -> dict[str, Any]:
     """What a batch keeps of its source, as plain data; the keys sorted."""
     return {
-        'source': made.source,
+        'row_source': made.row_source,
         'seen_keys': sorted(made.seen_keys),
         'follows': made.follows,
     }
@@ -459,7 +460,7 @@ HEADER = _adapted('header', Header)
 SETTINGS = Entry('settings', template_data, template_of)
 TABLE = Entry('table', data_of, table_of)
 """Read as the rows are kept; :meth:`.manager.BatchManager.batch` types them."""
-SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(FromSource)))
+SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(SourceEntry)))
 OUTPUT_OPTIONS = _adapted('output_options', OutputOptions)
 PUBLISH = _adapted('publish', Publishing)
 

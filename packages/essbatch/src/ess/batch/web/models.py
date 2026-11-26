@@ -181,7 +181,7 @@ class Following(BaseModel):
     Whether the batch of the page follows its source, ``on``: a step every
     ``interval`` seconds adds the rows of the source that are new and complete,
     and reduces the rows not reduced yet: ready and without a result.
-    ``source`` names the source that the batch was made from, ``None`` if it
+    ``row_source`` names the source that the batch was made from, ``None`` if it
     was made without one, so that it offers no rows of a source.
     While this batch follows, ``failure`` says why the last step raised, and
     ``incomplete`` counts the rows of the source that the last step did not add
@@ -189,7 +189,7 @@ class Following(BaseModel):
     """
 
     on: bool
-    source: str | None
+    row_source: str | None
     interval: float
     failure: str | None
     incomplete: int = 0

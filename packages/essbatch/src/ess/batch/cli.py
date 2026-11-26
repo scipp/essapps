@@ -997,7 +997,7 @@ def _template_arguments(command: argparse.ArgumentParser) -> None:
 
 def _rows_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
-        'source', metavar='NAME', help='the name of a row source in -s/--sources'
+        'source', metavar='NAME', help='the name of a row source in -s/--row-sources'
     )
 
 
@@ -1028,7 +1028,7 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
         '--source',
         metavar='NAME',
         help='make a new batch of the rows of the row source NAME in '
-        '-s/--sources that are complete now; not with a table file',
+        '-s/--row-sources that are complete now; not with a table file',
     )
     command.add_argument(
         '--first', metavar='KEY', help='with --source, the rows from the row KEY on'
@@ -1142,8 +1142,8 @@ def _follow_arguments(command: argparse.ArgumentParser) -> None:
 
 
 def _with_sources(name: str) -> Callable[[argparse.Namespace], str | None]:
-    """A check that -s/--sources is given to the command ``name``."""
-    return lambda args: None if args.sources else f'{name} needs -s/--sources'
+    """A check that -s/--row-sources is given to the command ``name``."""
+    return lambda args: None if args.row_sources else f'{name} needs -s/--row-sources'
 
 
 def _one_of(first: str, second: str) -> Callable[[argparse.Namespace], str | None]:
@@ -1170,8 +1170,8 @@ def _reduce_check(args: argparse.Namespace) -> str | None:
         return 'give a table file or --source, not both'
     if args.source is None and (args.first or args.last or args.later):
         return '--first, --last and --later pick rows of --source'
-    if args.source is not None and not args.sources:
-        return '--source needs -s/--sources'
+    if args.source is not None and not args.row_sources:
+        return '--source needs -s/--row-sources'
     return None
 
 
@@ -1228,7 +1228,7 @@ _COMMANDS = {
     ),
     'sources': _Command(
         _row_sources,
-        description='List the row sources of -s/--sources by name, with the '
+        description='List the row sources of -s/--row-sources by name, with the '
         'parameters that each fills for each row, and what a row is.',
         check=_with_sources('sources'),
         folder=False,
@@ -1372,7 +1372,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '-s',
-        '--sources',
+        '--row-sources',
         metavar='MODULE:NAME',
         help='the row sources by name, for sources, rows, available, add, '
         'follow, reduce --source and template',
@@ -1497,7 +1497,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise _UsageError(
                     f'{args.output}: write a file of {", ".join(suffixes)}'
                 )
-        sources = {} if args.sources is None else _sources(args.sources)
+        sources = {} if args.row_sources is None else _sources(args.row_sources)
         writers = {} if args.writers is None else _writers(args.writers)
         if (wrong := command.check(args)) is not None:
             raise _UsageError(wrong)

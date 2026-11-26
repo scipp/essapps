@@ -122,7 +122,7 @@ The batch layer refuses what is asked with `ValueError`, a label that no batch h
 | `definitions/labels/<label>/header.json` | `{"title": ..., "description": ...}` | manager |
 | `definitions/labels/<label>/settings.json` | a template: the spec; the settings in `params`, also those of a parameter that has a column; `batch.source_columns` as its `blanks` | `Batch` |
 | `definitions/labels/<label>/table.json` | the batch table: `{"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}]}` | `Batch.set_table` |
-| `definitions/labels/<label>/source.json` | `{"source": "sample-runs", "seen_keys": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
+| `definitions/labels/<label>/source.json` | `{"row_source": "sample-runs", "seen_keys": ["60337", ...], "follows": true}`; only for a batch made from a source | `Intake` |
 | `definitions/labels/<label>/output_options.json` | `{"format": "nxcansas", "outputs": ["iofq"], "name": "{title} {name}", ...}`; only for a batch whose output options are set (`ess.batch.writing`) | `Writing` |
 | `definitions/labels/<label>/publish.json` | `{"published": [{"key": "60339", "record": ..., "pid": ...}]}`; only for a batch published from (`ess.batch.publish`) | `Publisher` |
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
@@ -147,7 +147,7 @@ A table file is written and read by pandas (`to_csv`, `read_csv`, `to_excel`, `r
 `settings.json` has the form of a template file of the client.
 Its `blanks` are the parameters that the row source of the batch fills (`batch.source_columns`): a template gives a blank no value, and each row must fill it.
 Which parameters have a column is said by the batch table; they are the blanks of `batch.template()`.
-A `source.json` is refused when read unless its fields are `source`, `seen_keys` and `follows`.
+A `source.json` is refused when read unless its fields are `row_source`, `seen_keys` and `follows`.
 
 ## One example followed through
 
@@ -529,7 +529,7 @@ table = arrived if choose is None else choose(arrived)
 seen_keys = arrived.index               # the rows taken and those left out
 batch = manager.create(spec, table=table, source_columns=source.source_columns, ...)
 # with follow: "follows": false to the batch that followed
-# then source.json: the source, seen, and whether it follows
+# then source.json: the row source, seen_keys, and whether it follows
 ```
 
 `Range` refuses an end that is not a key of the rows that arrived (an incomplete row is not one), a first row after the last, and an end with `later=True`.

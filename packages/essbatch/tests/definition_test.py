@@ -29,8 +29,8 @@ from ess.batch.definition import (
     SETTINGS,
     SOURCE,
     TABLE,
-    FromSource,
     Key,
+    SourceEntry,
 )
 from ess.batch.table import KEY, table_of
 from ess.batch.templates import load_template
@@ -370,17 +370,17 @@ def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
 
 def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    made = FromSource('pairs', frozenset({'60340', '0342', '60339'}), follows=True)
+    made = SourceEntry('pairs', frozenset({'60340', '0342', '60339'}), follows=True)
     key = SOURCE.key('a')
 
     store.save(key, SOURCE.dump(made))
 
     assert SOURCE.dump(made)['seen_keys'] == ['0342', '60339', '60340']
     assert store.load(key, SOURCE.read) == made
-    store.save(key, {'source': 'pairs', 'seen_keys': '60339', 'follows': False})
+    store.save(key, {'row_source': 'pairs', 'seen_keys': '60339', 'follows': False})
     with pytest.raises(ValueError, match=r'source\.json: seen_keys: '):
         store.load(key, SOURCE.read)
-    store.save(key, {'source': 'pairs', 'seen_keys': ['60339']})
+    store.save(key, {'row_source': 'pairs', 'seen_keys': ['60339']})
     with pytest.raises(ValueError, match=r'source\.json: follows: Field required'):
         store.load(key, SOURCE.read)
 

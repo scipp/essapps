@@ -432,8 +432,8 @@ def test_a_page_that_does_not_follow_stops_nothing(
     stopped = other.stop_following()
 
     assert (stopped.notice, intake.following) == ('', page.label)
-    assert (stopped.follow.on, stopped.follow.source) == (False, None)
-    assert page.state().follow.source == 'pairs'
+    assert (stopped.follow.on, stopped.follow.row_source) == (False, None)
+    assert page.state().follow.row_source == 'pairs'
 
 
 def option(page: Page, column: str, run: int) -> str:

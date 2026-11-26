@@ -11,7 +11,7 @@ each batch made from a source::
 :meth:`Intake.step` is one step of Follow on the batch that follows::
 
     made = SOURCE.load(definitions, label)                   # source.json
-    done = step(batch(label), sources[made.source], made.seen_keys)
+    done = step(batch(label), sources[made.row_source], made.seen_keys)
     source.json = replace(made, seen_keys=done.seen_keys)  # after table.json
     # if the step raised: made.seen_keys | the keys of the batch table
 
@@ -40,7 +40,7 @@ from ess.spec import WorkflowSpec
 
 from . import auto
 from .auto import SourceError, Step
-from .definition import SOURCE, DefinitionWriteError, FromSource
+from .definition import SOURCE, DefinitionWriteError, SourceEntry
 from .manager import BatchManager
 from .reduction import Batch
 from .source import Range, RowSource, complete, rows_of
@@ -154,7 +154,7 @@ class Intake:
         Raises :class:`~.definition.DefinitionWriteError` if the definitions refuse a
         write; the batch that followed then follows again.
         """
-        self._source(self._made(label).source)
+        self._source(self._made(label).row_source)
         if (before := self.following) == label:
             return
         self._follow_instead(before, lambda: self._write_follows(label, True))
@@ -298,7 +298,7 @@ class Intake:
             settings=settings,
             label=label,
         )
-        made = FromSource(source, frozenset(arrived.index), follows=follow)
+        made = SourceEntry(source, frozenset(arrived.index), follows=follow)
         try:
             self._follow_instead(
                 before if follow else None,
@@ -312,13 +312,13 @@ class Intake:
             self._set_following(batch.label)
         return batch
 
-    def _from(self, label: str) -> FromSource | None:
+    def _from(self, label: str) -> SourceEntry | None:
         """The ``source.json`` of ``label``, or ``None``; ``KeyError`` if no batch."""
         if label not in self.manager.headers():
             raise KeyError(label)
         return SOURCE.load(self.manager.definitions, label)
 
-    def _made(self, label: str) -> FromSource:
+    def _made(self, label: str) -> SourceEntry:
         """:meth:`_from`, with ``ValueError`` for a batch made without a source."""
         if (made := self._from(label)) is None:
             raise ValueError(f'{label} was not made from a row source')
@@ -331,7 +331,7 @@ class Intake:
         has the label.
         """
         made = self._from(label)
-        return None if made is None else made.source
+        return None if made is None else made.row_source
 
     def step(self) -> Step | None:
         """
@@ -347,11 +347,11 @@ class Intake:
             return None
         made = self._made(label)
         batch = self.manager.batch(label)
-        source = self._source(made.source)
+        source = self._source(made.row_source)
         try:
             done = auto.step(batch, source, made.seen_keys)
         except SourceError as error:  # a defect of the code of the source
-            raise ValueError(f'the source {made.source}: {error}') from error
+            raise ValueError(f'the source {made.row_source}: {error}') from error
         except BaseException:
             with suppress(
                 DefinitionWriteError
@@ -375,14 +375,14 @@ class Intake:
         (:func:`~.source.complete`).
         """
         made = self._made(label)
-        source = self._source(made.source)
+        source = self._source(made.row_source)
         batch = self.manager.batch(label)
         try:
             given = rows_of(self.manager.client, source)
             incomplete = ~complete(given, batch.source_columns)
         except ValueError as error:  # as step says it
             raise ValueError(
-                f'the source {made.source}: {error_text(error)}'
+                f'the source {made.row_source}: {error_text(error)}'
             ) from error
         return given.assign(incomplete=incomplete)[
             ~given.index.isin(batch.table().index)
@@ -399,10 +399,10 @@ class Intake:
         no row of a key, or if its batch table has a row of a key.
         """
         made = self._made(label)
-        given = self.rows_of(made.source)
+        given = self.rows_of(made.row_source)
         keys = list(keys)
         if unknown := [k for k in keys if k not in given.index]:
-            raise ValueError(f'the source {made.source} makes no rows {unknown}')
+            raise ValueError(f'the source {made.row_source} makes no rows {unknown}')
         batch = self.manager.batch(label)
         table = batch.table()
         if held := [k for k in keys if k in table.index]:
@@ -413,7 +413,7 @@ class Intake:
         self._mark_seen(label, made, made.seen_keys | set(keys))
 
     def _mark_seen(
-        self, label: str, made: FromSource, seen_keys: frozenset[str]
+        self, label: str, made: SourceEntry, seen_keys: frozenset[str]
     ) -> None:
         """Keep ``seen_keys`` as those of the source of ``label``, if changed."""
         if seen_keys != made.seen_keys:

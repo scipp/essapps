@@ -514,7 +514,7 @@ def test_a_source_json_that_cannot_be_read_hides_neither_follow_nor_other_batche
     two: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
     two.create('plain', title='C', source='pairs', label='c', follow=True)
-    definitions.save(SOURCE.key('a'), {'source': 'pairs'})
+    definitions.save(SOURCE.key('a'), {'row_source': 'pairs'})
     again = _again(client, definitions)
 
     assert again.following == 'c'

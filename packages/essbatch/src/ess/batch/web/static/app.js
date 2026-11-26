@@ -599,7 +599,7 @@ async function openNewBatch() {
     h('option', {value: none, text: 'none: no rows'}),
   );
   if (view.state) {
-    const at = choices.findIndex((c) => c.name === view.state.follow.source);
+    const at = choices.findIndex((c) => c.name === view.state.follow.row_source);
     form.elements.source.value = at >= 0 ? at : none;
   }
   chooseSource();
@@ -954,7 +954,7 @@ function renderSubmitErrors(errors) {
 // batch follows, "Stop following" and why the last step failed, if it did,
 // else how many rows are incomplete. A batch that does not follow has no Follow control.
 function renderFollow(follow) {
-  $('add-rows-open').hidden = follow.source === null;
+  $('add-rows-open').hidden = follow.row_source === null;
   $('follow-status').hidden = $('stop-follow').hidden = !follow.on;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
