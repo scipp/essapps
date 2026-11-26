@@ -385,6 +385,17 @@ def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> Non
         store.load(key, SOURCE.read)
 
 
+def test_a_source_json_with_another_field_is_refused(folder: Path) -> None:
+    store = FolderDefinitions(folder)
+    key = SOURCE.key('a')
+    data = {'row_source': 'pairs', 'seen_keys': [], 'follows': False}
+
+    store.save(key, {**data, 'considered': ['60339']})
+
+    with pytest.raises(ValueError, match=r'source\.json: considered: '):
+        store.load(key, SOURCE.read)
+
+
 def test_a_folder_gets_the_format_with_its_first_definitions(folder: Path) -> None:
     store = FolderDefinitions(folder)
     store.save(TABLE.key('a'), {})

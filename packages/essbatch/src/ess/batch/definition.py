@@ -1,70 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Where the definition of batches is kept: what a person makes of them, so that a
-batch made again, after a restart or in another process, has it.
+The definitions of the batches of a workspace: what persons make of them,
+stored so that a batch read again after a restart is the same.
 
-The definition is these entries, each with one writer. The settings and the
-batch table are written by its ``Batch``, which the manager makes:
+A :class:`DefinitionStore` stores each entry as plain data under a
+:data:`Key`. Each entry has one writer, which saves it whole at each change.
+The corrections are of files, which all batches share, so they are one entry
+of the workspace. All other entries are of a label (:data:`LABEL_ENTRIES`).
+Each entry is validated when read: data of another shape raises ``ValueError``
+naming the field.
 
-    corrections     metadata of a file set by hand, by file    CorrectedFiles
-    header          title, description                         BatchManager
-    settings        the template: spec, settings, source       Batch.settings
-                    columns
-    table           the batch table                            Batch.set_table
-    source          the row source a batch was made from, the  Intake
-                    keys of it that the batch has seen,
-                    and whether the batch follows
-    output_options  the format of the files that its results   Writing
-                    are written as, and what a person says of
-                    them
-    publish         the records published to the catalogue     Publisher
-
-The corrections are about files, and every batch of a workspace reads the
-files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
-one entry of them. The others are of a label, so removing a label removes
-them all (:data:`LABEL_ENTRIES`), also whether its batch follows. A
-:class:`DefinitionStore`, *the definitions*, keeps each entry as plain data
-under a key::
-
-    ('corrections',)
-    ('labels', label, 'header')
-    ('labels', label, 'settings')
-    ('labels', label, 'table')
-    ('labels', label, 'source')
-    ('labels', label, 'output_options')
-    ('labels', label, 'publish')
-
-and its writer saves it whole at each change. It can forget an entry
-(``delete``) and list the labels that have an entry (``labels``). Only
-:class:`FolderDefinitions` knows that the definitions are files. A batch and a
-file source without definitions keep their entries in memory.
-
-The plain data of each entry, as its :class:`Entry` below writes and reads it
-(:data:`CORRECTIONS` with :func:`corrections_data` and
-:func:`corrections_of`)::
-
-    corrections     {'pid:20.500.12269/abc': {'role': 'sample'}}
-    header          {'title': 'Sample runs', 'description': ''}
-    settings        {'spec': ..., 'params': {...}, 'blanks': ['sample']}
-    table           {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
-    source          {'row_source': 'sample-runs',
-                     'seen_keys': ['60337', '60338'],
-                     'follows': True}
-    output_options  {'format': 'scipp-hdf5', 'outputs': ['iofq'],
-                     'name': '{title} {name}', ...}
-    publish         {'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
-
-The settings are a template in the format of the file that a person saves
-from a page: its params are the settings of the batch, also those at the
-columns, which each row with an empty cell takes; its blanks are the
-parameters that the row source of the batch fills
-(:attr:`~.reduction.Batch.source_columns`), which take no setting and which each row
-must fill. The template that the rows fill has other blanks, all the
-parameter columns of the rows (:meth:`~.reduction.Batch.template`).
-The rows are :func:`~.table.data_of` of the batch table. Each entry is checked when
-read: data of another shape raises ``ValueError`` naming the field, and
-:class:`FolderDefinitions` adds the file.
+The entries, their content and their writers: guide
+``packages/essbatch/docs/batch.md``, "What is kept on disk".
 """
 
 from __future__ import annotations
@@ -101,18 +49,18 @@ CORRECTIONS: Key = ('corrections',)
 
 
 class DefinitionWriteError(OSError):
-    """A :class:`DefinitionStore` could not keep an entry; it holds what it did."""
+    """A :class:`DefinitionStore` could not write or delete an entry."""
 
 
 class DefinitionStore(Protocol):
     """
-    Keeps each entry of the definition as plain data, under its :data:`Key`.
+    Stores each entry of the definitions as plain data, under its :data:`Key`.
 
-    ``save`` takes data that :func:`pydantic_core.to_json` writes, and raises
-    :class:`DefinitionWriteError` if it cannot keep it. ``load`` gives what
-    ``read`` makes of the data in its JSON form, or ``None`` if nothing was
-    saved under the key; a ``ValueError`` of ``read`` is raised naming where
-    the data is kept.
+    ``save`` accepts data that :func:`pydantic_core.to_json` can write, and
+    raises :class:`DefinitionWriteError` if it cannot store it. ``load``
+    returns ``read`` applied to the stored data in its JSON form, or ``None``
+    if nothing is stored under the key. It raises a ``ValueError`` of ``read``
+    with the place of the data added.
     """
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None: ...
@@ -120,20 +68,20 @@ class DefinitionStore(Protocol):
     def save(self, key: Key, data: Any) -> None: ...
 
     def delete(self, key: Key) -> None:
-        """Forget the entry of ``key``; nothing if none is kept."""
+        """Delete the entry of ``key``, if any."""
         ...
 
     def labels(self) -> list[str]:
-        """The labels that have at least one entry kept, sorted."""
+        """The labels with at least one entry, sorted."""
         ...
 
 
 _NAME_MAX = 255
 """The bytes of a file name, on the file systems of Linux and macOS."""
 
-# Moves with every change of what the kept files mean, such as where the source
-# columns of a batch are kept, so that a folder of another format is refused, not read
-# wrong. No folder is migrated.
+# Moves with every change of what the files mean, such as where the source
+# columns of a batch are stored, so that a folder of another format is rejected,
+# not misread. No folder is migrated.
 FORMAT = 2
 """The format of the files of :class:`FolderDefinitions`, in ``format.json``."""
 
@@ -149,30 +97,24 @@ _FORMAT = TypeAdapter(_Format)
 
 class FolderDefinitions:
     """
-    A :class:`DefinitionStore` of JSON files in ``definitions/`` of a
-    workspace's folder (see :mod:`ess.apps.folder`)::
+    A :class:`DefinitionStore` of JSON files in ``definitions/`` of a workspace
+    folder (:mod:`ess.apps.folder`)::
 
         definitions/format.json
         definitions/corrections.json
         definitions/labels/auto%2Fiofq/header.json
-        definitions/labels/auto%2Fiofq/settings.json
         definitions/labels/auto%2Fiofq/table.json
-        definitions/labels/auto%2Fiofq/source.json
 
     Each name of a key is a folder or a file, with ``/``, ``%`` and ``.``
     written as ``%2F``, ``%25`` and ``%2E``, so that no label reaches out of
-    its folder. A name that is too long for a file name so written raises
-    ``ValueError``. A file is written whole: to a temporary file next to it,
-    which then replaces it, so a reader never sees half of one. A temporary
-    file left by a write that was cut off stays, a few bytes, until its entry
-    is deleted: a reader cannot tell it from that of a write of another
-    process that runs.
+    its folder. A file is written to a temporary file next to it, which then
+    replaces it, so a reader never sees half of one. A temporary file left by
+    an interrupted write stays until its entry is deleted, since it cannot be
+    told from that of a write of another process.
 
-    ``format.json`` holds ``{"format": FORMAT}`` (:data:`FORMAT`), written
-    before the first entry of a folder without labels. Made on a folder with
-    labels and no ``format.json``, or another format, it raises
-    ``ValueError``: what the files mean may have changed, and no folder is
-    migrated.
+    ``format.json`` holds :data:`FORMAT`, written before the first entry.
+    Raises ``ValueError`` for a folder with labels and no ``format.json``, or
+    of another format.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -225,9 +167,7 @@ class FolderDefinitions:
         self._write(self.path(key), data)
 
     def _write(self, path: Path, data: Any) -> None:
-        """
-        Write ``data`` to ``path`` whole; :class:`DefinitionWriteError` if refused.
-        """
+        """Write ``data`` to ``path`` whole."""
         content = to_json(data, indent=1)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,7 +194,7 @@ class FolderDefinitions:
         except OSError as error:
             raise DefinitionWriteError(f'{path}: {error.strerror or error}') from error
         if path.parent != self._root:
-            with suppress(OSError):  # not empty: another part is kept
+            with suppress(OSError):  # not empty: the label has another entry
                 path.parent.rmdir()
 
     def labels(self) -> list[str]:
@@ -269,7 +209,7 @@ class FolderDefinitions:
 
 
 def _checked[T](adapter: TypeAdapter[T], data: Any) -> T:
-    """``data`` as ``adapter`` validates it; ``ValueError`` names each field."""
+    """``data`` validated by ``adapter``; the ``ValueError`` names each bad field."""
     try:
         return adapter.validate_python(data)
     except ValidationError as error:
@@ -282,17 +222,7 @@ def _checked[T](adapter: TypeAdapter[T], data: Any) -> T:
 
 @dataclass(frozen=True)
 class Header:
-    """
-    What a batch is called. Raises ``ValueError`` for a title that is empty
-    or only spaces.
-
-    Parameters
-    ----------
-    title:
-        What the batch is called.
-    description:
-        What a person says of the batch.
-    """
+    """The title and description of a batch. ``ValueError`` for an empty title."""
 
     title: str
     description: str = ''
@@ -305,11 +235,10 @@ class Header:
 @dataclass(frozen=True)
 class SourceEntry:
     """
-    What a batch made from a row source keeps of it: the name of the source;
-    the keys of its rows that the batch has seen, those put into the
-    batch from the source or left out when the batch was made; and whether
-    the batch follows its source. Data with other fields, or without one of
-    these, is refused when read.
+    What a batch made from a row source stores of it, in ``source.json``.
+
+    ``seen_keys`` are the keys of the rows of the source that the batch has
+    seen (guide, "Follow").
     """
 
     __pydantic_config__ = ConfigDict(extra='forbid')
@@ -321,18 +250,13 @@ class SourceEntry:
 
 class OutputOptions(BaseModel, frozen=True):
     """
-    How the results of a batch are written, once for all its rows, and what a
-    person says of them (see :mod:`.writing`).
+    How the results of a batch are written (:mod:`.writing`).
 
-    ``format`` is the name of the writer (:class:`ess.apps.writers.Writer`).
-    ``outputs`` are the outputs of the spec that a writer which writes the
-    outputs chosen writes; a writer of fixed outputs ignores them. ``name``
-    names the result of a row; it may hold ``{title}``, the title of the
-    batch, ``{name}``, the name of the row, and ``{key}``, its key, each
-    without a format. Another field in braces, or a name of only spaces,
-    raises ``ValueError``. The other fields are those of
-    :class:`ess.apps.writers.DatasetMetadata`. It is also the body of
-    ``POST api/output/form`` of the page.
+    ``format`` names a writer (:class:`ess.apps.writers.Writer`). ``outputs``
+    are the outputs of the spec to write; a writer of fixed outputs ignores
+    them. ``name`` names the result of a row. It may hold ``{title}`` of the
+    batch, and ``{name}`` and ``{key}`` of the row, without a format spec. The
+    other fields are those of :class:`ess.apps.writers.DatasetMetadata`.
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -369,7 +293,7 @@ class OutputOptions(BaseModel, frozen=True):
     @property
     def lacking(self) -> list[str]:
         """
-        What publishing by this form needs that it does not name: ``'owner'``,
+        What publishing needs that these options lack: ``'owner'``,
         ``'contact email'``, or neither.
         """
         given = [('owner', self.owner), ('contact email', self.contact_email)]
@@ -390,7 +314,7 @@ class Published(BaseModel, frozen=True):
 
 
 class Publishing(BaseModel, frozen=True):
-    """What a batch keeps of the catalogue: each upload, in order."""
+    """What a batch stores of the catalogue: each upload, in order."""
 
     model_config = ConfigDict(extra='forbid')
 
@@ -400,9 +324,10 @@ class Publishing(BaseModel, frozen=True):
 @dataclass(frozen=True)
 class Entry[T]:
     """
-    An entry of a label, kept under ``('labels', label, part)``: how its value
-    is written as plain data (``dump``) and read from it (``read``, which
-    raises ``ValueError`` naming the field of data of another shape).
+    An entry of a label, stored under ``('labels', label, part)``.
+
+    ``dump`` converts a value to plain data. ``read`` converts it back, and
+    raises ``ValueError`` naming the field of data of another shape.
     """
 
     part: str
@@ -414,19 +339,16 @@ class Entry[T]:
         return ('labels', label, self.part)
 
     def load(self, definitions: DefinitionStore, label: str) -> T | None:
-        """The value kept of ``label``; ``None`` if none, as the store loads it."""
+        """The stored value of ``label``, or ``None``."""
         return definitions.load(self.key(label), self.read)
 
     def save(self, definitions: DefinitionStore, label: str, value: T) -> None:
-        """
-        Keep ``value`` as the entry of ``label``; :class:`DefinitionWriteError` if
-        refused.
-        """
+        """Store ``value`` as the entry of ``label``."""
         definitions.save(self.key(label), self.dump(value))
 
 
 def _adapted[T](part: str, kind: type[T]) -> Entry[T]:
-    """The entry ``part`` of a value of ``kind``, as pydantic writes it as JSON."""
+    """The entry ``part`` of a value of ``kind``, as pydantic writes it to JSON."""
     adapter = TypeAdapter(kind)
     return Entry(
         part, partial(adapter.dump_python, mode='json'), partial(_checked, adapter)
@@ -438,7 +360,7 @@ _CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
 
 
 def template_data(template: Template) -> Any:
-    """``template``, as plain data that a template file holds."""
+    """``template`` as the plain data of a template file."""
     return _TEMPLATE.dump_python(template, mode='json')
 
 
@@ -448,7 +370,7 @@ def template_of(data: Any) -> Template:
 
 
 def _source_data(made: SourceEntry) -> dict[str, Any]:
-    """What a batch keeps of its source, as plain data; the keys sorted."""
+    """``made`` as plain data, with the keys sorted."""
     return {
         'row_source': made.row_source,
         'seen_keys': sorted(made.seen_keys),
@@ -459,20 +381,22 @@ def _source_data(made: SourceEntry) -> dict[str, Any]:
 HEADER = _adapted('header', Header)
 SETTINGS = Entry('settings', template_data, template_of)
 TABLE = Entry('table', data_of, table_of)
-"""Read as the rows are kept; :meth:`.manager.BatchManager.batch` types them."""
+"""Read as stored; :meth:`.manager.BatchManager.batch` types it for the spec."""
 SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(SourceEntry)))
 OUTPUT_OPTIONS = _adapted('output_options', OutputOptions)
 PUBLISH = _adapted('publish', Publishing)
 
 LABEL_ENTRIES = (HEADER, SOURCE, TABLE, SETTINGS, OUTPUT_OPTIONS, PUBLISH)
-"""Every entry of a label: the header first, then the others."""
+"""Every entry of a label, the header first."""
 
 
 def published(definitions: DefinitionStore, label: str) -> dict[str, str]:
     """
-    The catalogue identifier of each result of ``label`` published, by record
-    ID; empty if none. Here, not in :mod:`.publish`, so that reading it needs
-    no catalogue; only :class:`~.publish.Publisher` writes it.
+    The catalogue identifier of each published result of ``label``, by record
+    ID.
+
+    Defined here, not in :mod:`.publish`, so that reading it needs no
+    catalogue package.
     """
     kept = PUBLISH.load(definitions, label)
     return {} if kept is None else {p.record: p.pid for p in kept.published}
@@ -487,8 +411,8 @@ def corrections_data(
 
 def corrections_of(data: Any) -> dict[FileRef, dict[str, Any]]:
     """
-    The corrections of :func:`corrections_data`, by file. Raises
-    ``ValueError`` naming the field of data of another shape.
+    The corrections of :func:`corrections_data`, by file. Raises ``ValueError``
+    naming the field of data of another shape.
     """
     return {
         FileRef(file=f): fields for f, fields in _checked(_CORRECTIONS, data).items()
