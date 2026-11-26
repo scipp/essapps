@@ -324,7 +324,7 @@ flowchart TD
 | Module | What it holds |
 |---|---|
 | `static/` | the page: `index.html`, `app.js`, `tables.js`, `form.js`; what is shown: selection, filter, view, tab, sort, axes |
-| `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch |
+| `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch; `serve(app, port=...)` runs it on localhost |
 | `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It steps Follow (`tick`) |
 | `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Files` for the listing and `LastStep` for what to show of Follow |
 | `runs.py` | `Files`: the listing of what the client lists, shared by every page, its version (`SafeListing.version`), and the Runs view with the corrections of runs |
@@ -333,7 +333,7 @@ flowchart TD
 | `view.py` | how what the batch layer gives reads on a page, as the models of `models.py`, and how a cell sent back reads: functions of their arguments only; one title per parameter (`titles`) |
 | `tempfiles.py` | a file that a person sends or gets, in a folder of its own |
 | `refusals.py` | how `Pages` and `Page` refuse a request: `Problem` (422) or `Missing` (404); how an exception of the batch layer reads as a message (`why`, `kept`), and how a request says what code of the application raised (`refused`, with `ess.apps.errors.said`: a pydantic `ValidationError` as each reason at its field, `ValueError` and `OSError` as their text; anything else is a defect, said with its type) |
-| `ess.batch` | the logic: `BatchManager`, `Intake`, `step`, `Batch`, `table`, states, `CorrectedFiles`; shared with the command `essbatch` |
+| `ess.batch` | the logic: `BatchManager`, `Intake`, `step`, `Batch`, `table`, states, `CorrectedFiles`, `open_workspace`; shared with the command `essbatch` |
 
 `/docs` on a running server lists the API.
 
@@ -401,7 +401,7 @@ parent.mount('/batch', batch)
 ## Where the definition is kept
 
 The headers, the batch tables, the settings, the batch that follows, and the corrections of runs are the definitions of the workspace. A folder whose definitions are of another format is refused when the page starts (`FolderDefinitions`).
-The demo and the LoKI page give the manager, and so the `Intake`, and the file source the folder's definitions, `FOLDER/definitions/` (`ess.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
+The demo and the LoKI page open the folder with `ess.batch.open_workspace`, and give the manager, and so the `Intake`, and the file source the folder's definitions, `FOLDER/definitions/` (`ess.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
 The settings form is a draft of the batch's settings: **Apply** writes it to the batch, and so to the definitions. A draft not applied is lost when the server stops.
 Results are records of the workspace, in `FOLDER/store/`.
 See [Where the definitions are kept](../../../../docs/batch.md#where-the-definitions-are-kept).

@@ -164,19 +164,13 @@ import pandas as pd
 from ess.apps.client import Client
 from ess.apps.errors import Stopped, SubmitError, said
 from ess.apps.files import replace_at_once
-from ess.apps.folder import (
-    ArrivingFiles,
-    described,
-    folder_files,
-    open_folder,
-    scan_folder,
-)
+from ess.apps.folder import described, folder_files, scan_folder
 from ess.apps.records import Record, Status
 from ess.apps.writers import Writer
 from ess.spec import Binding
 
 from . import frames
-from .corrections import CorrectedFiles
+from .corrections import open_workspace
 from .definition import FolderDefinitions, NotKept
 from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
@@ -1447,12 +1441,12 @@ def _opened(given: _Given, command: _Command) -> _Result:
         raise ValueError(f'files.csv lists {error}, which does not exist') from None
     except ValueError as error:
         raise ValueError(f'files.csv: {error}') from None
-    definitions = FolderDefinitions(args.workspace)
     # Read again when files.csv is replaced, so that follow finds the files
     # that arrive.
-    files = CorrectedFiles(ArrivingFiles(args.workspace), definitions=definitions)
     try:
-        client = open_folder(args.workspace, bind, files=files, proposal=args.proposal)
+        client, _, definitions = open_workspace(
+            args.workspace, bind, proposal=args.proposal
+        )
     except RuntimeError as error:  # another process holds the folder
         raise _Failed(str(error)) from None
     with client:

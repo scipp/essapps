@@ -71,19 +71,22 @@ ess.instruments.loki.batch:SOURCES ... follow -l LABEL`` runs the steps.
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-import scipp as sc
-from ess.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
-from ess.batch.web import Pages, Shown, create_app, plots
-from ess.batch.web.api import STATIC
+from ess.batch import (
+    BatchManager,
+    CorrectedFiles,
+    FolderDefinitions,
+    Intake,
+    open_workspace,
+)
+from ess.batch.web import Pages, create_app, plots, serve
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from ess.apps import Client
-from ess.apps.folder import ArrivingFiles, open_folder
 from ess.apps.protocol import FileSource
 
 from .batch import SOURCES, STAGED
@@ -99,50 +102,11 @@ class Marks(BaseModel):
     sample: str | None = Field(default=None, title='Sample name')
 
 
-def open_loki(
-    directory: Path, source: FileSource | None = None, *, proposal: str = 'local'
-) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
-    """
-    A client of the workspace of ``proposal`` in ``directory``, its file
-    source with the corrections kept in the folder, and the folder's
-    definitions. The file source is ``source``, or, if not given, one that
-    reads ``files.csv`` again when it is replaced
-    (:class:`~ess.apps.folder.ArrivingFiles`). Either way a run registered
-    while the page runs is listed at the next "List runs again", and its row
-    is added by a step of Follow.
-    """
-    definitions = FolderDefinitions(directory)
-    source = ArrivingFiles(directory) if source is None else source
-    files = CorrectedFiles(source, definitions=definitions)
-    client = open_folder(directory, BINDINGS, files=files, proposal=proposal)
-    return client, files, definitions
-
-
 FIRST_BATCHES = {
     'sample-runs': (IOFQ, 'Sample runs'),
     'raw-runs': (BANK_HISTOGRAM, 'Raw runs'),
 }
 """The spec and title of the batch that a start makes, by the name of its source."""
-
-
-def _draw(
-    client: Client,
-    output: str,
-    quantity: str,
-    curve: Callable[[Any], sc.DataArray] = lambda value: value,
-) -> Callable[[Sequence[Shown]], dict[str, object]]:
-    """Draws the curve that ``curve`` takes of ``output`` of each record shown."""
-
-    def draw(shown: Sequence[Shown]) -> dict[str, object]:
-        curves = [
-            plots.Curve(
-                s.name, curve(client.output(s.record, output)), s.color, s.outdated
-            )
-            for s in shown
-        ]
-        return plots.figure(curves, quantity=quantity)
-
-    return draw
 
 
 def build(
@@ -181,8 +145,8 @@ def build(
         interval=interval,
         title='LoKI I(Q)',
         draw={
-            IOFQ.name: _draw(client, 'iofq', 'I(Q)', lambda iofq: iofq.intensity),
-            BANK_HISTOGRAM.name: _draw(client, 'histogram', 'Counts'),
+            IOFQ.name: plots.draw(client, 'iofq', 'I(Q)', lambda q: q.intensity),
+            BANK_HISTOGRAM.name: plots.draw(client, 'histogram', 'Counts'),
         },
         files=files,
         marks=Marks,
@@ -193,8 +157,6 @@ def build(
 
 
 def main() -> None:
-    import uvicorn
-
     parser = argparse.ArgumentParser(description='Serve the LoKI batch page.')
     parser.add_argument('folder', type=Path, help='the workspace folder')
     parser.add_argument('--port', type=int, default=8000)
@@ -215,11 +177,11 @@ def main() -> None:
     args = parser.parse_args()
     if (args.scicat is None) != (args.proposal is None):
         parser.error('give --scicat and --proposal together')
-    if not (STATIC / 'vendor').is_dir():
-        parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')
     try:
         source, proposal = _scicat(args)
-        client, files, definitions = open_loki(args.folder, source, proposal=proposal)
+        client, files, definitions = open_workspace(
+            args.folder, BINDINGS, source=source, proposal=proposal
+        )
     except ValueError as error:  # such as definitions of another format
         parser.exit(1, f'{error}\n')
     with client:
@@ -231,7 +193,7 @@ def main() -> None:
             interval=args.interval,
             first='sample-runs' if source is None else 'raw-runs',
         )
-        uvicorn.run(app, host='localhost', port=args.port)
+        serve(app, port=args.port)
 
 
 def _scicat(args: argparse.Namespace) -> tuple[FileSource | None, str]:

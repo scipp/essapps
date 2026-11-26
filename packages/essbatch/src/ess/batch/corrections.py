@@ -1,20 +1,25 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A file source that holds corrections to the metadata of files."""
+"""
+A file source that holds corrections to the metadata of files, and a
+workspace folder opened with it (:func:`open_workspace`).
+"""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+from ess.apps import Client
 from ess.apps.files import Selector
+from ess.apps.folder import ArrivingFiles, open_folder
 from ess.apps.protocol import FileSource
-from ess.spec import FileRef
+from ess.spec import Binding, FileRef
 
 from . import definition
-from .definition import DefinitionStore
+from .definition import DefinitionStore, FolderDefinitions
 
 
 class _Every(Selector):
@@ -121,3 +126,28 @@ class CorrectedFiles:
             for ref in self._source.list(_Every())
             if selector.matches(self.metadata(ref))
         ]
+
+
+def open_workspace(
+    directory: Path,
+    bind: Sequence[Binding],
+    *,
+    source: FileSource | None = None,
+    proposal: str = 'local',
+) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
+    """
+    A client of the workspace of ``proposal`` in ``directory``
+    (:func:`ess.apps.folder.open_folder`), its file source with the
+    corrections kept in the folder, and the folder's definitions. The file
+    source is ``source``, or one that reads ``files.csv`` again when it is
+    replaced (:class:`~ess.apps.folder.ArrivingFiles`), so that a file that
+    arrives while the client is open is listed. Raises as ``open_folder``, and
+    ``ValueError`` if the definitions hold corrections that cannot be read.
+    """
+    definitions = FolderDefinitions(directory)
+    files = CorrectedFiles(
+        ArrivingFiles(directory) if source is None else source,
+        definitions=definitions,
+    )
+    client = open_folder(directory, bind, files=files, proposal=proposal)
+    return client, files, definitions

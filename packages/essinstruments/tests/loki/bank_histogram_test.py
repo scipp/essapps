@@ -10,11 +10,11 @@ from pathlib import Path
 import h5py
 import pytest
 import scipp as sc
-from ess.batch import FileInfo
+from ess.batch import FileInfo, open_workspace
 from ess.instruments.loki.batch import per_run
-from ess.instruments.loki.bindings import bank_histogram_binding
+from ess.instruments.loki.bindings import BINDINGS, bank_histogram_binding
 from ess.instruments.loki.specs import BANK_HISTOGRAM, BankHistogramParams
-from ess.instruments.loki.web import build, open_loki
+from ess.instruments.loki.web import build
 from fastapi.testclient import TestClient
 
 from ess.apps.folder import write_files_table
@@ -96,7 +96,7 @@ def test_the_page_of_raw_runs_draws_a_histogram_per_run(tmp_path: Path) -> None:
     write_files_table(
         tmp_path, [{'file': f'raw/{r}.hdf', 'run': r, 'kind': 'raw'} for r in (1, 2)]
     )
-    client, files, definitions = open_loki(tmp_path)
+    client, files, definitions = open_workspace(tmp_path, BINDINGS)
     with client:
         app = build(client, files, definitions, first='raw-runs')
         manager = app.state.pages.intake.manager

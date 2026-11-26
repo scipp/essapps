@@ -8,8 +8,8 @@ extra ``web``. How to run it, its layers and its limits are in
 ``README.md`` next to this file.
 """
 
-from .api import create_app
+from .api import create_app, serve
 from .page import Draw, Page, Shown
 from .pages import Pages
 
-__all__ = ['Draw', 'Page', 'Pages', 'Shown', 'create_app']
+__all__ = ['Draw', 'Page', 'Pages', 'Shown', 'create_app', 'serve']
