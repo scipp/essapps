@@ -1015,7 +1015,7 @@ function saveBatch(event) {
 
 // Removes this batch, then shows the root in its place in the history.
 async function removeBatch() {
-  const question = `Remove the batch "${view.state.title}"? Its title, description, settings and table are removed. Its results stay in the workspace.`;
+  const question = `Remove the batch "${view.state.title}"? Its title, description, settings, output options and table are removed. Its results stay in the workspace.`;
   if (!confirm(question)) return;
   const [page, at] = [here, changes];
   const done = await queued(() => request('batch/remove', {body: {}, page}));
