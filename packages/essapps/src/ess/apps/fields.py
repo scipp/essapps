@@ -57,7 +57,7 @@ from pydantic.fields import FieldInfo
 from pydantic_core import to_json, to_jsonable_python
 
 from ess.spec import File, FileRef, OutputRef, field_types
-from ess.spec.field_types import Choice, FieldShape, FileKind, Group, Scalar
+from ess.spec.field_types import Choice, FieldShape, FileKind, Group, List, Scalar
 from ess.spec.refs import Loc, as_ref
 
 from .errors import FieldError, SubmitError
@@ -187,11 +187,12 @@ def _make(
     (``Given``, ``A file``), ``From a record``, and ``None``. A list of scalars is
     :class:`ScalarsField`, and any other list :class:`RowsField`.
     """
-    if (element := field.element) is not None:
-        if field_types.is_scalar(item := field_types.plain(element)):
-            return ScalarsField(label, item, default, description)
-        return RowsField(element, default, listing)
     inline, referenced = field.inline, field.referenced
+    match inline:
+        case List(element) if field_types.is_scalar(item := field_types.plain(element)):
+            return ScalarsField(label, item, default, description)
+        case List(element):
+            return RowsField(element, default, listing)
     if not (field.none or referenced):
         match inline:
             case FileKind(marker):

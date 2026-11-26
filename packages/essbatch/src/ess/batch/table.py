@@ -114,7 +114,7 @@ from pydantic_core import to_json, to_jsonable_python
 
 from ess.apps.files import file, replace_at_once
 from ess.spec import FileRef, OutputRef, field_types
-from ess.spec.field_types import Choice, FileKind, Group, Scalar
+from ess.spec.field_types import Choice, FileKind, Group, List, Scalar
 
 KEY = 'key'
 """The name of the index of a batch table: the key of each row."""
@@ -159,7 +159,6 @@ class _Parameter:
 
     many: bool  # a list of what the other fields say
     inline: Scalar | Group | Choice | FileKind | None  # None if only an output
-    file: bool
     output: bool
 
 
@@ -174,34 +173,32 @@ def _text(tp: Any) -> bool:
 
 def _parameter(name: str, info: FieldInfo) -> _Parameter:
     field = field_types.shape(info.annotation, field_types.field_metadata(info))
-    many = field.element is not None
-    if many:
-        field = field_types.shape(field.element)
+    many = False
+    if isinstance(field.inline, List):
+        many, field = True, field_types.shape(field.inline.element)
     inline = field.inline
     if field.referenced and isinstance(inline, Scalar) and _text(inline.type):
         raise ValueError(
             f'{name}: takes text or an output, and a cell cannot tell the two apart'
         )
-    return _Parameter(
-        many, inline, isinstance(inline, FileKind), bool(field.referenced)
-    )
+    return _Parameter(many, inline, bool(field.referenced))
 
 
 def _dtype(parameter: _Parameter) -> str:
     if parameter.many:
         return 'object'
-    if parameter.file or parameter.inline is None:
-        return 'string'
-    if parameter.output or not isinstance(parameter.inline, Scalar):
-        return 'object'
-    tp = parameter.inline.type
-    if tp is bool:
-        return 'boolean'
-    if tp is int:
-        return 'Int64'
-    if tp is float:
-        return 'Float64'
-    return 'string' if _text(tp) else 'object'
+    match parameter.inline:
+        case FileKind() | None:
+            return 'string'
+        case Scalar(tp) if not parameter.output:
+            if tp is bool:
+                return 'boolean'
+            if tp is int:
+                return 'Int64'
+            if tp is float:
+                return 'Float64'
+            return 'string' if _text(tp) else 'object'
+    return 'object'
 
 
 def dtypes(model: type[BaseModel]) -> dict[str, str]:
@@ -347,11 +344,12 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
 
 
 def _request_value(parameter: _Parameter, cell: Any) -> Any:
-    if parameter.file and isinstance(cell, int) and not isinstance(cell, bool):
+    is_file = isinstance(parameter.inline, FileKind)
+    if is_file and isinstance(cell, int) and not isinstance(cell, bool):
         return file(run=cell)
     if not isinstance(cell, str):
         return cell
-    if parameter.file and cell and (not parameter.output or _KIND.match(cell)):
+    if is_file and cell and (not parameter.output or _KIND.match(cell)):
         return FileRef(file=cell)
     if parameter.output and (found := _OUTPUT.fullmatch(cell)):
         return OutputRef(**found.groupdict())

@@ -26,10 +26,10 @@ form, and the templates and tables of essbatch branch on its result::
 
     field = shape(info.annotation, field_metadata(info))
     field.none        # whether it is X | None
-    field.element     # X of list[X], a type to shape in turn; None otherwise
     field.inline      # what a request writes inline, if anything:
                       # Scalar(float), Group(Reduction), FileKind(File(kind='mask')),
-                      # Choice('kind', {'given': GivenCentre, 'find': FindCentre})
+                      # Choice('kind', {'given': GivenCentre, 'find': FindCentre}),
+                      # List(SampleRunFile)
     field.referenced  # the groups a reference fills the field with, each T
                       # of Referenced[T]: (ComputedBeamCentre,)
 
@@ -219,8 +219,8 @@ def file_of(info: FieldInfo) -> File | None:
     ``X`` or ``X | None``, or a list of one; ``None`` otherwise.
     """
     field = shape(info.annotation, field_metadata(info))
-    if field.element is not None:
-        field = shape(field.element)
+    if isinstance(field.inline, List):
+        field = shape(field.inline.element)
     if isinstance(field.inline, FileKind) and not field.referenced:
         return field.inline.marker
     return None
@@ -571,28 +571,21 @@ def _tags(annotation: Any) -> tuple[Any, ...]:
 
 @dataclasses.dataclass(frozen=True)
 class Scalar:
-    """
-    A value written inline as its JSON value, of ``type``: a scalar (see
-    :func:`is_scalar`) in a spec, which refuses any other type, and in other
-    models any type that is not a group, a union of groups, or a file field.
-    """
+    """A value written as its JSON value, of ``type`` (see :func:`shape`)."""
 
     type: Any
 
 
 @dataclasses.dataclass(frozen=True)
 class Group:
-    """A group written inline, as an object of its fields."""
+    """A group, written as an object of its fields."""
 
     type: type[BaseModel]
 
 
 @dataclasses.dataclass(frozen=True)
 class Choice:
-    """
-    A union of groups written inline: the alternatives by the value of the tag
-    field ``tag`` (see :func:`alternatives`).
-    """
+    """A union of groups: the alternatives by the value of the tag field ``tag``."""
 
     tag: str
     groups: dict[str, Any]
@@ -606,31 +599,32 @@ class FileKind:
 
 
 @dataclasses.dataclass(frozen=True)
+class List:
+    """``list[X]``, with ``element`` ``X``, a type to shape in turn."""
+
+    element: Any
+
+
+@dataclasses.dataclass(frozen=True)
 class FieldShape:
     """
-    What a request writes at a field, read from its type by :func:`shape`.
-
-    A field is ``X | None`` if ``none``, and then takes what ``X`` takes, or
-    ``None``. A list, ``list[X]``, has ``element`` ``X``, a type to shape in
-    turn, and no other part. Any other field takes what it writes ``inline``,
-    if anything, or a reference to an output whose data fit one of
-    ``referenced``, the ``T`` of each ``Referenced[T]``. ``metadata`` are those
-    of the list, or of the part written inline, such as the constraints of a
-    scalar or the discriminator of a choice::
+    What a request writes at a field: what it writes ``inline``, if anything,
+    or a reference to an output whose data fit one of ``referenced``, each
+    ``T`` of ``Referenced[T]``; or ``None`` if ``none``. A :class:`List` has
+    no ``referenced``. ``metadata`` are those of the part written inline::
 
         shape(float | None)
-        # FieldShape(none=True, element=None, inline=Scalar(float), ...)
+        # FieldShape(none=True, inline=Scalar(float), referenced=(), metadata=())
         shape(BeamCentre | Referenced[BeamCentre])
         # FieldShape(inline=Group(BeamCentre), referenced=(BeamCentre,), ...)
         shape(Referenced[PixelMask])
         # FieldShape(inline=None, referenced=(PixelMask,), ...)
-        shape(Annotated[list[SampleRun], MinLen(1)])
-        # FieldShape(element=SampleRun, inline=None, metadata=(MinLen(1),), ...)
+        shape(Annotated[list[SampleRunFile], MinLen(1)])
+        # FieldShape(inline=List(SampleRunFile), metadata=(MinLen(1),), ...)
     """
 
     none: bool
-    element: Any
-    inline: Scalar | Group | Choice | FileKind | None
+    inline: Scalar | Group | Choice | FileKind | List | None
     referenced: tuple[Any, ...]
     metadata: tuple[Any, ...]
 
@@ -638,13 +632,14 @@ class FieldShape:
 def shape(annotation: Any, metadata: tuple[Any, ...] = ()) -> FieldShape:
     """
     The shape of a field typed ``annotation``, with ``metadata`` (see
-    :func:`field_metadata`). Raises ``ValueError`` for a union of groups that
-    breaks a rule of ``packages/essspec/docs/params.md`` (see
-    :func:`alternatives`).
+    :func:`field_metadata`), a type that the checks of a spec accept. Of a type
+    they refuse, it raises ``ValueError`` for a union of groups that breaks a
+    rule (see :func:`alternatives`), and gives :class:`Scalar` for a type of
+    no other kind.
     """
     tp, none, metadata = unwrapped(annotation, metadata)
     if REFERENCED not in metadata and get_origin(tp) is list:
-        return FieldShape(none, get_args(tp)[0], None, (), metadata)
+        return FieldShape(none, List(get_args(tp)[0]), (), metadata)
     inline, inline_metadata, referenced = split(tp, *metadata)
     written: Scalar | Group | Choice | FileKind | None = None
     if (union := alternatives(inline, *inline_metadata)) is not None:
@@ -655,7 +650,7 @@ def shape(annotation: Any, metadata: tuple[Any, ...] = ()) -> FieldShape:
         written = Group(inline)
     elif inline is not None:
         written = Scalar(inline)
-    return FieldShape(none, None, written, referenced, inline_metadata)
+    return FieldShape(none, written, referenced, inline_metadata)
 
 
 def tagged_members(tp: Any, metadata: tuple[Any, ...]) -> dict[Any, Any] | None:

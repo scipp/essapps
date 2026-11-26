@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Literal, get_args, get_origin
+from typing import Annotated, Any, Literal
 
 import pytest
 import scipp as sc
@@ -30,7 +30,13 @@ from ess.spec import (
     WorkflowSpec,
     request_types,
 )
-from ess.spec.field_types import alternatives, field_metadata, unwrapped
+from ess.spec.field_types import (
+    List,
+    alternatives,
+    field_metadata,
+    shape,
+    unwrapped,
+)
 from ess.spec.refs import Loc, ParamsError, Ref
 from ess.spec.request_types import sources
 from ess.spec.validation import local_paths, validate_request_value, validated
@@ -141,11 +147,10 @@ def value_of(
 def row_sources(model: type[BaseModel], name: str) -> dict[str, Any]:
     """The sources of a parameter, or of one row of a list parameter."""
     info = model.model_fields[name]
-    if get_origin(info.annotation) is list:
-        tp, _, metadata = unwrapped(get_args(info.annotation)[0])
-    else:
-        tp, _, metadata = unwrapped(info.annotation, field_metadata(info))
-    return sources(tp, metadata)
+    field = shape(info.annotation, field_metadata(info))
+    if isinstance(field.inline, List):
+        field = shape(field.inline.element)
+    return sources(field)
 
 
 class NamedCentre(BaseModel):

@@ -69,7 +69,7 @@ from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
 from pydantic_core import CoreSchema, PydanticCustomError, core_schema
 
 from . import field_types
-from .field_types import Choice, FileKind, Group, Scalar
+from .field_types import Choice, FieldShape, FileKind, Group, List, Scalar
 from .parameters import File, not_its_source
 from .refs import FileRef, Loc, OutputRef
 
@@ -99,12 +99,12 @@ def source_of(value: Any) -> str | None:
     )
 
 
-def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
+def sources(field: FieldShape) -> dict[str, Any]:
     """
-    The sources that a field of type ``tp`` with ``metadata`` (see
-    :func:`~ess.spec.field_types.field_metadata`), not a list, takes, by tag,
-    each the type that validates it, with the constraints of the field. Of
-    what a request writes inline (see :func:`~ess.spec.field_types.shape`):
+    The sources that a field of shape ``field`` takes, by tag, each the type
+    that validates it, with the constraints of the field. Raises
+    ``ValueError`` for a list, whose element takes sources instead. Of what a
+    request writes inline:
 
     - :data:`INLINE`: the union of groups, with its discriminator, the
       group, or the scalar, each group as :func:`_group_request_type` gives it;
@@ -127,7 +127,6 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
     source a field takes.
     """
     taken: dict[str, Any] = {}
-    field = field_types.shape(tp, metadata)
     match field.inline:
         case Choice(tag, groups):
             members = tuple(_alternative(g, tag, v) for v, g in groups.items())
@@ -141,6 +140,8 @@ def sources(tp: Any, metadata: tuple[Any, ...] = ()) -> dict[str, Any]:
             taken[INLINE] = _annotated(_group_request_type(group), field.metadata)
         case Scalar(scalar):
             taken[INLINE] = _annotated(scalar, field.metadata)
+        case List():
+            raise ValueError('a list takes no sources; its element does')
     if referenced := field.referenced:
         data: Any = Union[referenced]  # noqa: UP007
         data_type: JsonDict = {'dataType': field_types.type_name(data)}
@@ -262,14 +263,15 @@ def _field_request_type(annotation: Any, metadata: tuple[Any, ...] = ()) -> Any:
     model validates the list (see :func:`ess.spec.validation.validate_request_value`).
     """
     field = field_types.shape(annotation, metadata)
-    if (element := field.element) is not None:
-        metadata = field.metadata
-        if field_types.holds_marker(element):
-            metadata = tuple(m for m in metadata if isinstance(m, MinLen | MaxLen))
-        listed: Any = list[_field_request_type(element)]  # type: ignore[misc]
-        made = _annotated(listed, metadata)
-        return Union[made, None] if field.none else made  # noqa: UP007
-    return _source_union(sources(annotation, metadata), field.none)
+    if not isinstance(field.inline, List):
+        return _source_union(sources(field), field.none)
+    element = field.inline.element
+    metadata = field.metadata
+    if field_types.holds_marker(element):
+        metadata = tuple(m for m in metadata if isinstance(m, MinLen | MaxLen))
+    listed: Any = list[_field_request_type(element)]  # type: ignore[misc]
+    made = _annotated(listed, metadata)
+    return Union[made, None] if field.none else made  # noqa: UP007
 
 
 def _annotated(tp: Any, metadata: tuple[Any, ...]) -> Any:

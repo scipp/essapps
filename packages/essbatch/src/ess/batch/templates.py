@@ -55,7 +55,7 @@ from pydantic_core import to_jsonable_python
 from ess.apps.client import Client
 from ess.apps.records import SpecId, Template
 from ess.spec import File, WorkflowSpec, field_types
-from ess.spec.field_types import Choice, FileKind, Group, Scalar
+from ess.spec.field_types import Choice, FileKind, Group, List, Scalar
 
 from .definition import template_data, template_of
 from .reduction import Batch
@@ -292,10 +292,10 @@ def _takes(
     field = field_types.shape(annotation, metadata)
     ways: list[str] = []
     groups: _Groups = []
-    if field.element is not None:
-        each, groups = _takes(field.element, (), bound, top=top)
-        ways.append(f'a list, each {each}')
     match field.inline:
+        case List(element):
+            each, groups = _takes(element, (), bound, top=top)
+            ways.append(f'a list, each {each}')
         case Choice(tag, alternatives):
             ways.append(f'a group of one of the kinds below, chosen by its field {tag}')
             groups = [((tag, value), g) for value, g in alternatives.items()]
