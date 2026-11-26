@@ -256,7 +256,8 @@ Close is what a person does before `essbatch` works on that folder.
 A closed workspace does not follow until it is opened again; then the batch that followed follows again, as after a stop and start of the server.
 A batch page still open in a browser then gets an answer that the workspace is closed; a click in the list opens it again.
 
-Remove closes an open workspace as Close does, then deletes the folder (`ess.batch.remove_workspace`).
+Remove of a workspace closes it as Close does if it is open, then deletes the folder with all its outputs (`ess.batch.remove_workspace`).
+**Clear all outputs** on its batch page frees the disk space of the outputs and keeps the workspace.
 It does not open a workspace that is not open, so that one that cannot be opened, such as one of a file source this server does not allow, can be removed.
 It refuses a folder that another process holds, such as one of `essbatch follow`, and a folder that is a symbolic link, before anything is closed.
 The folder is renamed to a hidden name while it is held, then deleted, so a deletion that fails halfway leaves no workspace in the list.
@@ -274,7 +275,7 @@ What blocks, opening a workspace, the end of the timer and the close of the clie
 - One `Batch` object per label. Another `Batch` of the page's label writes its whole batch table at each change, over that of the page.
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages. A request waits while a step of Follow runs on another batch, and while results are published, uploads included.
-- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so the page cannot remove it. `essbatch remove` can, while the server is stopped.
+- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so the page cannot remove it. `essbatch remove` can, once the workspace is closed on the launch page or the server is stopped.
 - The confirmations are the browser's dialogs (`confirm`).
 
 ## Browser tests
