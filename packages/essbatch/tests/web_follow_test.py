@@ -89,8 +89,8 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_them(
 
     after = page.state()
     assert after.version > before.version
-    assert page.pages.files.runs().version > before.runs  # type: ignore[operator]
-    assert len(page.pages.files.runs().rows) == 3
+    assert page.pages.runs.shown().version > before.runs  # type: ignore[operator]
+    assert len(page.pages.runs.shown().rows) == 3
     # oil waits for its transmission run
     assert statuses(after) == {'water': 'running'}
     assert (after.follow.failure, after.follow.waiting) == (None, 1)
@@ -113,13 +113,13 @@ def test_a_row_that_waits_is_added_and_reduced_once_it_is_filled(
 
 
 def versions(page: Page) -> tuple[int, int]:
-    return page.version, page.pages.files.runs_version
+    return page.version, page.pages.runs.version
 
 
 def correct_and_poll(page: Page) -> None:
     """Correct a run, and poll the page at once, as the page does after one."""
-    run = page.pages.files.runs().rows[0].key
-    page.pages.files.correct(CellEdit(keys=[run], column='sample', value='tea'))
+    run = page.pages.runs.shown().rows[0].key
+    page.pages.runs.correct(CellEdit(keys=[run], column='sample', value='tea'))
     page.poll(page.version, page.start)
 
 
@@ -802,15 +802,15 @@ def test_a_correction_on_another_page_moves_the_version_of_the_runs_once(
     sample(1, 'water')
     other = pages.page(intake.create(STAGED.name, title='Other', source='pairs').label)
     pages.tick()
-    before = pages.files.runs_version
+    before = pages.runs.version
 
-    run = pages.files.runs().rows[0].key
-    pages.files.correct(CellEdit(keys=[run], column='sample', value='tea'))
+    run = pages.runs.shown().rows[0].key
+    pages.runs.correct(CellEdit(keys=[run], column='sample', value='tea'))
     other.poll(other.version, other.start)
     pages.tick()
     pages.tick()
 
-    assert pages.files.runs_version == before + 1
+    assert pages.runs.version == before + 1
 
 
 def test_the_counts_of_the_batch_that_follows_are_the_chips_of_its_page(

@@ -107,7 +107,7 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 ## The runs
 
-The view **Runs** lists the runs of the workspace (`Files.runs`), with the fields of a run that a person corrects, and the column **Batches**.
+The view **Runs** lists the runs of the workspace (`Runs.shown`), with the fields of a run that a person corrects, and the column **Batches**.
 The column **Batches** names each batch that uses the run, by its title, in the order of the list of batches, and its tooltip adds the label of each, since two batches may share a title; it is empty for a run in no batch.
 A batch uses a run if a cell of its batch table names it, such as a sample run or an element of a list of runs, or one of its settings does, such as the run of the can (`Batch.files`).
 A reference to a file not listed is ignored alone, also in a list of runs; only in a group of fields, such as a setting of several fields, does it hide the other files of the group.
@@ -253,13 +253,13 @@ There is no login yet.
 The web layer follows eight rules. Each says where a reader finds a kind of thing, so a change that breaks one needs a reason.
 
 1. **The batch layer decides.** Every rule of rows, settings, sources, reduction and Follow is in `ess.batch`. The web layer says what the batch layer refuses in words for a person and copies no rule of the batch layer. It refuses only a request that no call of the batch layer can express, such as Follow without a row source (`NewBatch`). The form in the browser may know a rule to be helpful, such as that a batch that follows has no last row, but the server does not decide it here.
-2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` and of its `Files` takes it, and a caller may hold it already; a property of `Files` (`listing`, `runs_version`, `corrects_runs`) reads one value without it. `LastStep` is used only under it.
+2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` and of its `Runs` takes it, and a caller may hold it already; a property of `Runs` (`listing`, `version`, `corrects`) reads one value without it. `LastStep` is used only under it.
 3. **Each piece of state has one owner, which alone writes it.**
 
    | Owner | State |
    |---|---|
    | the batch layer | the batches: batch table, settings, header, which batch follows, the output form and what was published |
-   | `Pages` | which pages are open; through `Files`, the listing of the files and the corrections of runs; through `LastStep`, what the last step of Follow said |
+   | `Pages` | which pages are open; through `Runs`, the listing of the files and the corrections of runs; through `LastStep`, what the last step of Follow said |
    | `Page` | the draft of the settings form, the refusals of the last reduction, its version |
    | the browser | what is shown: selection, filter, view, tab, sort, axes; the draft of the output form ([Output](#output)) |
 
@@ -299,8 +299,8 @@ flowchart TD
     browser["browser: app.js"]
     api["api: create_app, the timer"]
     pages["Pages: one lock, the pages open"]
-    files["Files: the listing of the files and its version, the Runs view"]
-    follow["LastStep: what Follow said"]
+    runs["Runs: the listing of the files and its version, the Runs view"]
+    last_step["LastStep: what Follow said"]
     page["Page, one per batch: poll compares the versions"]
     intake["Intake: following"]
     manager["BatchManager: version"]
@@ -310,10 +310,10 @@ flowchart TD
     api -->|routes of a batch| page
     pages -->|"step(), create from a source"| intake
     pages -->|"create, remove, counts"| manager
-    pages --> files
-    pages -->|"stepped, failure"| follow
-    page -->|"listing, list_again"| files
-    page -->|"token, shown, unsubmitted, applied"| follow
+    pages --> runs
+    pages -->|"stepped, failure"| last_step
+    page -->|"listing, list_again"| runs
+    page -->|"token, shown, unsubmitted, applied"| last_step
     page -->|"offered, take, stop()"| intake
     page -->|"batch(label), change"| manager
     page -->|"put, reduce"| batch
@@ -326,9 +326,9 @@ flowchart TD
 | `static/` | the page: `index.html`, `app.js`, `tables.js`, `form.js`; what is shown: selection, filter, view, tab, sort, axes |
 | `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch; `serve(app, port=...)` runs it on localhost |
 | `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It steps Follow (`tick`) |
-| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Files` for the listing and `LastStep` for what to show of Follow |
-| `runs.py` | `Files`: the listing of what the client lists, shared by every page, its version (`SafeListing.version`), and the Runs view with the corrections of runs |
-| `follow.py` | `LastStep`: what the last step of Follow said, for the page of the batch that follows |
+| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Runs` for the listing and `LastStep` for what to show of Follow |
+| `runs.py` | `Runs`: the listing of what the client lists, shared by every page, its version (`SafeListing.version`), and the Runs view with the corrections of runs |
+| `last_step.py` | `LastStep`: what the last step of Follow said, for the page of the batch that follows |
 | `draft.py` | `Draft`: the settings form of a `Page`, a draft until Apply: what it holds, what it showed of the batch's settings, and the settings it could not show |
 | `view.py` | how what the batch layer gives reads on a page, as the models of `models.py`, and how a cell sent back reads: functions of their arguments only; one title per parameter (`titles`) |
 | `tempfiles.py` | a file that a person sends or gets, in a folder of its own |

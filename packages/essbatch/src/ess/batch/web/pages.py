@@ -13,7 +13,7 @@ works with the application, so a request waits for at most one step, or for
 the counts (:meth:`Pages.counts`), which read the state of every batch.
 
 The pages share one listing of what the client lists, and the Runs view
-(:class:`~.runs.Files`).
+(:class:`~.runs.Runs`).
 
 A person makes a batch from the list of batches, of the sources and specs
 that :meth:`Pages.sources` offers, in one of three ways
@@ -33,7 +33,7 @@ before answers :class:`~.refusals.Missing` from then on.
 (:attr:`~ess.batch.Intake.following`). :meth:`Pages.tick` is one
 step of it (:meth:`~ess.batch.Intake.step`), with or without a
 page open, plus what the page shows of the step
-(:class:`~.follow.LastStep`): why rows were refused, how many rows wait,
+(:class:`~.last_step.LastStep`): why rows were refused, how many rows wait,
 and what the step raised; then the page of the batch that follows shows
 what the step changed.
 :func:`~.api.create_app` owns the timer that calls it, every
@@ -56,7 +56,7 @@ from ..source import Range, RowSource
 from ..table import read_table
 from ..writing import Writing
 from . import view
-from .follow import LastStep
+from .last_step import LastStep
 from .models import (
     BatchCounts,
     Batches,
@@ -69,7 +69,7 @@ from .models import (
 )
 from .page import Page
 from .refusals import Missing, Problem, kept, refused, why
-from .runs import Files
+from .runs import Runs
 from .tempfiles import read_file
 
 if TYPE_CHECKING:
@@ -83,8 +83,8 @@ if TYPE_CHECKING:
 class Pages:
     """
     What the pages of the batches of ``intake.manager`` share. It owns, and
-    only it writes, the files listed and their corrections (:attr:`files`),
-    and the step of Follow and what it said (:attr:`follow`); a
+    only it writes, the files listed and their corrections (:attr:`runs`),
+    and the step of Follow and what it said (:attr:`last_step`); a
     :class:`~.page.Page` writes its batch through the manager. Each public
     method takes :attr:`lock`, which a caller may hold already. See the
     module.
@@ -122,9 +122,9 @@ class Pages:
     ----------
     lock:
         The lock of every request of every page and of each step of Follow.
-    files:
+    runs:
         The files listed, for the pickers and the Runs view of every page.
-    follow:
+    last_step:
         What the last step of Follow said, for the page of the batch that
         follows.
     """
@@ -162,10 +162,8 @@ class Pages:
         self.draw = {} if draw is None else draw
         self.folder = folder
         self.lock = threading.RLock()
-        self.files = Files(
-            intake.manager.client, self.lock, marks=marks, corrected=files
-        )
-        self.follow = LastStep(intake, interval)
+        self.runs = Runs(intake.manager.client, self.lock, marks=marks, corrected=files)
+        self.last_step = LastStep(intake, interval)
         self._pages: dict[str, Page] = {}
 
     def page(self, label: str) -> Page:
@@ -215,10 +213,10 @@ class Pages:
         A step of Follow on the batch that follows, if one does
         (:meth:`~ess.batch.Intake.step`), and what the page shows
         of it; then :meth:`Page.stepped <.page.Page.stepped>` of its page if
-        it is open, else :meth:`Files.list_again <.runs.Files.list_again>`,
+        it is open, else :meth:`Runs.list_again <.runs.Runs.list_again>`,
         so that every page and the Runs view see the files that arrived.
         :func:`~.api.create_app` calls it on a timer. What the step raises is
-        said on the page (:meth:`LastStep.shown <.follow.LastStep.shown>`),
+        said on the page (:meth:`LastStep.shown <.last_step.LastStep.shown>`),
         and the next step tries again.
         """
         # Under the lock, so that a tick that waited for a request sees what
@@ -230,11 +228,11 @@ class Pages:
             try:
                 if (done := self.intake.step()) is None:
                     return
-                self.follow.stepped(label, done)
+                self.last_step.stepped(label, done)
             except Exception as error:  # the next step tries again
-                self.follow.failure = step_failure(error)
+                self.last_step.failure = step_failure(error)
             if (page := self._pages.get(label)) is None:
-                self.files.list_again()
+                self.runs.list_again()
             else:
                 page.stepped()
 
@@ -252,7 +250,7 @@ class Pages:
             ]
             return Batches(
                 application=self.title,
-                runs=self.files.runs_version,
+                runs=self.runs.version,
                 rows=rows,
             )
 
@@ -270,7 +268,7 @@ class Pages:
             client = self.intake.manager.client
             names = dict.fromkeys(spec.name for spec in client.specs())
             specs = [client.spec_named(name) for name in names]
-            listing = self.files.listing
+            listing = self.runs.listing
 
             def choice(name: str | None, source: RowSource | None) -> SourceChoice:
                 fills = () if source is None else source.fills
@@ -361,8 +359,8 @@ class Pages:
                     settings=settings,
                     follow=new.follow,
                 )
-                if new.follow:
-                    self.follow.failure = None  # said of the batch that followed before
+                if new.follow:  # what was said of the batch that followed before
+                    self.last_step.failure = None
                 return Made(label=batch.label)
             batch = manager.create(
                 new.spec,

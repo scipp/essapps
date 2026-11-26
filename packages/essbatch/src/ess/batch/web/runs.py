@@ -3,17 +3,17 @@
 """
 The files that the client lists, as every page shows them: the listing of
 the pickers and the Runs view, and the runs as a person corrects them:
-:class:`Files`.
+:class:`Runs`.
 
-The pages share one listing of what the client lists (:attr:`Files.listing`):
+The pages share one listing of what the client lists (:attr:`Runs.listing`):
 the files, with their metadata, and the records. A page asks to list again
-(:meth:`Files.list_again`) when the records or its batch table changed, at a
+(:meth:`Runs.list_again`) when the records or its batch table changed, at a
 step of Follow, at "List runs again", and as it is made; the listing counts
 the changes of the files and of why they cannot be listed
 (:attr:`SafeListing.version`), which every page compares at its poll.
-The runs are the files, the same on every page (:meth:`Files.runs`), and a
+The runs are the files, the same on every page (:meth:`Runs.shown`), and a
 person corrects them on any page, with or without a batch
-(:meth:`Files.correct`). A correction changes no row of a batch: a batch
+(:meth:`Runs.correct`). A correction changes no row of a batch: a batch
 table names files, and the page shows each with its metadata now. The Runs
 view names the batches of each run from the files that each batch names,
 which come with the counts (:meth:`Pages.counts <.pages.Pages.counts>`),
@@ -36,8 +36,8 @@ from ess.apps.listing import Listing
 from ess.spec import File, FileRef
 
 from ..corrections import CorrectedFiles
-from . import forms, view
-from .models import CellEdit, Cells, Column, Notice, Runs
+from . import forms, models, view
+from .models import CellEdit, Cells, Column, Notice
 from .refusals import Problem, kept
 
 
@@ -86,10 +86,10 @@ class SafeListing(Listing):
             return {}
 
 
-class Files:
+class Runs:
     """
     The files that the client lists, for every page: the listing of the
-    pickers (:attr:`listing`) and the Runs view (:meth:`runs`). Each public
+    pickers (:attr:`listing`) and the Runs view (:meth:`shown`). Each public
     method takes ``lock``; a property reads one value without it.
 
     Parameters
@@ -129,16 +129,16 @@ class Files:
         return self._listing
 
     @property
-    def runs_version(self) -> int | None:
+    def version(self) -> int | None:
         """
         :attr:`SafeListing.version`, which the Runs view of each page compares
         to ask for the runs again; ``None`` if the application corrects no
         runs, so that the pages have no Runs view.
         """
-        return self._listing.version if self.corrects_runs else None
+        return self._listing.version if self.corrects else None
 
     @property
-    def corrects_runs(self) -> bool:
+    def corrects(self) -> bool:
         """Whether the application corrects runs: it gives their marks and files."""
         return self._marking is not None
 
@@ -161,7 +161,7 @@ class Files:
         marks, corrected = self._marking
         return Fields(marks, self._listing), corrected
 
-    def runs(self) -> Runs:
+    def shown(self) -> models.Runs:
         """
         The runs, listed again, with what a person corrected of each, as the
         Runs view of every page shows them, and that of the page without a
@@ -172,7 +172,7 @@ class Files:
             marks, corrected = self._marks()
             self.list_again()
             listing = self._listing
-            return Runs(
+            return models.Runs(
                 version=listing.version,
                 columns=[
                     Column(name=n, title=marks.titles[n], editor=forms.editor(f))
@@ -200,7 +200,7 @@ class Files:
             title = marks.titles[edit.column]
             return Notice(notice=f'{title} corrected on {n} run{"s" * (n > 1)}.')
 
-    def revert_run(self, cells: Cells) -> Notice:
+    def revert(self, cells: Cells) -> Notice:
         """Take a field of runs back to what the files say, as :meth:`correct`."""
         with self._lock:
             marks, corrected = self._marks()
