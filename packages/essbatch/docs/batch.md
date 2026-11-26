@@ -293,15 +293,8 @@ A source is plain code on plain data: test it on a list of `FileInfo`.
 | a truth value | `boolean` | `True` |
 | a list, a group, a value or an output, anything else | `object` | `['run:1', 'run:2']` |
 
-`| None` does not change the dtype.
 A parameter that takes text or an output is refused, since a cell cannot tell the two apart.
-
-Nothing converts a cell: `'2'` and `True` are not numbers.
-A cell of another kind than its column is refused where it enters the batch table, with a `ValueError` that names the key and the column.
-So is text at a parameter that takes an output, which names no output (`RECORD.OUTPUT`) and no file: the message says how a cell names an output.
-One exception: an `Int64` column takes a float that is a whole number, since pandas gives whole numbers with a gap as floats.
-A note column gets the dtype of `convert_dtypes()`, which must be one of the five.
-In a batch table an empty cell is `pd.NA` (`None` in an `object` column); in `rows.json` and in `to_dict('index')` it is `None`.
+`put` refuses a cell of another kind than its column, with a `ValueError` that names the key and the column.
 
 `as_request` converts a cell at a parameter that takes:
 
@@ -317,8 +310,7 @@ In a batch table an empty cell is `pd.NA` (`None` in an `object` column); in `ro
 # anything else, a file inside a group too: the cell as it is
 ```
 
-`cell_of` is the inverse: a `FileRef` or an `OutputRef` gives its text, anything else its JSON form.
-No other code converts between a cell and a value of a request.
+`cell_of` is the inverse.
 
 ## The request of a row
 
