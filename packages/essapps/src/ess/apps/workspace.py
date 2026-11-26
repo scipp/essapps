@@ -538,7 +538,7 @@ class _Plan:
     How a record that has not finished runs, made when it is scheduled.
 
     ``reads`` are the values it holds as a reader until it starts, which then
-    holds them itself, or finishes without starting. ``waits`` are the records
+    holds them itself, or finishes without starting. ``depends_on`` are the records
     and the states (see :func:`_state_key`) it waits for before it starts.
     ``compute`` returns its outputs by name, on a worker. ``state`` is the
     state that the record of a freeze reads, which it holds until it has
@@ -546,7 +546,7 @@ class _Plan:
     """
 
     reads: list[_Read]
-    waits: set[str]
+    depends_on: set[str]
     compute: Callable[[], dict[str, Any]]
     state: _StateKey | None = None
 
@@ -1075,7 +1075,7 @@ class Workspace(WorkspaceProtocol):
         refs = request.upstream()
         return _Plan(
             reads=[_OutputKey(ref.record, ref.output) for ref in refs],
-            waits={ref.record for ref in refs} - self._views.finished.keys(),
+            depends_on={ref.record for ref in refs} - self._views.finished.keys(),
             compute=compute,
         )
 
@@ -1086,10 +1086,10 @@ class Workspace(WorkspaceProtocol):
         """
         self._plans[record_id] = plan
         self._readers.update(plan.reads)
-        if not plan.waits:
+        if not plan.depends_on:
             self._executor.submit(self._run, record_id)
             return
-        for key in plan.waits:
+        for key in plan.depends_on:
             self._dependents.setdefault(key, set()).add(record_id)
 
     def _run(self, record_id: str) -> None:
@@ -1358,7 +1358,7 @@ class Workspace(WorkspaceProtocol):
             )
             if (plan := self._plans.pop(finished_id, None)) is not None:
                 self._let_go_locked(plan.reads)  # if it never started
-                for key in plan.waits:
+                for key in plan.depends_on:
                     if (dependents := self._dependents.get(key)) is not None:
                         dependents.discard(finished_id)
                         if not dependents:
@@ -1381,9 +1381,9 @@ class Workspace(WorkspaceProtocol):
 
     def _satisfied_locked(self, record_id: str, key: str) -> None:
         """Start the record once ``key`` was the last thing it waited for."""
-        waits = self._plans[record_id].waits
-        waits.remove(key)  # raises for a record that no longer waits for it
-        if not waits:
+        depends_on = self._plans[record_id].depends_on
+        depends_on.remove(key)  # raises for a record that no longer waits for it
+        if not depends_on:
             self._executor.submit(self._run, record_id)
 
     # What the workspace keeps
@@ -1874,7 +1874,7 @@ class Workspace(WorkspaceProtocol):
         state = _StateKey(acc, upto)
         return _Plan(
             reads=[state],
-            waits={_state_key(acc.id, upto)} if acc.added != upto else set(),
+            depends_on={_state_key(acc.id, upto)} if acc.added != upto else set(),
             compute=lambda: dict(acc.outputs()),
             state=state,
         )
