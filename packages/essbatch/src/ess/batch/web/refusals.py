@@ -18,7 +18,7 @@ raised by the batch layer               said
 ======================================  =====================================
 
 A reason at a field of the page is said with the title of the field
-(:func:`say`), as :func:`ess.apps.errors.said_at` words it: "Thickness is
+(:func:`say`), as :func:`ess.apps.errors.field_error_text` words it: "Thickness is
 missing".
 
 So the page copies no rule of the batch layer: it adds what the person
@@ -26,7 +26,7 @@ asked for, such as "The batch was not made: ", and says the rest as given.
 
 Code of the application, such as a source, the file source or a drawing,
 may raise anything; the page says it and keeps working
-(:func:`ess.apps.errors.said`, which the command ``essbatch`` uses too).
+(:func:`ess.apps.errors.error_text`, which the command ``essbatch`` uses too).
 A ``ValueError`` or an ``OSError``, such as a mount that went away, is a
 refusal, said as its text; a pydantic ``ValidationError``, such as of
 metadata that the code validates, as each reason at its field. Anything else
@@ -41,7 +41,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from ess.apps.errors import said, said_at
+from ess.apps.errors import error_text, field_error_text
 
 from ..definition import NotKept
 from . import forms
@@ -58,20 +58,20 @@ class Missing(Exception):
 def say(title: str, message: str) -> str:
     """
     A reason at the field ``title``, as a sentence
-    (:func:`~ess.apps.errors.said_at`).
+    (:func:`~ess.apps.errors.field_error_text`).
     """
-    return said_at(title, forms.message(message))
+    return field_error_text(title, forms.message(message))
 
 
 def why(error: Exception) -> str:
     """
     What a ``ValueError``, ``OSError`` or ``KeyError`` of a request says,
     without its type or quotes: a ``KeyError`` as its first argument, the
-    others as :func:`~ess.apps.errors.said` says them.
+    others as :func:`~ess.apps.errors.error_text` says them.
     """
     if isinstance(error, KeyError) and error.args:
         return str(error.args[0])
-    return said(error)
+    return error_text(error)
 
 
 @contextmanager
@@ -80,8 +80,8 @@ def refused(doing: str = '') -> Iterator[None]:
     A block that runs code of the application, such as a source, and so
     may raise anything: a write that the definitions refuse raises
     :class:`Problem` as :func:`kept` says it, and any other exception as
-    ``'<doing>: <said>.'``, or as the sentence of :func:`said` if ``doing``
-    is empty (:func:`said`).
+    ``'<doing>: <error_text>.'``, or as the sentence of :func:`error_text` if ``doing``
+    is empty (:func:`error_text`).
     """
     try:
         with kept():
@@ -89,7 +89,7 @@ def refused(doing: str = '') -> Iterator[None]:
     except Problem:
         raise
     except Exception as error:  # code of the application
-        text = said(error)
+        text = error_text(error)
         text = f'{doing}: {text}' if doing else f'{text[:1].upper()}{text[1:]}'
         raise Problem(text if text.endswith('.') else f'{text}.') from None
 

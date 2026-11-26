@@ -35,7 +35,7 @@ import yaml
 from pydantic import ValidationError
 
 from ess.apps import writers
-from ess.apps.errors import said
+from ess.apps.errors import error_text
 from ess.apps.records import Record
 from ess.apps.writers import SCIPP_HDF5, About, Person, Writer
 
@@ -196,4 +196,4 @@ def load_form(path: Path) -> Form:
     try:
         return Form.model_validate(yaml.safe_load(path.read_text()))
     except (yaml.YAMLError, ValidationError) as error:
-        raise ValueError(f'{path}: {said(error)}') from None
+        raise ValueError(f'{path}: {error_text(error)}') from None

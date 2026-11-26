@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from ess.apps.client import Client
-from ess.apps.errors import Stopped, SubmitError, said
+from ess.apps.errors import Stopped, SubmitError, error_text
 from ess.apps.files import replace_at_once
 from ess.apps.folder import described, folder_files, scan_folder
 from ess.apps.records import Record, Status
@@ -295,7 +295,7 @@ def _the_catalogue(given: _Given) -> Catalogue | None:
     try:
         catalogue = _catalogue(args.catalogue)(args.proposal)
     except Exception as error:  # a real catalogue logs in, and may fail to
-        raise _Failed(f'{args.catalogue}: {said(error)}') from None
+        raise _Failed(f'{args.catalogue}: {error_text(error)}') from None
     if not isinstance(catalogue, Catalogue):
         raise _Wrong(
             f'{args.catalogue} gave a {type(catalogue).__name__}, not a catalogue '
@@ -433,7 +433,7 @@ def _catalogue_files(given: _Given) -> list[dict[str, Any]]:
     try:
         return scan_catalogue(ScicatFiles(catalogue.client, args.proposal))
     except OSError as error:
-        raise _Failed(f'{args.catalogue}: {said(error)}') from None
+        raise _Failed(f'{args.catalogue}: {error_text(error)}') from None
 
 
 def _names(given: _Given, names: Iterable[str]) -> list[str] | str:
@@ -868,7 +868,7 @@ def follow(
         except Stopped:
             raise
         except Exception as raised:  # code of the application, as on the page
-            stepped, error, told = None, said(raised), step_failure(raised)
+            stepped, error, told = None, error_text(raised), step_failure(raised)
         if fresh := error is not None and error != failed:
             sys.stderr.write(f'{told}\n')
         failed = error
@@ -1507,7 +1507,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f'{error}\n')
         return 1
     except (SubmitError, ValueError) as error:  # also definitions of another format
-        sys.stderr.write(f'{said(error)}\n')  # a ValidationError of the source too
+        sys.stderr.write(
+            f'{error_text(error)}\n'
+        )  # a ValidationError of the source too
         return 2
     if isinstance(result, int):
         return result

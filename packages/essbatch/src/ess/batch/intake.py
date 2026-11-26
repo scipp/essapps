@@ -35,7 +35,7 @@ from typing import Any
 
 import pandas as pd
 
-from ess.apps.errors import said
+from ess.apps.errors import error_text
 from ess.spec import WorkflowSpec
 
 from . import auto
@@ -71,9 +71,9 @@ def step_failure(error: Exception) -> str:
     """
     What a person reads of a step of Follow (:meth:`Intake.step`) that raised
     ``error``: ``Follow could not step: `` and what
-    :func:`~ess.apps.errors.said` says of it.
+    :func:`~ess.apps.errors.error_text` says of it.
     """
-    return f'Follow could not step: {said(error)}'
+    return f'Follow could not step: {error_text(error)}'
 
 
 def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
@@ -379,7 +379,9 @@ class Intake:
             given = rows_of(self.manager.client, source)
             waits = ~filled(given, batch.fills)
         except ValueError as error:  # as step says it
-            raise ValueError(f'the source {made.source}: {said(error)}') from error
+            raise ValueError(
+                f'the source {made.source}: {error_text(error)}'
+            ) from error
         return given.assign(waits=waits)[~given.index.isin(batch.frame().index)]
 
     def take(self, label: str, keys: Iterable[str]) -> None:

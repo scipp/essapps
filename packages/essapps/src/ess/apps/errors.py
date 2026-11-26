@@ -11,8 +11,8 @@ What the client raises, beyond Python's own errors for a wrong call.
 - :class:`RecordFailed`: a read of a record that failed or was cancelled.
 - :class:`Stopped`: any call of a workspace that stopped or is closed.
 
-:func:`said` says what code of an application raised, as a person reads it,
-and :func:`said_at` a reason at a field.
+:func:`error_text` says what code of an application raised, as a person reads it,
+and :func:`field_error_text` a reason at a field.
 
 Each holds only strings, integers, and tuples of these, so that a wire
 format can carry it as it is::
@@ -121,19 +121,21 @@ class Stopped(RuntimeError):
     """
 
 
-def said(error: Exception) -> str:
+def error_text(error: Exception) -> str:
     """
     What code of an application raised, such as a row source, the file
     source or a drawing, as a person reads it: a pydantic ``ValidationError``,
     such as of metadata that the code validates, as each reason at its field
-    (:func:`said_at`), such as ``run must be a valid integer``; another
+    (:func:`field_error_text`), such as ``run must be a valid integer``; another
     refusal (``ValueError``, ``OSError``) as its text; a defect with the name
     of its type, such as ``RuntimeError: boom`` or ``KeyError: 'run'``.
     """
     name = type(error).__name__
     if isinstance(error, ValidationError):
         return '; '.join(
-            said_at('.'.join(map(str, e['loc'])), e['msg']) if e['loc'] else e['msg']
+            field_error_text('.'.join(map(str, e['loc'])), e['msg'])
+            if e['loc']
+            else e['msg']
             for e in error.errors()
         )
     if isinstance(error, ValueError | OSError):
@@ -141,7 +143,7 @@ def said(error: Exception) -> str:
     return f'{name}: {error}' if str(error) else name
 
 
-def said_at(field: str, message: str) -> str:
+def field_error_text(field: str, message: str) -> str:
     """
     A reason at ``field``, as a sentence: ``run is missing`` for a value
     missing, ``run must be ...`` for pydantic's ``Input should be ...``,

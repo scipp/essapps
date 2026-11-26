@@ -18,7 +18,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from ess.apps.errors import SubmitError, said
+from ess.apps.errors import SubmitError, error_text
 from ess.apps.records import Record
 
 from .reduction import Batch
@@ -114,7 +114,7 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
         if len(new):
             batch.put(pd.concat([table, new]))
     except ValueError as error:
-        raise SourceError(said(error)) from error
+        raise SourceError(error_text(error)) from error
     now = frozenset(considered) | set(new.index) | (set(given.index) & set(table.index))
     # Only the rows without a result are compared: a step reduces no other.
     candidates = not_reduced(batch.state(compare=False))

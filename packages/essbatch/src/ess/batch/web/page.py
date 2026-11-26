@@ -140,7 +140,7 @@ from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
-from ess.apps.errors import FieldError, SubmitError, said
+from ess.apps.errors import FieldError, SubmitError, error_text
 from ess.apps.fields import UNSET, Fields
 from ess.apps.records import Record, Status
 
@@ -904,7 +904,7 @@ class Page:
                 colors={s.key: s.color for s in shown},
             )
         except Exception as error:  # a drawing is code of the application
-            return Plot(figure=None, note=f'Cannot draw: {said(error)}')
+            return Plot(figure=None, note=f'Cannot draw: {error_text(error)}')
 
     # Files
 

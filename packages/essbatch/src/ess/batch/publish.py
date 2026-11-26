@@ -28,7 +28,7 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from ess.apps.errors import said
+from ess.apps.errors import error_text
 from ess.apps.records import Record
 from ess.apps.scicat import Catalogue, publish
 from ess.apps.writers import About
@@ -82,7 +82,9 @@ class Publisher:
             except Exception as error:  # the catalogue's client may raise anything
                 done = ', '.join(f'{k} as {p}' for k, p in pids.items())
                 before = f'published {done}; then ' if pids else ''
-                raise UploadFailed(f'{before}{key} failed: {said(error)}') from error
+                raise UploadFailed(
+                    f'{before}{key} failed: {error_text(error)}'
+                ) from error
         return pids
 
     def _results(self, label: str, keys: Sequence[str]) -> dict[str, Record]:

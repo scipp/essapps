@@ -29,7 +29,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ess.apps.client import Client
-from ess.apps.errors import said
+from ess.apps.errors import error_text
 from ess.apps.fields import UNSET, Fields
 from ess.apps.files import Selector
 from ess.apps.listing import Listing
@@ -75,14 +75,14 @@ class SafeListing(Listing):
         try:
             return super().files(marker)
         except Exception as error:  # the file source is code of the application
-            self.error = said(error)
+            self.error = error_text(error)
             return {}
 
     def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
         try:
             return super().listed(selector)
         except Exception as error:  # the file source is code of the application
-            self.error = said(error)
+            self.error = error_text(error)
             return {}
 
 
