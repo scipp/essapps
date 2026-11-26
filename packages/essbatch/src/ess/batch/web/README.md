@@ -323,6 +323,8 @@ flowchart TD
 | `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It alone writes the listing of the files and its version, the corrections of runs, and the step of Follow (`tick`) and what it said |
 | `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Pages` for the listing and for what to show of Follow |
 | `draft.py` | `Draft`: the settings form of a `Page`, a draft until Apply: what it holds, what it showed of the batch's settings, and the settings it could not show |
+| `view.py` | how what the batch layer gives reads on a page, as the models of `models.py`, and how a cell sent back reads: functions of their arguments only; one title per parameter (`titles`) |
+| `tempfiles.py` | a file that a person sends or gets, in a folder of its own |
 | `refusals.py` | how `Pages` and `Page` refuse a request: `Problem` (422) or `Missing` (404); how an exception of the batch layer reads as a message (`why`, `kept`), and how a request says what code of the application raised (`refused`, with `ess.apps.errors.said`: a pydantic `ValidationError` as each reason at its field, `ValueError` and `OSError` as their text; anything else is a defect, said with its type) |
 | `ess.batch` | the logic: `BatchManager`, `Intake`, `step`, `Batch`, `table`, states, `CorrectedFiles`; shared with the command `essbatch` |
 

@@ -67,7 +67,7 @@ from ess.apps.errors import said
 from ess.apps.fields import UNSET, Fields
 from ess.apps.files import Selector
 from ess.apps.listing import Listing
-from ess.spec import File, FileRef, WorkflowSpec
+from ess.spec import File, FileRef
 
 from ..auto import Step
 from ..corrections import CorrectedFiles
@@ -76,7 +76,7 @@ from ..source import Range, RowSource
 from ..state import RowState, not_reduced
 from ..table import read_table
 from ..writing import Writing
-from . import forms
+from . import forms, view
 from .models import (
     BatchCounts,
     Batches,
@@ -88,22 +88,20 @@ from .models import (
     Made,
     NewBatch,
     Notice,
-    Param,
-    RunCell,
-    RunRow,
     Runs,
     SourceChoice,
     SourceRows,
-    SpecChoice,
 )
-from .page import Draw, Page, listed, read, read_file
+from .page import Page
 from .refusals import Missing, Problem, kept, refused, why
+from .tempfiles import read_file
 
 if TYPE_CHECKING:
     from ess.apps.scicat import Catalogue
     from ess.apps.writers import Writer
 
     from ..publish import Publisher
+    from .page import Draw
 
 
 class SafeListing(Listing):
@@ -372,34 +370,15 @@ class Pages:
             marks, files = self._marks()
             self.list_again()
             listing = self._listing
-            columns = [
-                Column(name=n, title=marks.titles[n], editor=forms.editor(f))
-                for n, f in marks.fields.items()
-            ]
-
-            def text(value: Any) -> str:
-                return '' if value is UNSET else listing.text(value)
-
-            rows = []
-            for ref in listing.files_listed:
-                metadata = files.metadata(ref)
-                original = files.source.metadata(ref)
-                corrected = files.corrections(ref)
-                cells = {
-                    name: RunCell(
-                        value=forms.cell(field, metadata.get(name, UNSET)),
-                        text=text(metadata.get(name, UNSET)),
-                        edited=name in corrected,
-                        original=text(original.get(name, UNSET)),
-                    )
-                    for name, field in marks.fields.items()
-                }
-                label = listing.file_label(ref)
-                rows.append(RunRow(key=ref.file, file=label, cells=cells))
             return Runs(
                 version=self._files_version,
-                columns=columns,
-                rows=rows,
+                columns=[
+                    Column(name=n, title=marks.titles[n], editor=forms.editor(f))
+                    for n, f in marks.fields.items()
+                ],
+                rows=[
+                    view.run(ref, marks, files, listing) for ref in listing.files_listed
+                ],
                 problem=listing.failure,
             )
 
@@ -407,7 +386,7 @@ class Pages:
         """Correct a field of the runs ``edit.keys``, as its field reads the value."""
         with self.lock:
             marks, files = self._marks()
-            value = read(marks, edit)
+            value = view.read(marks, edit)
             fields = {edit.column: None if value is UNSET else value}
             self._kept(
                 lambda: files.correct_each(
@@ -543,7 +522,7 @@ class Pages:
                     name=name,
                     fills=list(fills),
                     specs=[
-                        _spec_choice(spec, fills, listing)
+                        view.spec_choice(spec, fills, listing)
                         for spec in specs
                         if fits(spec, source)
                     ],
@@ -571,7 +550,7 @@ class Pages:
         with self.lock:
             with refused():
                 given = self.intake.marked(source, Range(first, last, later))
-            return listed(given, self.intake.sources[source].fills)
+            return view.listed(given, self.intake.sources[source].fills)
 
     def create(self, new: NewBatch, file: tuple[str, bytes] | None = None) -> Made:
         """
@@ -685,19 +664,3 @@ class Pages:
                 rows[label] = dict(Counter(s.text for s in states.values()))
                 files[label] = sorted(ref.file for ref in named)
             return BatchCounts(rows=rows, files=files, failed=failed)
-
-
-def _spec_choice(
-    spec: WorkflowSpec[Any, Any], fills: Sequence[str], listing: Listing
-) -> SpecChoice:
-    """
-    ``spec`` as a choice of the source that fills ``fills``: those first,
-    then each other parameter whose cell the page edits.
-    """
-    form = Fields(spec.params, listing)
-    names = [*fills, *(n for n in forms.edited(form) if n not in fills)]
-    return SpecChoice(
-        name=spec.name,
-        title=spec.title,
-        params=[Param(name=n, title=form.titles[n]) for n in names],
-    )

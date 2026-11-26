@@ -11,7 +11,7 @@ at Apply, and builds another when the parameter columns of the batch change.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from ess.apps.errors import FieldError
@@ -76,6 +76,18 @@ class Draft:
     def held(self) -> tuple[dict[str, Any], list[FieldError]]:
         """What the form holds, and what is missing (:func:`.forms.held`)."""
         return forms.held(self.fields, self._columns)
+
+    def at_applied(self, errors: Iterable[FieldError]) -> list[FieldError]:
+        """
+        Those of ``errors`` that name no field, or a field that holds what
+        it held at the last :meth:`reset`: the value refused is shown.
+        """
+        given, shown = self.held()[0], self.shown[0]
+        return [
+            e
+            for e in errors
+            if not e.loc or given.get(str(e.loc[0])) == shown.get(str(e.loc[0]))
+        ]
 
     def unapplied(self) -> str | None:
         """
