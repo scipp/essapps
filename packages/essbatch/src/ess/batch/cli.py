@@ -1,7 +1,73 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Reduce many runs as batches, on a workspace folder.
+The command ``essbatch``: an application of the batch layer, as the page is.
+Its help, :data:`_HELP` and the description of each command, is the
+documentation for a person who operates batches (ADR 0014).
+
+A command is a function of :class:`_Given` that gives a :data:`_Result`, and
+an item of :data:`_COMMANDS` that names it with its arguments and checks.
+The commands are thin: the rules are those of ``BatchManager``, ``Intake``
+and ``Batch``, as the page applies them, so a label is one batch whoever
+works on it.
+
+One process works on a folder at a time: a command that opens the folder
+refuses one that another process holds. ``files`` does not open the folder,
+so it runs while ``follow`` holds it. The loop of ``follow`` ends at the
+first SIGINT, SIGTERM or SIGHUP, or after ``--steps``, once the reductions
+that run have ended; a second signal ends the process at once
+(:func:`_stopped_by_signals`).
+"""
+
+from __future__ import annotations
+
+import argparse
+import functools
+import json
+import math
+import os
+import signal
+import sys
+import threading
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from importlib import import_module
+from pathlib import Path
+from types import FrameType
+from typing import TYPE_CHECKING, Any, Literal
+
+import numpy as np
+import pandas as pd
+
+from ess.apps.client import Client
+from ess.apps.errors import Stopped, SubmitError, said
+from ess.apps.files import replace_at_once
+from ess.apps.folder import described, folder_files, scan_folder
+from ess.apps.records import Record, Status
+from ess.apps.writers import Writer
+from ess.spec import Binding
+
+from . import frames
+from .corrections import open_workspace
+from .definition import FolderDefinitions, NotKept
+from .export import by_writer, export_table
+from .intake import Intake, not_registered, step_failure
+from .manager import BatchManager
+from .reduction import Batch
+from .source import Range, RowSource
+from .table import KEY, SUFFIXES, read_table, read_text, write_table
+from .templates import checked_settings, load_template, settings_text, template_to_fill
+from .writing import Writing, load_form
+
+if TYPE_CHECKING:
+    from ess.apps.scicat import Catalogue
+
+    from .publish import Publisher
+
+
+_HELP = """Reduce many runs as batches, on a workspace folder.
 
 A batch is a template and a batch table, kept in the folder under a label.
 Each row of the batch table is one reduction, such as of one sample run; the
@@ -131,60 +197,7 @@ Exit status:
 One process works on a folder at a time: the command refuses a folder that
 another process holds, such as a page or a follow. Messages go to stderr.
 """
-
-# The commands are thin: the rules are those of BatchManager, Intake and Batch,
-# as the page applies them, so a label is one batch whoever works on it. Only
-# reduce, take and the steps of follow change a batch table. A command is a
-# function of _Given and an item of _COMMANDS. The guide is
-# packages/essbatch/docs/batch.md, section
-# "Table files and the command".
-
-from __future__ import annotations
-
-import argparse
-import functools
-import json
-import math
-import os
-import signal
-import sys
-import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager, suppress
-from dataclasses import dataclass
-from datetime import UTC, datetime
-from importlib import import_module
-from pathlib import Path
-from types import FrameType
-from typing import TYPE_CHECKING, Any, Literal
-
-import numpy as np
-import pandas as pd
-
-from ess.apps.client import Client
-from ess.apps.errors import Stopped, SubmitError, said
-from ess.apps.files import replace_at_once
-from ess.apps.folder import described, folder_files, scan_folder
-from ess.apps.records import Record, Status
-from ess.apps.writers import Writer
-from ess.spec import Binding
-
-from . import frames
-from .corrections import open_workspace
-from .definition import FolderDefinitions, NotKept
-from .export import by_writer, export_table
-from .intake import Intake, not_registered, step_failure
-from .manager import BatchManager
-from .reduction import Batch
-from .source import Range, RowSource
-from .table import KEY, SUFFIXES, read_table, read_text, write_table
-from .templates import checked_settings, load_template, settings_text, template_to_fill
-from .writing import Writing, load_form
-
-if TYPE_CHECKING:
-    from ess.apps.scicat import Catalogue
-
-    from .publish import Publisher
+"""The description of ``essbatch --help``."""
 
 
 class _Wrong(Exception):
@@ -256,7 +269,10 @@ def _writers(name: str) -> Mapping[str, Sequence[Writer]]:
 
 
 def _catalogue(name: str) -> Callable[[str], Any]:
-    """The function that ``name`` names; ``_Wrong`` if it names something else."""
+    """
+    The function that ``name`` names, such as
+    :func:`ess.batch.web.demo.fake_catalogue`; ``_Wrong`` if something else.
+    """
     make = _named(name)
     if not callable(make):
         raise _Wrong(
@@ -1255,8 +1271,8 @@ _COMMANDS = {
         _export,
         description='Write the result of each done row of the table file '
         'TABLE, each output as scipp HDF5, or of the batch of LABEL as it '
-        'stands, as its form says, to a folder of its key in DIRECTORY, with '
-        'the record as _record.json; and write the rows.',
+        'stands, as its form says, to a folder of its key in DIRECTORY, which it '
+        'replaces whole, with the record as _record.json; and write the rows.',
         arguments=_export_arguments,
         check=_one_of('table', 'label'),
     ),
@@ -1326,7 +1342,7 @@ _COMMANDS = {
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='essbatch',
-        description=__doc__,
+        description=_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
@@ -1368,7 +1384,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--json',
         action='store_true',
-        help='write tables as JSON; follow: an object per line',
+        help='write tables as JSON: a list of objects, one per row, with the '
+        'key as a field and null for an empty cell; follow: an object per line',
     )
     parser.add_argument(
         '--proposal', default='local', help='the proposal of the files (default: local)'
@@ -1456,7 +1473,7 @@ def _opened(given: _Given, command: _Command) -> _Result:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the command, and return its exit status (see the module)."""
+    """Run the command, and return its exit status (see :data:`_HELP`)."""
     parser = _parser()
     args = parser.parse_args(argv)
     command = _COMMANDS[args.command]
