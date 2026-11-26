@@ -31,15 +31,16 @@ it.
 
 Keepers and readers
 -------------------
-The workspace keeps the outputs of the records that a submission or a freeze
-made without persisting them, until they are released (``_kept``). The pending
-records, steps of accumulators, and stages that have yet to read a value are its
-readers (``_readers``, see ``_Read``). A value is dropped when the workspace does
-not keep it and no reader is left (``_drop``). A pending record whose outputs
-nothing keeps is cancelled, since they would be dropped the moment they are
-computed; cancelling lets go of what it reads, so this passes along a chain. A
-workflow already running is not interrupted: its record is cancelled at once,
-and its outputs are dropped when it returns. Once a stage has staged, or a step
+The workspace holds in memory the outputs of the records that a submission or a
+freeze made without persisting them, until they are released (``_in_memory``).
+The pending records, steps of accumulators, and stages that have yet to read a
+value are its readers (``_readers``, see ``_Read``). A value is dropped when the
+workspace does not hold it in memory and no reader is left (``_drop``). A pending
+record whose outputs nothing keeps is cancelled, since they would be dropped the
+moment they are computed; cancelling lets go of what it reads, so this passes
+along a chain. A workflow already running is not interrupted: its record is
+cancelled at once, and its outputs are dropped when it returns. Once a stage has
+staged, or a step
 is done, what the binding holds is its own.
 
 A persist request made with a submission or a freeze replaces the workspace's
@@ -49,12 +50,12 @@ names, written for a record cancelled meanwhile or by a write that failed
 part-way; nothing reads it.
 
 :meth:`Workspace._refusal` decides what may be read, in the request phase, from
-the record's existence, whether the workspace keeps it, and what it persists.
-So whether a call is accepted does not depend on how far other work has run,
-and a pending record is as readable as a completed one. A read takes the
-outputs the workspace keeps from memory, and persisted ones from the store, after
-the write; a workflow reads the outputs it references from memory while the
-workspace holds them.
+the record's existence, whether the workspace holds it in memory, and what it
+persists. So whether a call is accepted does not depend on how far other work has
+run, and a pending record is as readable as a completed one. A read takes the
+outputs the workspace holds in memory from there, and persisted ones from the
+store, after the write; a workflow reads the outputs it references from memory
+while the workspace holds them.
 
 A request waits until every record it references has completed, the record
 of a freeze until the accumulator has reached its state, and an accumulator's
@@ -600,9 +601,9 @@ class Workspace(WorkspaceProtocol):
         self._stopped: Exception | None = None  # why an append failed
         self._closed = False
         # Not history
-        # the records whose outputs the workspace keeps: those a submission or a
-        # freeze made without persisting outputs, until released
-        self._kept: set[str] = set()
+        # the records whose outputs the workspace holds in memory: those a
+        # submission or a freeze made without persisting outputs, until released
+        self._in_memory: set[str] = set()
         self._stages: dict[str, _Stage] = {}  # open, by ID
         self._accumulators: dict[str, _Accumulator] = {}  # open, by ID
         # by record ID and name
@@ -640,7 +641,9 @@ class Workspace(WorkspaceProtocol):
                 self._closed = True
                 if self._stopped is None:  # a workspace that stopped logs nothing more
                     try:
-                        self._release([*self._kept, *self._stages, *self._accumulators])
+                        self._release(
+                            [*self._in_memory, *self._stages, *self._accumulators]
+                        )
                     except Exception as error:
                         if error is not self._stopped:  # not a failed append
                             raise
@@ -810,8 +813,8 @@ class Workspace(WorkspaceProtocol):
     ) -> list[Record]:
         """
         File names are resolved before the workspace's lock is taken. The records
-        are pending, and the workspace keeps the outputs of those that persist
-        none. A persist request is logged with the submission (see the module
+        are pending, and the workspace holds in memory the outputs of those that
+        persist none. A persist request is logged with the submission (see the module
         docstring).
         """
         self._check_running()
@@ -858,7 +861,7 @@ class Workspace(WorkspaceProtocol):
     ) -> None:
         """
         Log a submission or a freeze of ``records`` of the bound ``spec_ids``,
-        and keep the outputs of those that persist none; lock held.
+        and hold in memory the outputs of those that persist none; lock held.
         """
         unlogged = self._views.unlogged({s: self._bound[s].digest for s in spec_ids})
         self._append(
@@ -870,7 +873,7 @@ class Workspace(WorkspaceProtocol):
                 records=tuple(records),
             )
         )
-        self._kept.update(r.id for r in records if not r.persist)
+        self._in_memory.update(r.id for r in records if not r.persist)
 
     def _output_names(self, spec_id: SpecId) -> tuple[str, ...]:
         """The names of the outputs the spec declares; needs no lock."""
@@ -1022,8 +1025,8 @@ class Workspace(WorkspaceProtocol):
 
         This is the read rule. The record must not have failed or been
         cancelled, and a record that has completed must have returned the
-        output. The workspace must keep the record, or the request's stage the
-        output, ``also``, and it is read from memory; or the record must
+        output. The workspace must hold the record in memory, or the request's
+        stage the output, ``also``, and it is read from memory; or the record must
         persist the output, and it is read from the store. A pending record
         passes: whether a request is accepted does not depend on how far what
         it reads has run.
@@ -1032,9 +1035,9 @@ class Workspace(WorkspaceProtocol):
         status = self._views.status(record_id)
         if status in (Status.FAILED, Status.CANCELLED):
             return f'record {record_id} {status}'
-        held = record_id in self._kept or key in also
+        held = record_id in self._in_memory or key in also
         if not held and not self._views.persists(key):
-            return f'record {record_id} is not kept'
+            return f'record {record_id} is neither in memory nor persisted'
         if self._views.omitted(key):
             return f'record {record_id} output {name}: the workflow did not return it'
         return None
@@ -1208,9 +1211,9 @@ class Workspace(WorkspaceProtocol):
     def _let_go(self, keys: Iterable[_Read]) -> None:
         """
         Count one reader less of each value; lock held. A record's output that
-        no reader is left for is dropped if the workspace does not keep it (see
-        :meth:`_drop`), and a state of an accumulator lets the accumulator
-        move on.
+        no reader is left for is dropped if the workspace does not hold it in
+        memory (see :meth:`_drop`), and a state of an accumulator lets the
+        accumulator move on.
 
         Dropping may cancel a record, which lets go of what it reads in turn.
         The values left unread are worked through in one loop, not by
@@ -1259,7 +1262,7 @@ class Workspace(WorkspaceProtocol):
         computed; cancelling lets go of
         what it reads, so this passes along a chain.
         """
-        if record_id in self._kept:
+        if record_id in self._in_memory:
             return
         names = self._views.records.outputs(record_id)
         kept = [n for n in names if self._readers[(record_id, n)]]
@@ -1385,8 +1388,8 @@ class Workspace(WorkspaceProtocol):
             if (acc := self._accumulators.pop(i, None)) is not None:
                 acc.released = True
                 self._unneeded(acc)
-            if i in self._kept:
-                self._kept.remove(i)
+            if i in self._in_memory:
+                self._in_memory.remove(i)
                 self._drop(i)
         self._changed.notify_all()
 
@@ -1513,41 +1516,45 @@ class Workspace(WorkspaceProtocol):
                 if name not in record.outputs:
                     raise KeyError(f'{record.spec} has no output {name!r}')
             self._wait_for(lambda: self._read_ready(record_id, wanted))
-            kept = record_id in self._kept
+            in_memory = record_id in self._in_memory
             chosen = self._read_names(record, names)
-            # from memory if kept, else from the store
-            values = {n: self._outputs[(record_id, n)] for n in chosen if kept}
-        if not kept:
+            # from memory if held there, else from the store
+            values = {n: self._outputs[(record_id, n)] for n in chosen if in_memory}
+        if not in_memory:
             values = {n: self._stored(record.ref(n)) for n in chosen}
         return values
 
     def _read_ready(self, record_id: str, wanted: Sequence[str]) -> bool:
         """
         Whether a read of the outputs ``wanted`` stops waiting: once the
-        record has finished, or at once if the workspace does not keep it and
-        it persists none of them, since there is nothing to wait for; lock
-        held.
+        record has finished, or at once if the workspace does not hold it in
+        memory and it persists none of them, since there is nothing to wait for;
+        lock held.
         """
         if record_id in self._views.finished:
             return True
-        if record_id in self._kept:
+        if record_id in self._in_memory:
             return False
         return not any(self._views.persists((record_id, n)) for n in wanted)
 
     def _read_names(self, record: Record, names: Sequence[str] | None) -> list[str]:
         """
         The outputs a read takes, once it has waited: ``names``, or if
-        ``None`` every output that the workspace keeps or the record persists
-        and that the workflow returned; lock held. Raises ``RecordFailed`` for
+        ``None`` every output that the workspace holds in memory or the record
+        persists and that the workflow returned; lock held. Raises ``RecordFailed`` for
         a record that failed or was cancelled, and ``NotReadable`` for an
         output that may not be read (see :meth:`_refusal`).
         """
         views, record_id = self._views, record.id
         if names is None:
-            kept = record_id in self._kept
-            held = [n for n in record.outputs if kept or views.persists((record_id, n))]
+            in_memory = record_id in self._in_memory
+            held = [
+                n for n in record.outputs if in_memory or views.persists((record_id, n))
+            ]
             if not held:
-                raise NotReadable(f'record {record_id} is not kept')
+                raise NotReadable(
+                    f'record {record_id} is neither in memory nor persisted'
+                )
             # only a completed record omits outputs, so a failed one raises below
             names = [n for n in held if not views.omitted((record_id, n))]
         finished = views.finished.get(record_id)

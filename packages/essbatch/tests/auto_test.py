@@ -351,7 +351,7 @@ def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
     for run, name in [(2, 'sds'), (3, 'dmso'), (4, 'd2o')]:
         sample(run, name)
     refused = {
-        '2': f'2: offset: record {found.id} is not kept',
+        '2': f'2: offset: record {found.id} is neither in memory nor persisted',
         '3': f'3: offset: unknown record or accumulator {unknown.record}',
     }
 

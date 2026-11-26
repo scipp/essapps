@@ -423,7 +423,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(NotReadable, match='is not kept'):
+    with pytest.raises(NotReadable, match='is neither in memory nor persisted'):
         again.output(load, 'value')
 
 
@@ -437,7 +437,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     again = restart(tmp_path / 'log')
 
     total = _total(again)
-    with pytest.raises(SubmitError, match='is not kept'):
+    with pytest.raises(SubmitError, match='is neither in memory nor persisted'):
         total.push(part=[load.ref('value')])
 
 

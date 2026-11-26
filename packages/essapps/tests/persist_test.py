@@ -300,9 +300,9 @@ def test_persisted_at_submission_the_store_keeps_the_outputs_named(
     assert other.output(load, 'value') == Amount(value=1.0)
     assert (load.id, 'value') in store
     assert (load.id, 'extra') not in store
-    with pytest.raises(NotReadable, match='is not kept'):
+    with pytest.raises(NotReadable, match='is neither in memory nor persisted'):
         client.output(load, 'extra')  # dropped once the record completed
-    with pytest.raises(SubmitError, match='is not kept'):
+    with pytest.raises(SubmitError, match='is neither in memory nor persisted'):
         client.submit(SHIFT, params={'source': load.ref('extra')})
     shift = other.compute(SHIFT, params={'source': load.ref('value')})
     assert other.output(shift, 'value') == Amount(value=11.0)
@@ -762,7 +762,7 @@ def test_a_read_of_a_persisted_output_waits_for_its_write_and_no_other_does(
     with ThreadPoolExecutor() as pool:
         value = pool.submit(other.output, load, 'value')
         assert store.entered.wait(timeout=5)
-        with pytest.raises(NotReadable, match='is not kept'):
+        with pytest.raises(NotReadable, match='is neither in memory nor persisted'):
             other.output(load, 'extra')  # never written, so nothing to wait for
         store.gate.set()
         assert value.result(timeout=5) == Amount(value=1.0)

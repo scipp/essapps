@@ -185,7 +185,11 @@ def test_a_stage_refuses_a_template_that_a_request_would_refuse(
     client.release(released)
     refused: list[tuple[Any, dict[str, Any], str]] = [
         (toys.SHIFT, {'source': file(run=1)}, 'shift'),  # request_types refuses it
-        (toys.SHIFT, {'source': released.ref('value')}, 'shift'),  # a record not kept
+        (
+            toys.SHIFT,
+            {'source': released.ref('value')},
+            'shift',
+        ),  # a record neither in memory nor persisted
         (toys.SCALE, {'sample': file(run=9)}, 'scaling'),  # an unknown file
     ]
     for spec, params, blank in refused:

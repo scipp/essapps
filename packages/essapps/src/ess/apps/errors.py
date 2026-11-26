@@ -89,11 +89,11 @@ class SubmitError(ValueError):
 class NotReadable(LookupError):
     """
     A record, an output, or an accumulator that exists, but that cannot be
-    read: an output that the workspace does not keep and that is not persisted;
-    an output that the store no longer holds or that the workflow did not
-    return; an accumulator released, that stopped, or that is read through the
-    record of its freeze; a state whose plain request would be refused or whose
-    driver fails to give outputs. One that does not exist raises ``KeyError``.
+    read: an output that the workspace does not hold in memory and that is not
+    persisted; an output that the store no longer holds or that the workflow did
+    not return; an accumulator released, that stopped, or that is read through
+    the record of its freeze; a state whose plain request would be refused or
+    whose driver fails to give outputs. One that does not exist raises ``KeyError``.
     """
 
 
