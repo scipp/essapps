@@ -63,7 +63,7 @@ While a person has changed the form and not applied the change, the bar above it
 Apply is refused while the form misses something, and the bar says what; it also names the settings kept that the form cannot show, which Apply replaces.
 While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown.
 **Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was. A value at a parameter column that the row source fills is left out (`Batch.settable`).
-"Put these settings in the form" puts the value that the row was reduced with at each column where its cell is empty, and leaves the batch's setting where the row gives its own value, which is no setting of the batch.
+"Put these settings in the form" puts the value that the row was reduced with at each column where its cell is empty, and leaves the batch's setting where the row gives its own value, which is no setting of the batch (`Batch.settings_of`).
 **Download settings** writes every setting, those at the parameter columns too, as a template without blanks.
 A change of the settings applies to the rows not reduced yet.
 A row reduced before that takes the setting changed reads `earlier`, reduced with earlier settings, and **Reduce** leaves it (`ess.batch.left_to_reduce`); a row that gives its own value in the column of the setting stays `done`.

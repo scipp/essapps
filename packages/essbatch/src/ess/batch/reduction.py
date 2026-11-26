@@ -92,7 +92,7 @@ from ess.spec.refs import iter_refs
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
-from .table import as_request, cell_of, data_of, typed
+from .table import as_request, cell_of, data_of, names, typed
 
 _NONE = object()
 
@@ -611,6 +611,28 @@ class Batch:
             return self.state(keys), ()
         except SubmitError as error:
             return self.state(keys, compare=False), error.errors
+
+    def settings_of(self, key: str) -> dict[str, Any]:
+        """
+        The settings that the result of row ``key`` was reduced with: at a
+        column where the row gives its own value, the batch's setting, and
+        where its cell is empty, the value that the row took. Raises
+        ``ValueError`` naming the row (:func:`~.table.names`) if it has no
+        result, or one of another spec, whose settings this one does not take;
+        ``KeyError`` if the table has no row ``key``.
+        """
+        row = self.shown([key])[0][key]
+        name = names(self._rows, self.parameter_columns)[key]
+        if row.record is None:
+            raise ValueError(f'{name} has no result')
+        if row.spec_changed:
+            raise ValueError(
+                f'{name} was reduced by another version of the workflow, '
+                'whose settings this one does not take'
+            )
+        kept = {n: v for n, v in self.settings.items() if n in row.own}
+        took = {n: v for n, v in row.record.request.params.items() if n not in row.own}
+        return {**took, **kept}
 
     def _cells_and_results(
         self, keys: Sequence[str] | None

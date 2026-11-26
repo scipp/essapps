@@ -775,23 +775,16 @@ class Page:
     @_action
     def use_settings(self, key: str) -> str:
         """
-        Show the settings that the result of row ``key`` was reduced with: at
-        a column where the row gives its own value, the batch's setting, and
-        where its cell is empty, the value that the row took.
+        Show the settings that the result of row ``key`` was reduced with
+        (:meth:`~ess.batch.Batch.settings_of`).
         """
         frame = self._frame([key])
         name = names(frame, self.batch.parameter_columns)[key]
-        row = self._states([key])[0][key]
-        if row.record is None:
-            raise Problem(f'{name} has no result.')
-        if row.spec_changed:
-            raise Problem(
-                f'{name} was reduced by another version of the workflow, '
-                'whose settings this one does not take.'
-            )
-        kept = {n: v for n, v in self.batch.settings.items() if n in row.own}
-        took = {n: v for n, v in row.record.request.params.items() if n not in row.own}
-        self._fill({**took, **kept})
+        try:
+            settings = self.batch.settings_of(key)
+        except ValueError as error:
+            raise Problem(f'{why(error)}.') from None
+        self._fill(settings)
         return (
             f'The form shows the settings {name} was reduced with. Apply to use them.'
         )
