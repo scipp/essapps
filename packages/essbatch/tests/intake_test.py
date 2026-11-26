@@ -332,7 +332,7 @@ def test_a_row_added_after_make_column_takes_the_setting(
 
     assert pd.isna(batch.frame().loc['2', 'thickness'])
     assert batch.state()['2'].record.request.params['thickness'] == 2.0
-    assert batch.state()['1'].text == 'done'
+    assert batch.state()['1'].status == 'done'
 
 
 def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
@@ -353,7 +353,7 @@ def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
     done = again.step()
     state = again.manager.batch('a').state()['2']
 
-    assert again.manager.batch('a').state()['1'].text != 'incomplete'
+    assert again.manager.batch('a').state()['1'].status != 'incomplete'
     assert done is not None
     assert '2' not in done.records
     assert [(e.loc, e.msg) for e in state.problems] == [(('transmission',), 'empty')]

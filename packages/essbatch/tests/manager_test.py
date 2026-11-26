@@ -429,7 +429,7 @@ def test_rows_reduced_are_not_outdated_in_a_manager_made_again(
 
     state = _again(client, definitions).batch(batch.label).state()['1']
 
-    assert (state.text, state.outdated) == ('done', False)
+    assert (state.status, state.outdated) == ('done', False)
 
 
 @pytest.mark.parametrize('title', ['', '   '])

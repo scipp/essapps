@@ -191,7 +191,7 @@ def test_rows_are_reduced_and_found_by_their_key(
     assert {r.member for r in client.records(label='scan')} == {'1', '2'}
     state = measured.state()
     assert state['1'].record == records['1']
-    assert state['1'].status is Status.COMPLETED
+    assert state['1'].record_status is Status.COMPLETED
 
 
 def test_the_state_of_chosen_rows_asks_the_status_of_their_records_only(
@@ -267,7 +267,7 @@ def test_an_empty_cell_of_a_parameter_that_takes_none_gives_none(
         table = pd.DataFrame({'sample': ['run:1'], 'transmission': [None]}, index=['1'])
         batch = Batch(client, OPTIONAL, label='s', rows=table)
 
-        assert batch.state()['1'].text == 'ready'
+        assert batch.state()['1'].status == 'ready'
         records = batch.reduce(['1'])
 
     assert records['1'].request.params['transmission'] is None
@@ -630,7 +630,7 @@ def test_a_column_that_the_source_fills_takes_its_value_from_the_cell_only(
 
     # The setting is never read, and offset waits although it has a default.
     assert from_source.settings == {'thickness': 3.0}
-    assert row.text == 'incomplete'
+    assert row.status == 'incomplete'
     assert sorted(e.loc for e in row.problems) == [('offset',), ('transmission',)]
     assert from_source.values('transmission') == {'1': None}
     assert 'transmission' not in from_source.cells()['1']
@@ -675,12 +675,12 @@ def test_a_changed_setting_at_a_column_reads_settings_changed_for_rows_that_take
     edit(measured, '2', thickness=2.5)
     edited = measured.state()['2']
 
-    assert (states['1'].text, states['1'].changed) == (
+    assert (states['1'].status, states['1'].changed) == (
         'settings changed',
         {'thickness'},
     )
-    assert (states['2'].text, states['2'].changed) == ('done', set())
-    assert (edited.text, edited.changed) == ('outdated', {'thickness'})
+    assert (states['2'].status, states['2'].changed) == ('done', set())
+    assert (edited.status, edited.changed) == ('outdated', {'thickness'})
 
 
 def test_a_second_batch_on_the_label_reads_the_same_changed(
@@ -732,11 +732,11 @@ def test_a_file_named_before_it_is_measured_is_a_problem_until_it_is(
     assert [e.loc for e in before['9'].problems] == [('sample',)]
     assert ready(before) == ['1', '2']
     assert measured.state(compare=False)['9'].problems == ()
-    assert (after['9'].problems, after['9'].text) == ((), 'ready')
+    assert (after['9'].problems, after['9'].status) == ((), 'ready')
 
 
 def texts(states: dict[str, RowState]) -> dict[str, str]:
-    return {key: s.text for key, s in states.items()}
+    return {key: s.status for key, s in states.items()}
 
 
 @pytest.mark.parametrize('method', ['metadata', 'path'])
@@ -830,7 +830,7 @@ def test_a_cell_refused_is_a_problem_of_its_row_and_not_changed(
 
     assert [e.loc for e in state.problems] == [('sample',)]
     assert state.changed == frozenset()
-    assert state.text == 'incomplete'
+    assert state.status == 'incomplete'
 
 
 class Changing:
@@ -1052,8 +1052,8 @@ def test_a_result_of_a_spec_of_the_same_version_but_another_definition_is_outdat
 
         state = new.state()['1']
 
-        assert (state.status, state.spec_changed) == (Status.COMPLETED, True)
-        assert state.text == 'outdated'
+        assert (state.record_status, state.spec_changed) == (Status.COMPLETED, True)
+        assert state.status == 'outdated'
 
 
 def test_the_state_of_chosen_rows_reads_only_the_records_that_changed(
@@ -1302,7 +1302,7 @@ def test_a_row_reduced_reads_the_same_until_it_finishes_and_the_version_stays(
     gate.open()
     client.wait(records)
 
-    assert measured.shown()[0]['1'].status is Status.COMPLETED
+    assert measured.shown()[0]['1'].record_status is Status.COMPLETED
     assert measured.version == version
 
 

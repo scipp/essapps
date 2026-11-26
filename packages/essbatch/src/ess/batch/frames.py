@@ -164,7 +164,7 @@ def with_results(
     The rows of ``keys`` of the table of ``batch``, or all, with the columns
     of :data:`RESULT`, replaced if it has them: what ``states`` say of the
     row of each key. ``status`` is the row's status in the words of the page
-    (:attr:`~.state.RowState.text`), ``record`` the ID of its result,
+    (:attr:`~.state.RowState.status`), ``record`` the ID of its result,
     ``failure`` why that failed, and ``published`` its catalogue identifier
     (:func:`~.definition.published`); each text is empty where there is
     nothing to say.
@@ -180,7 +180,7 @@ def with_results(
     found = [r for r in records if r is not None]
     failure = dict(zip((r.id for r in found), client.failure(found), strict=True))
     return frame.drop(columns=list(RESULT), errors='ignore').assign(
-        status=[states[key].text for key in keys],
+        status=[states[key].status for key in keys],
         record=['' if r is None else r.id for r in records],
         failure=['' if r is None else failure[r.id] or '' for r in records],
         published=['' if r is None else published.get(r.id, '') for r in records],

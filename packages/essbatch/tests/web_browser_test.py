@@ -529,7 +529,7 @@ def test_the_reduce_menu_reduces_the_rows_of_earlier_settings(
     page.wait_for_selector('.chip.st-done .n:text-is("2")')
     assert page.is_hidden('#settings-changed-badge')
     assert page.is_hidden('#settings-changed')
-    assert {k: s.text for k, s in batch.state().items()} == {
+    assert {k: s.status for k, s in batch.state().items()} == {
         '1': 'done',
         '2': 'done',
         '3': 'ready',

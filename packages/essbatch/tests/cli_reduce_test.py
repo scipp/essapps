@@ -294,7 +294,7 @@ def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
     with intake_on(folder) as intake:
         batch = intake.manager.batch(label)
         assert batch.settings == {'offset': {'value': 0.5}}
-        assert batch.state()['9'].text == 'incomplete'
+        assert batch.state()['9'].status == 'incomplete'
         assert '9' not in {r.member for r in intake.manager.client.records(label=label)}
 
 

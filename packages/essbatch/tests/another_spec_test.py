@@ -92,6 +92,6 @@ def test_a_batch_shows_a_row_whose_result_is_of_another_spec_as_outdated(
         state = batch.state()['5']
         assert state.record is not None
         assert state.spec_changed
-        assert state.text == 'outdated'
+        assert state.status == 'outdated'
     finally:
         batch.client.close()

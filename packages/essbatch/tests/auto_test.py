@@ -225,7 +225,7 @@ def test_a_row_is_added_once_filled_and_not_changed_when_its_files_change(
         't2': {'2': (['s2'], ['t2'])},
     }
     state = loop.batch.state()
-    assert {key: s.text for key, s in state.items()} == {
+    assert {key: s.status for key, s in state.items()} == {
         '1': 'done',
         '2': 'done',
     }
@@ -285,7 +285,7 @@ def test_a_row_with_a_result_is_left_to_a_person(
         sample(1, 'water')
 
     assert loop.step() == {}
-    assert loop.batch.state()['1'].text == text
+    assert loop.batch.state()['1'].status == text
 
 
 def test_a_new_loop_of_any_submitter_reduces_only_the_rows_without_a_result(
@@ -357,7 +357,7 @@ def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
 
     assert list(loop.step()) == ['1', '4']
     assert loop.refused == refused
-    assert batch.state()['2'].text == 'ready'
+    assert batch.state()['2'].status == 'ready'
     assert loop.step() == {}
     assert loop.refused == refused
 
@@ -406,7 +406,7 @@ def test_a_row_whose_cell_is_refused_waits_for_a_person_to_set_it(
 
     assert list(loop.step()) == ['1']
     assert loop.refused == {}
-    assert loop.batch.state()['2'].text == 'incomplete'
+    assert loop.batch.state()['2'].status == 'incomplete'
     assert loop.step() == {}
 
     edit(loop.batch, '2', thickness=1.0)
@@ -474,7 +474,7 @@ def test_a_changed_setting_reduces_no_row_again_and_its_rows_read_settings_chang
     assert record.member == '2'
     assert record.request.params['binning'] == {'bins': 3}
     old = loop.batch.state()['1']
-    assert (old.text, old.changed) == ('settings changed', {'binning'})
+    assert (old.status, old.changed) == ('settings changed', {'binning'})
 
 
 def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(

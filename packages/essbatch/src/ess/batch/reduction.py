@@ -126,7 +126,7 @@ def _files_in(params: Mapping[str, Any]) -> list[FileRef]:
 
 
 def _running(row: RowState) -> list[FieldError]:
-    if row.status is Status.PENDING:
+    if row.record_status is Status.PENDING:
         return [FieldError(row.key, (), 'still running')]
     return []
 
@@ -630,8 +630,10 @@ class Batch:
                 f'{name} was reduced by another version of the workflow, '
                 'whose settings this one does not take'
             )
-        kept = {n: v for n, v in self.settings.items() if n in row.own}
-        took = {n: v for n, v in row.record.request.params.items() if n not in row.own}
+        kept = {n: v for n, v in self.settings.items() if n in row.overrides}
+        took = {
+            n: v for n, v in row.record.request.params.items() if n not in row.overrides
+        }
         return {**took, **kept}
 
     def _cells_and_results(
@@ -653,7 +655,7 @@ class Batch:
         upstream = self._records.known(sorted(state.references(cells.values())))
         status = self._records.status([*found.values(), *upstream])
         given = self._rows.loc[list(cells), list(self.parameter_columns)].notna()
-        own = {
+        overrides = {
             key: frozenset(c for c, filled in row.items() if filled)
             for key, row in given.to_dict('index').items()
         }
@@ -665,7 +667,7 @@ class Batch:
             changed,
             refused,
             self._spec_changed(found),
-            own=own,
+            overrides=overrides,
         )
 
     def _spec_changed(self, found: Mapping[str, Record]) -> set[str]:

@@ -120,7 +120,7 @@ def test_a_step_that_finds_nothing_new_says_nothing(
 
     follow(intake, say=lines.append, **steps)
 
-    assert following.state()['1'].text == 'done'
+    assert following.state()['1'].status == 'done'
     assert lines == []
 
 

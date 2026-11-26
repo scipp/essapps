@@ -399,7 +399,7 @@ class Pages:
     def counts(self) -> BatchCounts:
         """
         The rows of each batch by status, in the words of the page of each
-        batch (:attr:`~ess.batch.RowState.text`), and the files that
+        batch (:attr:`~ess.batch.RowState.status`), and the files that
         each batch names (:meth:`~ess.batch.Batch.files`), which the Runs
         view joins to its runs. Every page and Follow wait while it counts.
 
@@ -422,7 +422,7 @@ class Pages:
                 except (ValueError, OSError) as error:
                     failed[label] = why(error)
                     continue
-                rows[label] = dict(Counter(s.text for s in states.values()))
+                rows[label] = dict(Counter(s.status for s in states.values()))
                 files[label] = sorted(ref.file for ref in named)
             return BatchCounts(rows=rows, files=files, failed=failed)
 

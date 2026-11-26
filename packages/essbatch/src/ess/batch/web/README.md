@@ -129,7 +129,7 @@ While the view Batches or the view Runs is shown, the page counts the rows of ea
 The answer of a count also gives the files that each batch names, which the Runs view joins to its runs.
 A count updates the cells of the rows; the rows are made again only when the list changes, so the keyboard focus on a title and a text selected stay.
 The Runs view so updates only the runs whose batches changed, and not while a person types a correction in a cell.
-The statuses are those of the chips of each batch's page (`RowState.text`).
+The statuses are those of the chips of each batch's page (`RowState.status`).
 A count reads the state of every batch under the lock of all pages, so the pages and Follow wait until it ends.
 One count of a batch of 1,000 toy rows, half of them reduced, takes 46 ms; the first count after a change of its batch table takes 225 ms, since each value that names a file is resolved again.
 A batch that cannot be counted, such as one whose batch table cannot be read, shows why in its row.

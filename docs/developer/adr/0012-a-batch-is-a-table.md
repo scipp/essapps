@@ -153,9 +153,9 @@ On the page, "New batch" takes a spec, and either a source with a range of its r
 newest = records.sort_values('created').drop_duplicates('member', keep='last').set_index('member')
 state = rows.join(newest)                               # a left join on the key
 changed = {key: differs(request(key), newest.params[key]) for key in rows.index}
-own = {key: set(row.dropna().index) for key, row in rows[columns].iterrows()}  # the cells with a value
-settings_changed = [key for key in rows.index if changed[key] and not changed[key] & own[key]]
-outdated = [key for key in rows.index if changed[key] & own[key]]
+overrides = {key: set(row.dropna().index) for key, row in rows[columns].iterrows()}  # the cells with a value
+settings_changed = [key for key in rows.index if changed[key] and not changed[key] & overrides[key]]
+outdated = [key for key in rows.index if changed[key] & overrides[key]]
 ```
 
 A row whose request differs from its result's only at settings reads `settings changed`, reduced with earlier settings: a change of settings applies to the rows not reduced yet. For one row, a parameter counts as a setting if it is no column or the row's cell is empty, since the row then follows the setting. A row whose own cell changed reads `outdated`. Which cells are empty is read from the table now, so nothing more is kept.

@@ -496,7 +496,7 @@ def _batches(given: _Given) -> pd.DataFrame:
             row |= {
                 'spec': batch.spec.name,
                 'rows': len(states),
-                'reduced': sum(s.status is Status.COMPLETED for s in states),
+                'reduced': sum(s.record_status is Status.COMPLETED for s in states),
                 'source': intake.source(label),
             }
         except ValueError as error:
@@ -757,7 +757,7 @@ def _follow(given: _Given) -> int:
             steps=args.steps,
         )
     states, _ = intake.manager.batch(label).shown()
-    if left := sum(s.text != 'done' for s in states.values()):
+    if left := sum(s.status != 'done' for s in states.values()):
         sys.stderr.write(
             f'{_count(left, "row")} of {label} not done: show -l {label} says why\n'
         )
@@ -809,7 +809,7 @@ def follow(
         added       the rows that the step added, a list of keys
         reducing    the rows that it submitted
         ended       the status of each row whose reduction ended since
-                    (RowState.text), by key; the reductions that ran at the
+                    (RowState.status), by key; the reductions that ran at the
                     first step count too
         failure     why each of those failed or was cancelled, by key
         refused     why each row could not be submitted, by key
@@ -848,7 +848,7 @@ def follow(
     running = {
         key: state.record
         for key, state in batch.state(compare=False).items()
-        if state.record is not None and state.status is Status.PENDING
+        if state.record is not None and state.record_status is Status.PENDING
     }
     shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, waiting
     failed: str | None = None  # what the step before raised, as said
@@ -929,7 +929,7 @@ def _ended(batch: Batch, running: dict[str, Record]) -> dict[str, dict[str, str]
     states, _ = batch.shown(list(ended))
     why = batch.client.failure(list(ended.values()))
     return {
-        'ended': {key: states[key].text for key in ended},
+        'ended': {key: states[key].status for key in ended},
         'failure': {key: w for key, w in zip(ended, why, strict=True) if w},
     }
 

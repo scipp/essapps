@@ -52,58 +52,70 @@ from ess.spec.refs import iter_refs
 
 _RERUN = (Status.FAILED, Status.CANCELLED)
 
+type RowStatus = Literal[
+    'running',
+    'incomplete',
+    'ready',
+    'failed',
+    'cancelled',
+    'done',
+    'settings changed',
+    'outdated',
+]
+"""The status of a row, as the page, a table file written and the command say it."""
+
 
 @dataclass(frozen=True)
 class RowState:
     """
     Where one row stands.
 
-    ``record`` is the row's result, if it has one, and ``status`` its status.
-    ``problems`` say why the row cannot be reduced now. ``changed`` names the
-    parameters at which the row's request now differs from the request of its
-    result, both as a record holds them, and is ``None`` if they were not
-    compared, as in what ``Batch.state(compare=False)`` gives.
+    ``record`` is the row's result, if it has one, and ``record_status`` its
+    status. ``problems`` say why the row cannot be reduced now. ``changed``
+    names the parameters at which the row's request now differs from the
+    request of its result, both as a record holds them, and is ``None`` if they
+    were not compared, as in what ``Batch.state(compare=False)`` gives.
     ``spec_changed`` is true if the result is of another spec than the one
     bound. ``outdated`` is true if the result is of another spec, or if the
     request changed; ``None`` if that is not known, since the requests were not
     compared. ``settings_changed`` is true if the row is ready and its
     completed result differs from its request only at settings: not at a
-    column where the row's cell holds a value, and of the same spec. ``own``
-    names the parameter columns at which the row's cell holds a value: those
-    where the row gives itself its value, not the setting or the default.
+    column where the row's cell holds a value, and of the same spec.
+    ``overrides`` names the parameter columns at which the row's cell holds a
+    value: those where the row gives itself its value, not the setting or the
+    default.
     """
 
     key: str
     record: Record | None = None
-    status: Status | None = None
+    record_status: Status | None = None
     problems: tuple[FieldError, ...] = ()
     changed: frozenset[str] | None = frozenset()
     spec_changed: bool = False
     outdated: bool | None = False
     settings_changed: bool = False
-    own: frozenset[str] = frozenset()
+    overrides: frozenset[str] = frozenset()
 
     @property
-    def text(self) -> str:
+    def status(self) -> RowStatus:
         """
-        The status of the row, as the page, a table file written and the command
-        say it: ``running``, ``incomplete``, ``ready`` (no result),
-        ``failed``, ``cancelled``, ``done``, ``settings changed`` or
-        ``outdated``. A failed or cancelled result reads as its status whether
-        or not the request changed since, since the row needs reducing either
-        way. A row of earlier settings (:attr:`settings_changed`) reads
+        The status of the row. A failed or cancelled result reads as its status
+        whether or not the request changed since, since the row needs reducing
+        either way. A row of earlier settings (:attr:`settings_changed`) reads
         ``settings changed``: its result is completed, as one that reads
         ``done``. A completed result not compared with the settings, as while
         they are refused, reads ``outdated``: it cannot be told to match them.
         """
-        if self.status is Status.PENDING:
+        if self.record_status is Status.PENDING:
             return 'running'
         if self.problems:
             return 'incomplete'
-        if self.status is None:
+        if self.record_status is None:
             return 'ready'
-        if self.status in _RERUN:
-            return str(self.status)
+        if self.record_status is Status.FAILED:
+            return 'failed'
+        if self.record_status is Status.CANCELLED:
+            return 'cancelled'
         if self.settings_changed:
             return 'settings changed'
         return 'done' if self.outdated is False else 'outdated'
@@ -170,7 +182,7 @@ def row_states(
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
     *,
-    own: Mapping[str, AbstractSet[str]],
+    overrides: Mapping[str, AbstractSet[str]],
 ) -> dict[str, RowState]:
     """
     The state of each row of ``cells``, which hold its cells by key.
@@ -179,7 +191,7 @@ def row_states(
     at which a row differs from its result, ``None`` if the rows were not
     compared with their results, ``refused`` the reasons a row's cells were
     refused when resolved, ``spec_changed`` the keys whose result is of
-    another spec, and ``own`` the columns at which each row's cell holds a
+    another spec, and ``overrides`` the columns at which each row's cell holds a
     value, by key.
     """
     refused = refused or {}
@@ -197,7 +209,7 @@ def row_states(
         states[key] = RowState(
             key=key,
             record=record,
-            status=row_status,
+            record_status=row_status,
             problems=found_problems,
             changed=names,
             spec_changed=key in spec_changed,
@@ -205,9 +217,9 @@ def row_states(
             settings_changed=not found_problems
             and row_status is Status.COMPLETED
             and bool(names)
-            and names.isdisjoint(own[key])
+            and names.isdisjoint(overrides[key])
             and key not in spec_changed,
-            own=frozenset(own[key]),
+            overrides=frozenset(overrides[key]),
         )
     return states
 
@@ -217,7 +229,7 @@ def ready(states: Mapping[str, RowState]) -> list[str]:
     return [
         k
         for k, s in states.items()
-        if not s.problems and s.status is not Status.PENDING
+        if not s.problems and s.record_status is not Status.PENDING
     ]
 
 
@@ -243,7 +255,9 @@ def left_to_reduce(states: Mapping[str, RowState]) -> list[str]:
         for k in ready(states)
         if not states[k].settings_changed
         and (
-            states[k].status is None or states[k].status in _RERUN or states[k].outdated
+            states[k].record_status is None
+            or states[k].record_status in _RERUN
+            or states[k].outdated
         )
     ]
 
@@ -281,5 +295,5 @@ def publishable(states: Mapping[str, RowState]) -> list[str]:
     return [
         k
         for k, s in states.items()
-        if s.text in ('done', 'settings changed') and s.record is not None
+        if s.status in ('done', 'settings changed') and s.record is not None
     ]

@@ -74,8 +74,8 @@ the batch layer reads, so the page copies no rule. A ``Page`` serves one
 batch to one person, and takes one request at a time, under the lock of all
 pages.
 
-Statuses are named in a scientist's words (:attr:`RowState.text
-<ess.batch.RowState.text>`): ``ready``, ``running``, ``done``,
+Statuses are named in a scientist's words (:attr:`RowState.status
+<ess.batch.RowState.status>`): ``ready``, ``running``, ``done``,
 ``settings changed``, ``outdated``, ``failed``, ``cancelled`` and ``incomplete``. A
 change of settings applies to rows not reduced yet: a done row whose result
 differs from its request only at settings
@@ -477,7 +477,7 @@ class Page:
         ended = [
             s.record
             for s in states.values()
-            if s.record is not None and s.status in _ENDED
+            if s.record is not None and s.record_status in _ENDED
         ]
         reasons = self.batch.client.failure(ended)
         return {r.id: view.failure(why) for r, why in zip(ended, reasons, strict=True)}
@@ -507,13 +507,13 @@ class Page:
         reason, changed = view.reason(state, problems, unsubmitted, failure, titles)
         # An empty cell is shown empty, not as the setting or the default that
         # a request takes.
-        given = {c: requested[c] for c in requested if c in state.own}
+        given = {c: requested[c] for c in requested if c in state.overrides}
         pid = '' if record is None else published.get(record.id, '')
         return Row(
             key=key,
             name=name,
             notes={n: '' if cells[n] is None else str(cells[n]) for n in notes},
-            status=state.text,
+            status=state.status,
             reason=reason,
             changed=changed,
             record=None if record is None else record.id,
@@ -880,7 +880,7 @@ class Page:
         done = [
             s
             for s in states.values()
-            if s.record is not None and s.status is Status.COMPLETED
+            if s.record is not None and s.record_status is Status.COMPLETED
         ]
         if keys:
             chosen = done
@@ -896,7 +896,7 @@ class Page:
         colors = plots.colors([order[s.key] for s in chosen])
         named = names(frame, self.batch.parameter_columns)
         shown = [
-            Shown(s.key, named[s.key], s.record, s.text == 'outdated', c)
+            Shown(s.key, named[s.key], s.record, s.status == 'outdated', c)
             for s, c in zip(chosen, colors, strict=True)
             if s.record is not None
         ]
@@ -979,7 +979,7 @@ class Page:
         frame = batch.frame()
         known = [k for k in keys if k in frame.index]
         states, _ = self._states(known if keys else None)
-        done = [k for k, s in states.items() if s.status is Status.COMPLETED]
+        done = [k for k, s in states.items() if s.record_status is Status.COMPLETED]
         if not done:
             raise Problem('None of these rows has a result.')
         buffer = io.BytesIO()

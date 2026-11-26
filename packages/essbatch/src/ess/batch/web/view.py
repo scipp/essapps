@@ -198,7 +198,7 @@ def reason(
     ``unsubmitted`` is why Follow could not reduce it, and ``failure`` why
     its result failed.
     """
-    status = state.text
+    status = state.status
     if unsubmitted:
         return unsubmitted, ''
     if status in ('failed', 'cancelled') and state.record is not None:
@@ -238,16 +238,16 @@ def _changed(state: RowState, titles: Mapping[str, str]) -> str:
 
 def result(state: RowState) -> str | None:
     """Whether a row has a result, ``'current'`` or ``'outdated'``; else ``None``."""
-    if state.record is None or state.status is not Status.COMPLETED:
+    if state.record is None or state.record_status is not Status.COMPLETED:
         return None
-    return 'outdated' if state.text == 'outdated' else 'current'
+    return 'outdated' if state.status == 'outdated' else 'current'
 
 
 def counts(states: Mapping[str, RowState]) -> dict[str, int]:
     """How many rows there are, and how many read as each status."""
     counted = dict.fromkeys(ORDER, 0)
     for s in states.values():
-        counted[s.text] += 1
+        counted[s.status] += 1
     return {'all': len(states), **counted}
 
 
@@ -256,7 +256,7 @@ def action(
 ) -> Action:
     """What the button does now, or ``label`` if blocked; how far rows run."""
     left = [] if blocked else left_to_reduce(states)
-    kinds = {states[k].text for k in left}
+    kinds = {states[k].status for k in left}
     n = len(left)
     if blocked:
         label = label or 'Check the settings'
@@ -277,7 +277,7 @@ def action(
         blocked=blocked,
         remaining=n,
         again=len(ready(states)),
-        running=sum(s.status is Status.PENDING for s in states.values()),
+        running=sum(s.record_status is Status.PENDING for s in states.values()),
         progress=_progress(states),
     )
 
@@ -288,7 +288,9 @@ def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
     how many are finished and how many there are; ``None`` if none is running.
     """
     pending = [
-        s.record for s in states.values() if s.status is Status.PENDING and s.record
+        s.record
+        for s in states.values()
+        if s.record_status is Status.PENDING and s.record
     ]
     if not pending:
         return None
@@ -296,7 +298,7 @@ def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
     started = [
         s for s in states.values() if s.record is not None and s.record.created >= since
     ]
-    return sum(s.status is not Status.PENDING for s in started), len(started)
+    return sum(s.record_status is not Status.PENDING for s in started), len(started)
 
 
 def output(

@@ -106,7 +106,7 @@ def test_e1_series_grows_reduction_follows(
     ]
     # The earlier rows keep their results, and none is reduced again.
     assert {k: s.record for k, s in states.items()} == reduced
-    assert {s.text for s in states.values()} == {'done'}
+    assert {s.status for s in states.values()} == {'done'}
     assert len(user.records(label='reflectivity')) == 3
 
 

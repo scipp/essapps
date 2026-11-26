@@ -413,23 +413,23 @@ The settings form of the page has no field for such a column.
 
 | Field | Meaning |
 |---|---|
-| `record`, `status` | the result and its status (`pending`, `completed`, `failed`, `cancelled`), or `None` |
+| `record`, `record_status` | the result and its status (`pending`, `completed`, `failed`, `cancelled`), or `None` |
 | `problems` | why the row cannot be reduced: an empty cell that gives nothing (table above), a cell the workspace refuses, a referenced record that failed or was cancelled |
 | `changed` | the parameters at which the request differs from the request of the result |
 | `spec_changed` | the result is of another spec than the one bound |
 | `outdated` | `spec_changed`, or `changed` is not empty |
-| `settings changed` | the row is ready, its result completed, and its request differs from that of the result only at settings: at parameters that are no column, or where the row's cell is empty |
-| `text` | what the page, a table file written and the command say: `running`, `incomplete`, `ready`, `done`, `settings changed`, `outdated`, `failed` or `cancelled` |
+| `settings_changed` | the row is ready, its result completed, and its request differs from that of the result only at settings: at parameters that are no column, or where the row's cell is empty |
+| `status` | what the page, a table file written and the command say: `running`, `incomplete`, `ready`, `done`, `settings changed`, `outdated`, `failed` or `cancelled` |
 
-A row with `settings changed` reads `settings changed`: its result is completed, as that of a row that reads `done`, and is plotted and downloaded as one.
-So a reader that wants the rows with a completed result reads `status` (the field), not `text`.
+A row with `settings_changed` reads `settings changed`: its result is completed, as that of a row that reads `done`, and is plotted and downloaded as one.
+So a reader that wants the rows with a completed result reads `record_status`, not `status`.
 `batch.state` raises `SubmitError` if the settings are refused: then no row can run.
 `batch.state(compare=False)` resolves nothing: `changed` is `None`, and so is `outdated` unless the result is of another spec.
 `batch.shown(keys=None)` gives the states and the reasons the settings are refused.
 While the settings are refused, its states are not compared.
 The page shows these states.
 
-What moves a row from one word of `text` to another:
+What moves a row from one status to another:
 
 ```mermaid
 stateDiagram-v2
