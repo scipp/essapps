@@ -35,7 +35,7 @@ def test_i1_time_slices_found_by_a_first_reduction(
     assert client.output(slices, 'sliced').value == 21.0 + 1.0 + 2.0
 
 
-def test_i2_beam_centre_typed_in_or_computed(
+def test_i2_a_beam_centre_typed_in_or_computed(
     client: Client, measure: toys.Measure
 ) -> None:
     direct_beam = measure(600, [0.5, 1.5])

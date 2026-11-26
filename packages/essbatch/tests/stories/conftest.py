@@ -110,7 +110,11 @@ def upgrade(
 
 @pytest.fixture
 def connect(workspaces: list[Workspace]) -> Callable[..., Client]:
-    """A new client of the current workspace, of proposal p1."""
+    """
+    A new client of the current workspace, of proposal p1.
+
+    Stands for a client of the shared service, which is not built.
+    """
 
     def connect(user: str = 'anna') -> Client:
         return Client(workspaces[-1], submitter=user)

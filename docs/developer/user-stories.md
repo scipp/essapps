@@ -8,7 +8,7 @@ The tests are in [`packages/essbatch/tests/stories`](../../packages/essbatch/tes
 Each test is named after its story, such as `test_s1_reduce_one_run` for S1.
 They use toy specs ([`toys.py`](../../packages/essbatch/tests/stories/toys.py)) whose numbers can be checked by hand: a file made by `measure` holds a list of counts.
 The fixtures, such as `client`, `measure` and `upgrade`, are in [`conftest.py`](../../packages/essbatch/tests/stories/conftest.py).
-A test marked `xfail` is a story that the code does not meet yet, and its reason states why.
+A test marked `xfail` does not pass yet, and its reason names what is missing: a part of the framework, or a fake that the test needs.
 
 ## S. Small stories
 
