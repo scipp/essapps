@@ -659,6 +659,37 @@ def test_a_parameter_that_holds_a_reference_gets_no_local_paths_when_written() -
     assert looked_up == []
 
 
+def test_a_file_group_beside_a_reference_is_validated_when_the_request_runs() -> None:
+    class Measurement(BaseModel):
+        run: RunFile
+
+        @model_validator(mode='after')
+        def _nexus(self) -> 'Measurement':
+            if self.run.suffix != '.nxs':
+                raise ValueError('not a NeXus file')
+            return self
+
+    class Specimen(BaseModel):
+        measurement: Measurement
+        sample: Referenced[Sample]
+
+    class SpecimenParams(BaseModel):
+        specimen: Specimen
+
+    value = {'measurement': {'run': FILE}, 'sample': OUTPUT}
+    stored, _ = validate_request_value(
+        SpecimenParams, 'specimen', value, _named, lambda ref: Path('a.xml')
+    )
+    with pytest.raises(ParamsError, match='not a NeXus file'):
+        value_of(
+            SpecimenParams,
+            'specimen',
+            stored,
+            lambda ref: Sample(),
+            {FILE_ID: Path('a.xml')},
+        )
+
+
 class TaggedCentre(BaseModel):
     """A centre that a finder outputs, with a tag of its own."""
 
