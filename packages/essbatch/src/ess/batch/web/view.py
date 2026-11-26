@@ -1,14 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-How the state of the page of one batch reads, as the models of
-:mod:`.models`, and how a cell sent back reads: functions of their arguments
-only. :class:`~.page.Page` gathers the arguments and does the actions. The
-rows of a source in a dialog (:func:`listed`) and a cell (:func:`read`,
-:func:`text`) read the same in the list of batches and the Runs view.
+The models of :mod:`.models` built from the state of a batch, and the value of
+a cell that the page sends. These are functions of their arguments only;
+:class:`~.page.Page` gathers the arguments.
 
-A parameter has one title wherever the page names it, in a column, a field
-of the settings or a message (:func:`titles`).
+A parameter has the same title in a column, a field of the settings and a
+message (:func:`titles`).
 """
 
 from __future__ import annotations
@@ -56,7 +54,7 @@ ORDER = (
     'cancelled',
     'incomplete',
 )
-"""The statuses of a row, in the words and the order of the page."""
+"""The statuses of a row, in the order of the page."""
 
 
 def titles(params: type[BaseModel]) -> dict[str, str]:
@@ -65,16 +63,16 @@ def titles(params: type[BaseModel]) -> dict[str, str]:
 
 
 def note(name: str) -> Column:
-    """The column of the note ``name``, titled as the page shows it."""
+    """The column of the note ``name``."""
     return Column(name=name, title=name.replace('_', ' ').capitalize())
 
 
 def listed(given: pd.DataFrame, source_columns: Collection[str]) -> SourceRows:
     """
-    The rows of ``given``, the rows of a source with a column ``incomplete``,
-    and maybe a column ``taken``, as a dialog lists them: each named as
-    :func:`~..table.row_names` names it, with the text of each note, the
-    columns but ``source_columns``, and its mark.
+    The rows of a row source, as a dialog lists them.
+
+    ``given`` has a column ``incomplete`` and may have a column ``taken``.
+    Every other column except ``source_columns`` is a note.
     """
     named = row_names(given, ())
     marks = {'incomplete', 'taken'}
@@ -105,7 +103,10 @@ def listed(given: pd.DataFrame, source_columns: Collection[str]) -> SourceRows:
 
 
 def read(fields: Fields, edit: CellEdit) -> Any:
-    """The value of ``edit`` as the field of its column reads it."""
+    """
+    The value of ``edit``, read by the field of its column. Raises
+    :class:`Rejected` for an unknown column or a value the field rejects.
+    """
     if edit.column not in fields.fields:
         raise Rejected(f'There is no column {edit.column}.')
     try:
@@ -117,22 +118,19 @@ def read(fields: Fields, edit: CellEdit) -> Any:
 
 
 def text(listing: Listing, value: Any) -> str:
-    """
-    What a cell shows (:meth:`~ess.apps.listing.Listing.text`); nothing if
-    it is unset.
-    """
+    """The text of a cell that holds ``value``, empty if unset."""
     return '' if value is UNSET else listing.text(value)
 
 
 def cell_text(listing: Listing, params: type[BaseModel], name: str, cell: Any) -> str:
-    """What a cell of the column ``name`` of ``params`` that holds ``cell`` shows."""
+    """The text of a cell of the column ``name`` of ``params``."""
     if cell is None:
         return ''
     return text(listing, as_request(params, {name: cell})[name])
 
 
 def field_errors_text(errors: Sequence[FieldError], titles: Mapping[str, str]) -> str:
-    """Errors of the settings in words, each with its setting's title."""
+    """``errors`` as one message, each with the title of its setting."""
     return '; '.join(_field_error_text(e, titles) for e in errors)
 
 
@@ -147,8 +145,8 @@ def settings_problem(
     errors: Sequence[FieldError], unfit: Sequence[str], titles: Mapping[str, str]
 ) -> str | None:
     """
-    What the settings lack or what is refused of them, and the settings
-    ``unfit`` that the form cannot show; ``None`` if nothing.
+    The message of ``errors`` and of the settings ``unfit`` that the form
+    cannot show; ``None`` if there are none.
     """
     told = [field_errors_text(errors, titles)] if errors else []
     if unfit:
@@ -159,7 +157,7 @@ def settings_problem(
 def refusal(
     error: FieldError, named: Mapping[str, str], titles: Mapping[str, str]
 ) -> SubmitProblem:
-    """``error`` of a reduction refused, with its row named as ``named`` names it."""
+    """``error`` of a rejected reduction, with the row name from ``named``."""
     text = _field_error_text(error, titles)
     if error.request_key is not None:
         text = f'{named.get(error.request_key, error.request_key)}: {text}'
@@ -171,7 +169,7 @@ def refusal(
 def problems(
     key: str, errors: Iterable[FieldError], titles: Mapping[str, str]
 ) -> dict[str, str]:
-    """The reason of each of ``errors`` at a cell of row ``key``, by column."""
+    """The message of each error at a cell of row ``key``, by column."""
     return {
         str(e.loc[0]): _field_error_text(e, titles)
         for e in errors
@@ -181,8 +179,8 @@ def problems(
 
 def failure(text: str | None) -> str:
     """
-    Why a result failed, without the name of the exception that made it;
-    ``text`` is ``None`` for a result cancelled.
+    The message of a failed result, without the type of the exception;
+    ``'Cancelled.'`` for ``None``.
     """
     return re.sub(r'^\w+(Error|Exception): ', '', text) if text else 'Cancelled.'
 
@@ -195,10 +193,11 @@ def reason(
     titles: Mapping[str, str],
 ) -> tuple[str, str]:
     """
-    Why a row reads as its status, and, if it reads ``settings changed``, the titles
-    of what changed since. ``problems`` are those of its cells,
-    ``unsubmitted`` is why Follow could not reduce it, and ``failure`` why
-    its result failed.
+    Why a row has its status, and for ``settings changed``, the titles of the
+    settings changed since.
+
+    ``problems`` are the messages at its cells, ``unsubmitted`` is why Follow
+    could not reduce it, ``failure`` is why its result failed.
     """
     status = state.status
     if unsubmitted:
@@ -239,14 +238,14 @@ def _changed(state: RowState, titles: Mapping[str, str]) -> str:
 
 
 def result(state: RowState) -> str | None:
-    """Whether a row has a result, ``'current'`` or ``'outdated'``; else ``None``."""
+    """``'current'`` or ``'outdated'`` for a completed result, else ``None``."""
     if state.record is None or state.record_status is not Status.COMPLETED:
         return None
     return 'outdated' if state.status == 'outdated' else 'current'
 
 
 def counts(states: Mapping[str, RowState]) -> dict[str, int]:
-    """How many rows there are, and how many read as each status."""
+    """The number of rows, as ``'all'``, and of rows with each status."""
     counted = dict.fromkeys(ORDER, 0)
     for s in states.values():
         counted[s.status] += 1
@@ -256,7 +255,7 @@ def counts(states: Mapping[str, RowState]) -> dict[str, int]:
 def action(
     states: Mapping[str, RowState], blocked: str | None, label: str | None = None
 ) -> Action:
-    """What the button does now, or ``label`` if blocked; how far rows run."""
+    """The primary button, labelled ``label`` if ``blocked``."""
     left = [] if blocked else left_to_reduce(states)
     kinds = {states[k].status for k in left}
     n = len(left)
@@ -285,10 +284,7 @@ def action(
 
 
 def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
-    """
-    Of the rows whose results were submitted since the first still running,
-    how many are finished and how many there are; ``None`` if none is running.
-    """
+    """``(finished, total)`` of the rows submitted since the earliest running."""
     pending = [
         s.record
         for s in states.values()
@@ -309,11 +305,7 @@ def output(
     spec: WorkflowSpec[Any, Any],
     catalogue: bool,
 ) -> OutputShown:
-    """
-    The tab "Output": the output ``options`` kept, the ``writers`` that they
-    may pick,
-    the outputs of ``spec``, and whether a catalogue takes the results.
-    """
+    """The tab "Output"; ``catalogue`` is true if the page can publish."""
     formats = [
         Format(
             name=w.name,

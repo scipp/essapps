@@ -1,28 +1,25 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The fields of :mod:`ess.apps.fields` as JSON for a page, and the edits a page
-sends back.
+The fields of :mod:`ess.apps.fields` as the nodes of a page, and the edits that
+a page sends back.
 
-A form is sent as a list of :class:`~.models.Node`, one per parameter, each
-with its children and a ``problem``: what is missing there, or why a
-submission was refused there::
+A form is a list of :class:`~.models.Node`, one per parameter, each with its
+children and a ``problem``: what is missing there, or why a submission was
+rejected there::
 
     Node(kind='group', label='Wavelength', path=['wavelength'], children=[
         Node(kind='input', input='float', label='From (Å)', value=2.0,
              path=['wavelength', 'start'])])
 
-A path is the ``loc`` of an error at that field: names of fields and indices of
-elements, but no alternative of a choice. So the walk of a path goes into the
-alternative chosen by itself, and a choice and the field of its alternative have
-the same path. A page edits a form by sending an :class:`~.models.Edit` (see
-:func:`apply`), and gets the form again.
+A path does not name the alternative of a choice, since an error's ``loc``
+does not. So a walk along a path goes through the chosen alternative of each
+choice. A page edits a form with an :class:`~.models.Edit` (:func:`apply`) and
+receives the form again.
 
 A picker's value travels as the label of its option, so a page never holds a
-file reference: the server maps a label back to its value.
-
-A cell of a batch table is edited with the field of its column
-(:func:`editor`, :func:`read`), so a cell takes what the form would.
+file reference. A cell of a batch table is edited with the field of its column
+(:func:`editor`, :func:`read`), so a cell accepts what the form would.
 """
 
 from __future__ import annotations
@@ -54,10 +51,8 @@ def params_and_missing(
     fields: Fields, parameter_columns: Collection[str] = ()
 ) -> tuple[dict[str, Any], list[FieldError]]:
     """
-    What ``fields``, a form of settings, hold, and what is missing
-    (:meth:`~ess.apps.Fields.params_and_missing`), but a field of ``parameter_columns``
-    left unset as a whole is not missing: it is left out, as the setting of a
-    column that has none.
+    :meth:`~ess.apps.Fields.params_and_missing` of a form of settings, except
+    that a field of ``parameter_columns`` left unset as a whole is not missing.
     """
     given, missing = fields.params_and_missing()
     return given, [
@@ -71,9 +66,8 @@ def tree(
     parameter_columns: Collection[str] = (),
 ) -> list[Node]:
     """
-    The nodes of ``fields``, each with what is missing or ``refused`` there;
-    the node of a field of ``parameter_columns`` is marked as a column, and
-    misses nothing if left unset (:func:`params_and_missing`).
+    The nodes of ``fields``, each with what is missing or ``refused`` at it,
+    and those of ``parameter_columns`` marked as columns.
     """
     _, missing = params_and_missing(fields, parameter_columns)
     said = {e.loc: message(e.msg) for e in (*missing, *refused) if e.loc}
@@ -119,7 +113,7 @@ def _node(field: Field, loc: Loc, label: str, problems: Mapping[Loc, str]) -> No
                 'chosen': chosen,
                 'selector': field.selector_visible,
                 'child': child,
-                # The field of the alternative chosen shows a problem at this path.
+                # The field of the chosen alternative shows a problem at this path.
                 'problem': node.problem if child is None else None,
             }
         )
@@ -135,16 +129,13 @@ _ALTERNATIVES = {
     ChoiceField.FILE: 'Use a run',
     ChoiceField.RECORD: 'From a result',
 }
-"""
-The alternatives of a choice as a page labels them; ``None`` reads as no such
-step.
-"""
+"""The labels of the alternatives of a choice."""
 
 _MESSAGES = {'choose a file': 'choose a run', 'choose a record': 'choose a result'}
 
 
 def message(text: str) -> str:
-    """A message of a field in the words of :data:`_ALTERNATIVES` and of a person."""
+    """A message of a field, in the words of the page."""
     text = _MESSAGES.get(text, text)
     return re.sub(r"'(.*)' is not of the kind (float|int)", r'\1 is not a number', text)
 
@@ -184,8 +175,8 @@ def _chosen(field: Field) -> Field:
 
 def _at(fields: Fields, path: list[str | int], *, choice: bool = False) -> Field:
     """
-    The field at ``path``: through the alternative chosen of each choice, but the choice
-    itself at the end of the path if ``choice``.
+    The field at ``path``, through the chosen alternative of each choice; with
+    ``choice``, a choice at the end of ``path`` itself.
     """
     if not path or str(path[0]) not in fields.fields:
         raise KeyError(f'no setting at {path}')
@@ -203,9 +194,8 @@ def _at(fields: Fields, path: list[str | int], *, choice: bool = False) -> Field
 
 def apply(fields: Fields, edit: Edit) -> None:
     """
-    Give ``fields`` what a person did. ``reset`` sets a whole parameter as it
-    starts: at its default, or unset. Raises ``KeyError`` for a path or a
-    label that the form lacks, and ``ValueError`` for a value an input refuses.
+    Applies ``edit`` to ``fields``. Raises ``KeyError`` for a path or a label
+    that the form lacks, and ``ValueError`` for a value that an input rejects.
     """
     field = _at(fields, edit.path, choice=edit.op in ('choose', 'reset'))
     if edit.op == 'set' and isinstance(field, Input):
@@ -223,7 +213,7 @@ def apply(fields: Fields, edit: Edit) -> None:
 
 
 def _value(field: Input, sent: Any) -> Any:
-    """What an input holds for ``sent``, as the page sends it."""
+    """The value that ``field`` holds for ``sent`` from the page."""
     kind = field.kind if isinstance(field, ScalarField) else 'pick'
     if kind == 'pick':
         if sent is None:
@@ -245,9 +235,8 @@ def _value(field: Input, sent: Any) -> Any:
 
 def _inner(field: Field) -> tuple[Field, bool]:
     """
-    The field that a cell edits, and whether the cell may be ``None``: a
-    choice of one alternative that gives a value, and of none, is edited as that
-    alternative.
+    The field that a cell edits, and whether the cell may be ``None``. A choice
+    of one alternative besides ``NONE`` is edited as that alternative.
     """
     if isinstance(field, ChoiceField):
         given = [w for w in field.offered if w != ChoiceField.NONE]
@@ -257,7 +246,7 @@ def _inner(field: Field) -> tuple[Field, bool]:
 
 
 def editor(field: Field) -> Editor | None:
-    """How a cell of the column of ``field`` is edited, ``None`` if not in a cell."""
+    """The editor of a cell of ``field``, ``None`` if no cell edits it."""
     inner, _ = _inner(field)
     if not isinstance(inner, Input):
         return None
@@ -272,14 +261,14 @@ def editor(field: Field) -> Editor | None:
 
 
 def edited(fields: Fields) -> list[str]:
-    """The names of the fields of ``fields`` that a cell edits (:func:`editor`)."""
+    """The names of the fields that a cell edits."""
     return [n for n, f in fields.fields.items() if editor(f) is not None]
 
 
 def cell(field: Field, value: Any) -> Any:
     """
-    What the editor of a cell holding ``value`` starts at: the label of its
-    option at a picker, the value at an input, ``None`` if empty.
+    Where the editor of a cell holding ``value`` starts: the label of the
+    option for a picker, ``None`` if empty.
     """
     inner, _ = _inner(field)
     if value is UNSET or value is None or not isinstance(inner, Input):
@@ -291,10 +280,9 @@ def cell(field: Field, value: Any) -> Any:
 
 def read(field: Field, sent: Any) -> Any:
     """
-    The value of a cell edited to ``sent``, as a request writes it; ``UNSET``
-    for an empty cell, or ``None`` where the column takes ``None``. Raises
-    ``ValueError`` for a value the field refuses, and ``KeyError`` for an
-    option it lacks.
+    The value of a cell edited to ``sent``: ``UNSET`` if empty, or ``None``
+    where the column accepts ``None``. Raises ``ValueError`` for a value that
+    the field rejects, and ``KeyError`` for an option that it lacks.
     """
     inner, nullable = _inner(field)
     if sent in (None, ''):

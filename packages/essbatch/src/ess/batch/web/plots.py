@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Scipp curves as a Plotly figure, a ``dict`` that Plotly.js draws as it is, so
+Scipp curves as a Plotly figure: a ``dict`` that Plotly.js draws as it is. So
 no Plotly package is needed in Python.
 """
 
@@ -38,10 +38,11 @@ PALETTE = (
 
 def colors(indices: Sequence[int]) -> list[str]:
     """
-    Distinct colours for the rows at ``indices`` of the batch table, in one figure.
-    Each row has its own colour of the palette, the same in every figure, but
-    where a row before it in ``indices`` has that colour it takes the first
-    colour free. Past the palette, hues go round in steps of the golden angle.
+    Distinct colours for the rows at ``indices`` of the batch table in one figure.
+
+    A row has the colour of the palette at its index, the same in every figure.
+    If an earlier row in ``indices`` has that colour, the row gets the first
+    free colour. Beyond the palette, the hues step by the golden angle.
     """
     taken: list[str] = []
     for index in indices:
@@ -99,12 +100,12 @@ def _listed(values: np.ndarray) -> list[float | None]:
 
 def figure(curves: Sequence[Curve], *, quantity: str = 'Intensity') -> dict[str, Any]:
     """
-    A figure of 1-D ``curves``, overlaid on log axes, with error bars from
-    their variances and the axes titled by name and unit. ``quantity`` names
-    the values; ``layout.meta.quantity`` holds it for a page's title. A
-    coordinate of bin edges is drawn at the bin centres. Raises ``ValueError``
-    for no curves, a curve that is not 1-D, and curves of other dimensions or
-    units.
+    A figure of 1-D ``curves`` on log axes, with error bars from their variances.
+
+    ``quantity`` names the values. It is also ``layout.meta.quantity``, for the
+    page's title. Bin edges are drawn at the bin centres. Raises ``ValueError``
+    for no curves, a curve that is not 1-D, and curves that differ in dimension
+    or unit.
     """
     if not curves:
         raise ValueError('no curves to draw')
@@ -172,8 +173,8 @@ def draw(
     curve: Callable[[Any], sc.DataArray] = lambda value: value,
 ) -> Draw:
     """
-    Draws the curve that ``curve`` takes of ``output`` of each result shown,
-    in a :func:`figure` of ``quantity``.
+    A ``Draw`` that plots ``curve`` of ``output`` of each result shown, in a
+    :func:`figure` of ``quantity``.
     """
 
     def drawn(shown: Sequence[Shown]) -> dict[str, Any]:

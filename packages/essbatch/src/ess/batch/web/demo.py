@@ -1,31 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The batch page on fake SANS-shaped files and a fake I(Q) reduction, for
-working on the page.
+The batch page on fake SANS-shaped runs and a fake I(Q) reduction, for
+working on the page. ``python -m ess.batch.web.demo --help`` lists the options.
 
-``python -m ess.batch.web.demo [DIRECTORY] [--port N]`` serves it on
-``http://localhost:N``, with the workspace kept in ``DIRECTORY`` (see
-:mod:`ess.apps.folder`), a new temporary folder if not given. The first start
-writes the fake runs and ``files.csv`` there. A later start reuses them, with
-the results of earlier starts, and the batches with their batch tables and
-settings, the corrections, and the batch that follows kept in
-``definitions/`` (:mod:`..definition`). Each start makes a batch of the
-samples there are if no batch is listed; it does not follow, and a person
-makes a batch that follows with "New batch", Follow ticked. The file
-source reads ``files.csv`` again when it changes
-(:class:`~ess.apps.folder.ArrivingFiles`).
-
-``--samples N`` sets how many samples a new folder gets (24): beyond the 24 of
-:data:`SAMPLES`, the same again as ``<name> #2``, ``#3``... With ``--arrive
-SECONDS [--start M]``, a new folder starts with the empty cell and the first
-``M`` samples (3), and the runs of one more sample arrive every ``SECONDS``,
-until all have arrived. ``--interval SECONDS`` sets the time between two steps
-of Follow (5).
-
-Each sample run holds the size of its particles, so samples differ visibly, and
-the curve depends on the settings. Three samples have no transmission run, one
-sample run holds no events and fails, and a reduction takes 0.3 to 1 s.
+Each sample run holds the size of its particles, so the curves of samples
+differ and depend on the settings. Three samples have no transmission run,
+one sample run holds no events and fails, and a reduction takes 0.3 to 1 s.
 """
 
 from __future__ import annotations
@@ -188,13 +169,13 @@ def _reduce(params: Params) -> Outputs:
 
 
 BINDINGS = [StagedFunction(DEMO, _reduce)]
-"""The bindings of the demo's workspace, for the command."""
+"""The bindings of the demo's workspace."""
 
 
 def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     """
-    A row per sample run, keyed by its run, with the transmission run of the
-    same sample; the run and the name of the sample as notes.
+    A row per sample run, keyed by its run number, with the transmission run
+    of the same sample. The run number and the sample name are notes.
     """
     transmission = {
         f.metadata.get('sample'): cell_of(f.ref)
@@ -255,7 +236,7 @@ _NO_TRANSMISSION = {'SDS 50 mM in D2O', 'Apoferritin', 'Casein micelles'}
 _NO_EVENTS = 'Detector check'
 FIRST_RUN = 60301
 AT_START = 3
-"""The samples there at the start when the others arrive (``--arrive``)."""
+"""How many samples exist at the start with ``--arrive``."""
 
 type Run = tuple[int, dict[str, object], str, str]
 """A run: its number, the content of its file, its role, and its sample."""
@@ -263,9 +244,9 @@ type Run = tuple[int, dict[str, object], str, str]
 
 def measurements(samples: int = len(SAMPLES)) -> list[list[Run]]:
     """
-    The runs, in the groups that arrive together: the empty cell, then each of
-    the first ``samples`` samples with its transmission run, if it has one.
-    Beyond :data:`SAMPLES`, the samples are these again, named ``#2``, ``#3``...
+    The runs in groups that arrive together: the empty cell, then each of the
+    first ``samples`` samples with its transmission run if it has one. Beyond
+    :data:`SAMPLES`, the samples repeat, named ``#2``, ``#3``...
     """
     run = FIRST_RUN
     groups = [[(run, {'level': 0.02}, 'background', 'empty cell')]]
@@ -293,9 +274,9 @@ DEMO_PID_PREFIX = '20.500.12269'
 
 def measure(directory: Path, runs: Sequence[Run]) -> None:
     """
-    Write the file of each of ``runs`` that is not there, then replace
-    ``files.csv`` with a table of ``runs``, each with a catalogue identifier,
-    as a raw file at ESS has.
+    Writes the file of each of ``runs`` that does not exist yet, and replaces
+    ``files.csv`` with a table of ``runs``. Each run has a catalogue
+    identifier, as a raw file at ESS has.
     """
     rows = []
     for run, content, role, sample in runs:
@@ -319,8 +300,8 @@ def open_demo(
 ) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
     """
     A client of the demo's workspace in ``directory``, its file source, and the
-    folder's definitions. A folder without runs gets those of ``samples``
-    samples.
+    folder's definitions. A folder without ``files.csv`` gets the runs of
+    ``samples`` samples.
     """
     if not (directory / 'files.csv').exists():
         runs = [run for group in measurements(samples) for run in group]
@@ -338,11 +319,10 @@ def build(
     catalogue: Catalogue | None = None,
 ) -> FastAPI:
     """
-    The application on what :func:`open_demo` returns, with a step of Follow
-    every ``interval`` seconds while a batch follows, and the button "Publish"
-    if given a ``catalogue``. If no batch is listed,
-    a batch of the samples there are is made, with a column of thickness, so
-    also at a start after a person removed the last one.
+    The application on what :func:`open_demo` returns, with "Publish" if
+    given a ``catalogue``. If the workspace has no batch, it creates a batch of
+    all samples with a column of thickness, also after a person removed the
+    last batch.
     """
     intake = Intake(
         BatchManager(client, definitions=definitions, staged=STAGED), sources=SOURCES
@@ -369,9 +349,8 @@ def build(
 
 def fake_catalogue(proposal: str) -> Catalogue:
     """
-    A SciCat in memory (scitacean's fakes), which lists ``proposal``, that of
-    the demo's workspace, with a principal investigator; it forgets the
-    datasets published at a restart.
+    A SciCat in memory, from scitacean's fakes, with ``proposal`` and its
+    principal investigator. It forgets the published datasets at a restart.
     """
     from scitacean import model
     from scitacean.testing.client import FakeClient
