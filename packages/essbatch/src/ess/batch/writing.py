@@ -4,14 +4,7 @@
 How the results of a batch are written: :class:`Writing` keeps the output
 options of each batch (:class:`~.definition.OutputOptions`), and writes the
 result of a row by them
-with :func:`ess.apps.writers.write`. The download of the page, ``export -l``
-and publishing (:mod:`.publish`) all write so, so that they give the same
-files.
-
-The output options pick a writer by the name of its format, among those the
-application gives for the spec of the batch and
-:data:`~ess.apps.writers.SCIPP_HDF5`, which every spec has, and name what a
-person says of the results (:class:`~ess.apps.writers.DatasetMetadata`).
+with :func:`ess.apps.writers.write`.
 
 Output options name their format by the writer's name, not its title, so a title may
 change, but a name changed is one that kept output options lack. Kept output options
@@ -42,13 +35,10 @@ class Writing:
     """
     Writes the results of the batches of ``manager`` by the output options of each.
 
-    Every refusal of what is asked raises ``ValueError``, and a label that no
-    batch has ``KeyError``, as the manager does.
+    A method raises ``KeyError`` for a label that no batch has.
 
     Parameters
     ----------
-    manager:
-        The batches.
     writers:
         The writers of each spec, by its name, the first one the format of
         output options not set. :data:`~ess.apps.writers.SCIPP_HDF5` follows them, and
@@ -125,9 +115,8 @@ class Writing:
         """
         What writes the result of a row of ``label`` into a folder, as the
         output options say (:func:`ess.apps.writers.write`), and what they
-        say of the result of each row, by key, which the publisher also gives
-        the catalogue. Raises ``ValueError`` if this process lacks the format
-        of the output options.
+        say of the result of each row, by key. Raises ``ValueError`` if this
+        process lacks the format of the output options.
         """
         options = self.options(label)
         writer = self._writer(label, options.format)

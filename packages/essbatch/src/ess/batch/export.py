@@ -3,13 +3,9 @@
 """
 The files that a person takes away from a batch.
 
-:func:`export_table` takes the table that :func:`.frames.reduce_table` returned,
-indexed by key, and writes the result of each completed row to a folder named
-by its key, with a :data:`RowWriter`: by the output options of the batch
+A :data:`RowWriter` writes by the output options of the batch
 (:meth:`.writing.Writing.by_options`), or with one writer (:func:`by_writer`),
-such as scipp HDF5 for a table that names no batch. It finds a row's
-result by the ``record`` column, so it exports what the table says, also after
-later reductions under the same label.
+such as scipp HDF5 for a table that names no batch.
 """
 
 from __future__ import annotations
@@ -54,6 +50,8 @@ def export_table(
     completed to ``directory / key`` with ``write``, replacing that folder
     whole: each row is written into a temporary folder in ``directory``
     first, so that a row that fails leaves the folder of its key as it was.
+    The record of a row is the one in the ``record`` column, so a later
+    reduction under the same label changes nothing that is exported.
 
     Raises ``ValueError`` if the table has no ``record`` column, names a record
     that the workspace lacks, has a key twice, or a key that is not the name of

@@ -5,26 +5,6 @@ Templates as a person writes them: YAML files (see :func:`load_template`).
 
 How a person writes each kind of value is in :data:`_HOW`, which every
 template to fill in carries.
-
-:func:`settings_text` writes the settings of a batch, those at its parameter
-columns included, as a template, with each file and reference in its JSON form, which
-reads back as the same, the form of ``settings.json`` of a batch
-(:mod:`.definition`). :func:`checked_settings` reads settings from a
-template, which must be of the spec and its version.
-
-:func:`template_to_fill` writes a template of a spec for a person to fill
-in: every parameter, with a comment that says what it takes, read from its
-type with :mod:`ess.spec.field_types` as the fields of a form read it
-(:mod:`ess.apps.fields`). Every parameter is commented out, so that the
-template as written is refused naming each required parameter, and a
-parameter left commented takes the spec's default, not a copy of it::
-
-    # q (required): a group of the fields below. Bin edges in Q.
-    #   start (required): a number. First bin edge.
-    #   scale (default linear): one of linear, log. Spacing of the edges.
-    #q:
-    # corrections (default {gravity: true}): a group of the fields below.
-    #corrections: {gravity: true}
 """
 
 from __future__ import annotations
@@ -100,8 +80,7 @@ def checked_settings(
     parameter, with files named as in a cell (:func:`~.table.as_request`) and
     ``@latest`` read (:func:`with_latest`) on ``client``. Its blanks are not
     read: the parameter columns of a batch are its blanks, and a value at one is
-    the setting that each row with an empty cell takes
-    (:attr:`~.reduction.Batch.settings`).
+    the setting that each row with an empty cell takes.
 
     Raises ``ValueError``, saying why in a person's words, if the template is
     of another spec or of another version of it, or if a value cannot be read.
@@ -134,7 +113,8 @@ _NOT_AN_OUTPUT = (
 def settings_text(batch: Batch) -> str:
     """
     The settings of ``batch``, those at its parameter columns included, as the YAML of
-    a template that :func:`load_template` reads back.
+    a template that :func:`load_template` reads back. Each file and reference
+    is in its JSON form, which reads back as the same.
     """
     template = Template(batch.spec, params=batch.settings)
     return yaml.safe_dump(template_data(template), sort_keys=False)
@@ -177,7 +157,16 @@ def template_to_fill(
     description; a parameter that takes an output names the outputs of
     ``bound`` that fit it, and one that a row source of ``sources`` fills says
     so.
-    Every parameter is commented out, one with a default showing it.
+    Every parameter is commented out, one with a default showing it, so that
+    the template as written is refused naming each required parameter, and a
+    parameter left commented takes the spec's default, not a copy of it::
+
+        # q (required): a group of the fields below. Bin edges in Q.
+        #   start (required): a number. First bin edge.
+        #   scale (default linear): one of linear, log. Spacing of the edges.
+        #q:
+        # corrections (default {gravity: true}): a group of the fields below.
+        #corrections: {gravity: true}
     """
     filled: dict[str, list[str]] = {}
     for name, source in (sources or {}).items():
@@ -274,8 +263,7 @@ def _describe_type(
     What a field of type ``annotation`` with ``metadata`` takes, in words, and
     the groups whose fields it takes; ``top`` for a parameter, whose file a
     template names as a cell does (:func:`~.table.as_request`), not for a
-    field of a group, whose file is written in its JSON form. The type is read
-    as the fields of a form read it (:mod:`ess.apps.fields`).
+    field of a group, whose file is written in its JSON form.
     """
     field = field_types.shape(annotation, metadata)
     ways: list[str] = []

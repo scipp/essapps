@@ -44,22 +44,14 @@ def reduce_table(
     """
     Reduce each row of ``table`` with the settings of ``template``, wait, and
     return the table with what came of each row (see :func:`reduce_batch`).
-    The batch is of the spec of the template's name that the workspace binds,
-    the highest version if it binds several
-    (:meth:`~ess.apps.Client.spec_named`). The settings are read as a page
-    loads them (:func:`~.templates.checked_settings`). It keeps nothing in
-    definitions, so no manager lists it.
+    The batch is of the spec of the template's name that the workspace binds
+    (:meth:`~ess.apps.Client.spec_named`). It keeps nothing in definitions, so
+    no manager lists it.
 
     Parameters
     ----------
-    client:
-        The client that submits.
     template:
-        The settings, of the spec and the version that the workspace binds.
-        Its blanks are not read: the parameter columns of ``table`` are the
-        blanks, and a value at one of them is the value of each row whose
-        cell is empty. A file in it may be named as in a cell
-        (:func:`~.table.as_request`), and a record by ``@latest``.
+        The settings, as :func:`~.templates.checked_settings` reads them.
     table:
         The rows, as :meth:`~.reduction.Batch.set_table` takes them.
     label:
@@ -107,21 +99,12 @@ def reduce_batch(
 
     Parameters
     ----------
-    batch:
-        The batch to reduce.
-    keys:
-        The rows to reduce, all if not given.
     remaining:
-        Reduce only the rows that :func:`~.state.left_to_reduce` gives: those
-        whose newest record under the label did not complete, or is outdated
-        since the row's cells or its spec changed, or since the settings
-        changed for a row that has no result of them yet. A row reduced with
-        earlier settings is left, as it is by the page's "Reduce".
+        Reduce only the rows that :func:`~.state.left_to_reduce` gives. A row
+        reduced with earlier settings is left.
     settings_changed:
         Together with ``remaining``, reduce also the rows reduced with earlier
-        settings (:func:`~.state.with_changed_settings`), as the page's
-        "Reduce them again" does. The rows of both are chosen by
-        :func:`~.state.to_reduce`, as the page chooses them.
+        settings (:func:`~.state.with_changed_settings`).
 
     Raises
     ------

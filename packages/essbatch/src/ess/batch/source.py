@@ -4,15 +4,6 @@
 What an application gives a batch: a :class:`RowSource` makes rows from the
 files.
 
-The key of each row as index, as text; a column per parameter that it fills,
-each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and notes,
-such as ``run`` and ``name``. :func:`rows_of` is what a source makes from the
-files now. A row is *complete* (:func:`complete`) once it has a value in each
-column that the source fills; until then it is *incomplete*. A batch is made
-from the complete rows, or from a range of them (:class:`Range`), and Follow
-adds the rows that are new and complete (:mod:`~.auto`). A batch never asks its
-source again: how its batch table was made is not part of it.
-
 Guide: ``packages/essbatch/docs/batch.md``, "Writing a row source".
 """
 
@@ -51,7 +42,9 @@ def _file_infos(client: Client, selector: Selector | None = None) -> list[FileIn
 type RowFunction = Callable[[Sequence[FileInfo]], pd.DataFrame]
 """
 What an application knows of its technique: which files make which rows. It
-takes plain data and returns a frame, so it is tested on its own.
+returns the key of each row as index, as text; a column per parameter that it
+fills, each file as its cell (:func:`~.table.cell_of`); and notes, such as
+``run`` and ``name``.
 """
 
 
@@ -63,13 +56,10 @@ class RowSource:
 
     Parameters
     ----------
-    rows:
-        Makes the rows of the source from the files.
     source_columns:
         The columns that ``rows`` fills, each named as a parameter of the
-        specs it fits (:func:`~.intake.fits`). A batch made from the source
-        keeps them as parameter columns (:attr:`~.reduction.Batch.source_columns`),
-        and Follow adds a row once it has a value in each.
+        specs it fits (:func:`~.intake.fits`). Follow adds a row once it has a
+        value in each.
     selector:
         The files that ``rows`` is given; raw files if not given.
     description:
@@ -132,12 +122,6 @@ class Range:
 
     Raises ``ValueError`` for ``later`` with an end; called, for an end that
     is not a key of the rows given, and for a ``first`` after the ``last``.
-    ``create`` refuses a ``Range`` with a ``last`` and ``follow``: the rows
-    complete between the last row and the making would be seen, so
-    Follow would never add them, but would add the rows that arrive later.
-    A ``choose`` that is a function may pick any rows, also with
-    ``follow``: a person chose them in code, and the complete rows that it
-    leaves out are seen, so Follow adds only what arrives later.
     """
 
     first: str | None = None

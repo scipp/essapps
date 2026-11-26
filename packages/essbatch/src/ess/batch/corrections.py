@@ -34,7 +34,7 @@ class CorrectedFiles:
     A file source over ``source``, with corrections a person makes.
 
     The workspace gets this source, so forms and row sources all see a file
-    as corrected, as :class:`~ess.apps.protocol.FileSource` requires::
+    as corrected::
 
         files = CorrectedFiles(FolderFiles('/data', table))
         client = local(proposal='p1', files=files, bind=BINDINGS)
@@ -52,7 +52,7 @@ class CorrectedFiles:
     applies again if the file is listed again.
 
     Raises ``ValueError`` if ``definitions`` hold corrections that cannot be
-    read, naming the file and the entry.
+    read.
     """
 
     def __init__(

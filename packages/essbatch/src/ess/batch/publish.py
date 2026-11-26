@@ -6,12 +6,7 @@ row as one derived dataset (:func:`ess.apps.scicat.publish`), with the files tha
 :class:`~.writing.Writing` writes by the output options of the batch. It needs the extra
 ``scicat``.
 
-A result is published if its row reads ``done`` or ``settings changed``: completed,
-and not outdated (:func:`~.state.publishable`). A record is published at
-most once; a newer result of the row is published as a new dataset. Each
-upload is kept as soon as it succeeds, so that one that fails after others
-keeps them. Removing the batch
-removes the entry, not the datasets in the catalogue.
+Removing the batch removes the entry, not the datasets in the catalogue.
 
 Publishing runs in the caller's thread, uploads included: a page holds its
 lock until the last upload ends.
@@ -41,9 +36,6 @@ class UploadFailed(RuntimeError):
 class Publisher:
     """
     Publishes the results of the batches of ``writing`` to ``catalogue``.
-
-    Every refusal of what is asked raises ``ValueError``, and a label that no
-    batch has ``KeyError``, as the manager does.
     """
 
     def __init__(self, writing: Writing, catalogue: Catalogue) -> None:
@@ -54,12 +46,15 @@ class Publisher:
         """
         Publish the result of the row of each of ``keys`` as the output options
         of ``label`` say, and return the catalogue identifier of each, by key.
+        A record is published at most once; a newer result of the row is
+        published as a new dataset.
 
         Raises ``ValueError``, before any upload, if the output options name no
         owner or no contact email, or a format that this process lacks, or a row is
         not in the batch, has no result to publish, or one published already.
         If an upload fails, raises :class:`UploadFailed` that names the rows
-        published before it, which are kept.
+        published before it, which are kept. Raises ``KeyError`` for a label
+        that no batch has.
         """
         write, metadata = self.writing.by_options(label)
         options = self.writing.options(label)

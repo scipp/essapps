@@ -474,11 +474,9 @@ def _rows(given: _Context) -> pd.DataFrame:
 
 def _batches(given: _Context) -> pd.DataFrame:
     """
-    A row per batch: its label, title, spec, number of rows, how many have a
-    completed result, the name of its row source, and whether it follows. The
-    results are not compared with the rows (``Batch.state(compare=False)``),
-    which would resolve every row of every batch: ``show`` tells which are
-    done. A batch that cannot be read is said on stderr, and its row has no
+    A row per batch. The results are not compared with the rows
+    (``Batch.state(compare=False)``), which would resolve every row of every
+    batch. A batch that cannot be read is said on stderr, and its row has no
     spec and no counts.
     """
     intake = given.intake()
@@ -522,35 +520,8 @@ def _show(given: _Context) -> pd.DataFrame:
 
 def _reduce(given: _Context) -> pd.DataFrame:
     """
-    Reduce the batch of the label, and return its batch table with what came
-    of each row (:func:`.frames.reduce_batch`).
-
-    For a label without a batch, the manager makes the batch
-    (:meth:`~.manager.BatchManager.create`) of the template's spec, with the
-    label as title; with ``--source``, the intake makes it
-    (:meth:`~.intake.Intake.create`). Its batch table is the table file given
-    (:func:`.table.read_table`), or the rows of the source ``--source`` that are
-    complete now, those that ``--first``, ``--last`` and ``--later`` pick
-    (:class:`~.source.Range`), not both; without either, one row keyed by the
-    label. With ``--source``, the batch keeps its source, so that ``available``
-    and its page offer the rows of the source that its batch table lacks; it
-    follows only after ``follow``. ``create`` refuses a label that
-    has definitions or records. If the reduction is then refused, the batch
-    is removed again: nothing was submitted, and the same command line works
-    once the template is right.
-
-    For a label with a batch, the template becomes its settings and the table
-    file replaces its batch table (:meth:`.reduction.Batch.set_table`); ``--source``
-    is refused.
-
-    A template must be of the batch's spec and its version, as the page's
-    "Load settings" checks it (:func:`.templates.checked_settings`), and is
-    checked before anything is written. Its blanks are not read. A value at a
-    parameter column is the setting that each row with an empty cell takes,
-    but at a column that the batch's source fills, where it is left out
-    (:meth:`.reduction.Batch.settable`). With ``--remaining`` it reduces the
-    rows that the page's "Reduce" does (:func:`.state.left_to_reduce`);
-    ``--settings-changed`` adds those reduced with earlier settings.
+    Reduce the batch of the label, made first if the label has none; its batch
+    table with what came of each row (:func:`.frames.reduce_batch`).
     """
     args, client = given.args, given.client
     label = args.label
@@ -819,9 +790,9 @@ def follow(
     wait, ``write_line`` is given the reductions that ended in it.
 
     A step may raise anything, as the code of the source may
-    (:meth:`.intake.Intake.step`). It is said on stderr as the page says it
+    (:meth:`.intake.Intake.step`). It is said on stderr
     (:func:`.intake.step_failure`), once while the message stays the same,
-    and the next step tries again, as on the page; but a workspace that
+    and the next step tries again; but a workspace that
     stopped (:class:`~ess.apps.errors.Stopped`) is raised, since no step can
     work on it.
 
@@ -829,8 +800,6 @@ def follow(
     ----------
     intake:
         The intake, whose batch follows; ``ValueError`` if none does.
-    write_line:
-        Called with what a step did.
     pause:
         Waits between two steps, such as ``event.wait(seconds)``.
     stopped:
