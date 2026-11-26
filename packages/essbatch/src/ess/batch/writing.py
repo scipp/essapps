@@ -1,15 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-How the results of a batch are written: :class:`Writing` keeps the output
-options of each batch (:class:`~.definition.OutputOptions`), and writes the
-result of a row by them
-with :func:`ess.apps.writers.write`.
+The output options of each batch, and writing the result of a row by them.
 
-Output options name their format by the writer's name, not its title, so a title may
-change, but a name changed is one that kept output options lack. Kept output options
-whose format this process lacks, such as a command run without the writers, are refused
-when writing, never written in another format.
+Output options refer to their writer by its name, so a writer's title may
+change. Stored output options whose format this process lacks, such as in a
+command run without the application's writers, raise ``ValueError`` when
+writing. Nothing is written in another format then.
 """
 
 from __future__ import annotations
@@ -40,15 +37,19 @@ class Writing:
     Parameters
     ----------
     writers:
-        The writers of each spec, by its name, the first one the format of
-        output options not set. :data:`~ess.apps.writers.SCIPP_HDF5` follows them, and
-        is the only writer of a spec not named. ``ValueError`` if the
-        workspace binds no spec of a name, a writer reads an output that its
-        spec lacks, or two writers of a spec have one format.
+        The writers of each spec, by spec name. The first is the default
+        format. :data:`~ess.apps.writers.SCIPP_HDF5` follows them, and is the
+        only writer of a spec not listed.
     contact:
-        The owner and contact of output options not set, such as the principal
-        investigator of the proposal (:func:`ess.apps.scicat.principal_investigator`);
-        none if not given.
+        The default owner and contact, such as the principal investigator of
+        the proposal (:func:`ess.apps.scicat.principal_investigator`).
+
+    Raises
+    ------
+    ValueError
+        If the workspace binds no spec of a name in ``writers``, a writer reads
+        an output that its spec lacks, or two writers of a spec have one
+        format.
     """
 
     def __init__(
@@ -79,10 +80,11 @@ class Writing:
 
     def options(self, label: str) -> OutputOptions:
         """
-        The output options of ``label``. Until set, their format is the first
-        of :meth:`writers`, they name every output of the spec, their
-        description is the batch's, and their owner and contact are the
-        ``contact`` given.
+        The output options of ``label``.
+
+        Until set: the first format of :meth:`writers`, every output of the
+        spec, the description of the batch, and ``contact`` as owner and
+        contact.
         """
         spec = self.manager.batch(label).spec
         kept = OUTPUT_OPTIONS.load(self.manager.definitions, label)
@@ -99,9 +101,11 @@ class Writing:
 
     def set_options(self, label: str, options: OutputOptions) -> None:
         """
-        Keep ``options`` for ``label``. Raises ``ValueError`` for a format that
-        :meth:`writers` lacks, an output that the spec of the batch lacks, or
-        no output for a writer that writes the outputs chosen.
+        Stores ``options`` for ``label``.
+
+        Raises ``ValueError`` for a format that :meth:`writers` lacks, an
+        output that the spec lacks, or no output for a writer of chosen
+        outputs.
         """
         writer = self._writer(label, options.format)
         spec = self.manager.batch(label).spec
@@ -113,10 +117,11 @@ class Writing:
 
     def by_options(self, label: str) -> tuple[RowWriter, dict[str, DatasetMetadata]]:
         """
-        What writes the result of a row of ``label`` into a folder, as the
-        output options say (:func:`ess.apps.writers.write`), and what they
-        say of the result of each row, by key. Raises ``ValueError`` if this
-        process lacks the format of the output options.
+        A :data:`~.export.RowWriter` by the output options of ``label``, and
+        the dataset metadata of each row, by key.
+
+        Raises ``ValueError`` if this process lacks the format of the output
+        options.
         """
         options = self.options(label)
         writer = self._writer(label, options.format)
@@ -132,9 +137,8 @@ class Writing:
 
     def options_text(self, label: str) -> str:
         """
-        The output options of ``label`` as YAML (:meth:`options`), with a
-        comment on what their format, outputs and name may hold;
-        :func:`load_options` reads it back.
+        The output options of ``label`` as YAML, with a comment on what their
+        format, outputs and name may hold. :func:`load_options` reads it back.
         """
         formats = ', '.join(w.name for w in self.writers(label))
         outputs = ', '.join(self.manager.batch(label).spec.outputs.model_fields)
@@ -151,7 +155,7 @@ class Writing:
     def _metadata(
         self, label: str, options: OutputOptions
     ) -> dict[str, DatasetMetadata]:
-        """What ``options`` say of the result of each row of ``label``, by key."""
+        """The dataset metadata of each row of ``label`` by ``options``, by key."""
         batch = self.manager.batch(label)
         title = self.manager.headers()[label].title
         return {

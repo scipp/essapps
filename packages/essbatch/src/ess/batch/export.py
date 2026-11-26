@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The files that a person takes away from a batch.
+The files that a person takes away from a batch: one folder per row.
 
 A :data:`RowWriter` writes by the output options of the batch
 (:meth:`.writing.Writing.by_options`), or with one writer (:func:`by_writer`),
-such as scipp HDF5 for a table that names no batch.
+such as scipp HDF5 for a table of no batch.
 """
 
 from __future__ import annotations
@@ -23,14 +23,15 @@ from ess.apps.records import Record, Status
 from ess.apps.writers import SCIPP_HDF5, DatasetMetadata, Writer
 
 type RowWriter = Callable[[str, Record, Path], None]
-"""Writes the result of the row of a key, its record, into a new folder."""
+"""Writes the result of a row, given its key and record, into a new folder."""
 
 
 def by_writer(client: Client, writer: Writer = SCIPP_HDF5) -> RowWriter:
     """
-    Writes the result of a row with ``writer``, named by the key of the row;
-    a writer that writes the outputs chosen writes each output that the
-    record returned.
+    A :data:`RowWriter` that writes with ``writer``, naming the dataset by the
+    key of the row.
+
+    A writer of chosen outputs writes each output that the record returned.
     """
     return lambda key, record, directory: writers.write(
         client,
@@ -46,16 +47,21 @@ def export_table(
     client: Client, table: pd.DataFrame, directory: Path, write: RowWriter
 ) -> None:
     """
-    Write the result of each row of ``table``, indexed by key, whose record
-    completed to ``directory / key`` with ``write``, replacing that folder
-    whole: each row is written into a temporary folder in ``directory``
-    first, so that a row that fails leaves the folder of its key as it was.
-    The record of a row is the one in the ``record`` column, so a later
-    reduction under the same label changes nothing that is exported.
+    Writes the result of each row whose record completed to ``directory /
+    key``, with ``write``.
 
-    Raises ``ValueError`` if the table has no ``record`` column, names a record
-    that the workspace lacks, has a key twice, or a key that is not the name of
-    a folder, such as one with ``/``; nothing is written.
+    ``table`` is indexed by key. The record of a row is the one in the column
+    ``record``, so a later reduction under the same label does not change what
+    is exported. Each folder is replaced whole. A row is written to a
+    temporary folder in ``directory`` first, so a row whose writing fails
+    leaves the folder of its key as it was.
+
+    Raises
+    ------
+    ValueError
+        Before anything is written: if the table has no column ``record``,
+        refers to a record that the workspace lacks, or has a key twice or a
+        key that is not a folder name, such as ``a/b``.
     """
     if 'record' not in table:
         raise ValueError('the table has no column record: reduce it first')

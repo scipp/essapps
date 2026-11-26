@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Results of a batch into the catalogue: :class:`Publisher` publishes the result of each
-row as one derived dataset (:func:`ess.apps.scicat.publish`), with the files that
-:class:`~.writing.Writing` writes by the output options of the batch. It needs the extra
-``scicat``.
+Publishing the results of a batch to the catalogue, one derived dataset per
+row (:func:`ess.apps.scicat.publish`). Needs the extra ``scicat``.
 
-Removing the batch removes the entry, not the datasets in the catalogue.
+The definitions of a batch store each upload. Removing the batch removes them
+and leaves the datasets in the catalogue.
 
 Publishing runs in the caller's thread, uploads included: a page holds its
 lock until the last upload ends.
@@ -30,12 +29,13 @@ from .writing import Writing
 
 
 class UploadFailed(RuntimeError):
-    """An upload failed; the rows published before it stay published."""
+    """An upload failed. The rows published before it stay published."""
 
 
 class Publisher:
     """
-    Publishes the results of the batches of ``writing`` to ``catalogue``.
+    Publishes the results of the batches of ``writing`` to ``catalogue``, with
+    the files that ``writing`` writes.
     """
 
     def __init__(self, writing: Writing, catalogue: Catalogue) -> None:
@@ -44,17 +44,24 @@ class Publisher:
 
     def publish(self, label: str, keys: Sequence[str]) -> dict[str, str]:
         """
-        Publish the result of the row of each of ``keys`` as the output options
-        of ``label`` say, and return the catalogue identifier of each, by key.
-        A record is published at most once; a newer result of the row is
+        Publishes the result of the row of each of ``keys``, by the output
+        options of ``label``. Returns the catalogue identifier of each, by key.
+
+        A record is published at most once. A newer result of a row is
         published as a new dataset.
 
-        Raises ``ValueError``, before any upload, if the output options name no
-        owner or no contact email, or a format that this process lacks, or a row is
-        not in the batch, has no result to publish, or one published already.
-        If an upload fails, raises :class:`UploadFailed` that names the rows
-        published before it, which are kept. Raises ``KeyError`` for a label
-        that no batch has.
+        Raises
+        ------
+        KeyError
+            If no batch has ``label``.
+        ValueError
+            Before any upload: if the output options lack an owner or a
+            contact email, or name a format that this process lacks; if a row
+            is not in the batch, has no result to publish
+            (:func:`~.state.publishable`), or was published already.
+        UploadFailed
+            If an upload fails. It names the rows published before it, which
+            stay published.
         """
         write, metadata = self.writing.by_options(label)
         options = self.writing.options(label)
@@ -79,8 +86,8 @@ class Publisher:
 
     def _results(self, label: str, keys: Sequence[str]) -> dict[str, Record]:
         """
-        The result of the row of each key, which may be published and is not;
-        else ``ValueError``.
+        The result of the row of each key; ``ValueError`` if one is not
+        publishable or is published already.
         """
         batch = self.writing.manager.batch(label)
         if unknown := sorted(set(keys) - set(batch.table().index)):
@@ -106,7 +113,7 @@ class Publisher:
         metadata: DatasetMetadata,
         format: str,
     ) -> str:
-        """Upload one result and keep that it was; its catalogue identifier."""
+        """Uploads one result, stores the upload, and returns its identifier."""
         client = self.writing.manager.client
         with tempfile.TemporaryDirectory() as folder:
             written = Path(folder) / key

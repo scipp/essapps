@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What an application gives a batch: a :class:`RowSource` makes rows from the
-files.
+Row sources: code of an application that makes rows of a batch table from
+the files.
 
 Guide: ``packages/essbatch/docs/batch.md``, "Writing a row source".
 """
@@ -25,7 +25,7 @@ from .table import typed
 
 @dataclass(frozen=True)
 class FileInfo:
-    """A file and its metadata, as a :data:`RowFunction` is given it."""
+    """A file and its metadata, as a :data:`RowFunction` receives it."""
 
     ref: FileRef
     metadata: Mapping[str, Any]
@@ -41,31 +41,30 @@ def _file_infos(client: Client, selector: Selector | None = None) -> list[FileIn
 
 type RowFunction = Callable[[Sequence[FileInfo]], pd.DataFrame]
 """
-What an application knows of its technique: which files make which rows. It
-returns the key of each row as index, as text; a column per parameter that it
-fills, each file as its cell (:func:`~.table.cell_of`); and notes, such as
-``run`` and ``name``.
+A function from the files to the rows of a source.
+
+It returns the key of each row as index, as text; a column per source column,
+a file as its name (:func:`~.table.cell_of`); and other columns as notes, such
+as ``run`` and ``name``.
 """
 
 
 @dataclass(frozen=True)
 class RowSource:
     """
-    A row source: a :data:`RowFunction`, the columns it fills, and the files
-    it is given.
+    A :data:`RowFunction`, the columns it fills, and the files it receives.
 
     Parameters
     ----------
     source_columns:
         The columns that ``rows`` fills, each named as a parameter of the
-        specs it fits (:func:`~.intake.fits`). Follow adds a row once it has a
-        value in each.
+        specs it fits (:func:`~.intake.fits`). Follow adds a row only once it
+        has a value in each.
     selector:
-        The files that ``rows`` is given; raw files if not given.
+        The files that ``rows`` receives. Raw files if ``None``.
     description:
-        What a row is and how ``rows`` pairs the files, for a person who
-        chooses the source or checks its rows, such as on ``essbatch
-        sources``.
+        For a person: what a row is and how ``rows`` pairs the files.
+        ``essbatch sources`` shows it.
     """
 
     rows: RowFunction
@@ -76,12 +75,16 @@ class RowSource:
 
 def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     """
-    The rows that ``source`` makes from the files of ``client`` now, with an
-    empty column for each of :attr:`RowSource.source_columns` that it lacks, so that a
-    batch made from it has its columns also when no file is listed yet.
+    The rows that ``source`` makes from the files listed now.
 
-    Raises ``ValueError`` for a key that is not text, empty, or given twice,
-    or a column that a table cannot hold (see :func:`~.table.typed`).
+    It adds an empty column for each source column that the rows lack, so
+    that a batch made before any file is listed has its columns.
+
+    Raises
+    ------
+    ValueError
+        For a key that is not text, empty, or repeated, or a column that a
+        table cannot hold (:func:`~.table.typed`).
     """
     frame = source.rows(_file_infos(client, source.selector))
     empty = {
@@ -89,16 +92,22 @@ def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
         for c in source.source_columns
         if c not in frame.columns
     }
-    # Every column a note: the source knows no spec.
+    # Every column is a note: a source knows no spec.
     return typed(frame.assign(**empty), BaseModel)
 
 
 def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     """
-    Whether each row of ``given`` has a value in each of ``columns``, such as
-    the columns that a source fills: a row that has not is incomplete. Raises
-    ``ValueError`` if ``given`` lacks one of ``columns``, as when the code of
-    a source no longer fills a column that a batch keeps as a source column.
+    Whether each row of ``given`` has a value in each of ``columns``.
+
+    A row of a source is *complete* once it has a value in each source column,
+    and *incomplete* until then.
+
+    Raises
+    ------
+    ValueError
+        If ``given`` lacks one of ``columns``, such as when the code of a source
+        no longer returns a column that a batch stores as a source column.
     """
     if lacking := [c for c in columns if c not in given.columns]:
         raise ValueError(
@@ -111,17 +120,24 @@ def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
 @dataclass(frozen=True)
 class Range:
     """
-    Which rows a new batch takes of the rows of its source complete now, as
-    a person picks them, given as ``choose`` to
-    :meth:`~.intake.Intake.create` and
-    :meth:`~.intake.Intake.marked`: called on the complete rows, it gives
-    the rows from the row of key ``first`` to the row of key ``last``, both
-    included, in their order; an end not given is open. With ``later``, it
-    gives none, so that the batch gets only the rows added later, by Follow
-    or by a person.
+    The rows of a new batch, picked from the complete rows of its source.
 
-    Raises ``ValueError`` for ``later`` with an end; called, for an end that
-    is not a key of the rows given, and for a ``first`` after the ``last``.
+    Passed as ``choose`` to :meth:`~.intake.Intake.create` and
+    :meth:`~.intake.Intake.marked`. Called on the complete rows, it returns
+    those from key ``first`` to key ``last``, both included. An end not given
+    is open::
+
+        Range(first='60339')(arrived)   # rows 60339 to the end
+        Range(later=True)(arrived)      # no rows
+
+    With ``later``, the batch gets only rows added later, by Follow or by a
+    person.
+
+    Raises
+    ------
+    ValueError
+        For ``later`` with an end. When called, for an end that is not a key of
+        the rows, or a ``first`` after ``last``.
     """
 
     first: str | None = None
