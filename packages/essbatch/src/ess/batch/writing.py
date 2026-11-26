@@ -182,7 +182,7 @@ class Writing:
                 description=options.description,
                 keywords=options.keywords,
             )
-            for key, name in row_names(batch.frame(), batch.parameter_columns).items()
+            for key, name in row_names(batch.table(), batch.parameter_columns).items()
         }
 
     def _writer(self, label: str, format: str) -> Writer:

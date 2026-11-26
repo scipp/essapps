@@ -117,11 +117,11 @@ def sample(fake: FakeFiles) -> toys.Measure:
 def batch(client: Client) -> Iterator[Batch]:
     """
     A staged batch of :data:`toys.COLUMNS` with the rows that ``toys.PAIRS``
-    makes before a file is measured: none. ``batch.put(toys.rows(client))``
+    makes before a file is measured: none. ``batch.set_table(toys.rows(client))``
     takes those measured since.
     """
     batch = Batch(
-        client, toys.STAGED, label='scan', rows=toys.rows(client), staged=True
+        client, toys.STAGED, label='scan', table=toys.rows(client), staged=True
     )
     yield batch
     batch.close()
@@ -134,7 +134,7 @@ def done_batch(fake: FakeFiles, client: Client, manager: BatchManager) -> Batch:
         fake.measure(run, float(run), role='sample', sample=name, pid=f'20.500/s{run}')
         fake.measure(run + 1000, 1.0, role='transmission', sample=name)
     batch = manager.create(
-        'plain', title='Morning', description='2 mm cells', rows=toys.rows(client)
+        'plain', title='Morning', description='2 mm cells', table=toys.rows(client)
     )
     client.wait(list(batch.reduce(['1', '2']).values()))
     return batch
@@ -424,9 +424,9 @@ def app(folder: Path, label: str = 'x') -> Iterator[Batch]:
 
 def edit(batch: Batch, key: str, sample: str) -> None:
     """Set the sample of the row of ``key``, as a page does."""
-    frame = batch.frame()
+    frame = batch.table()
     frame.loc[key, 'sample'] = sample
-    batch.put(frame)
+    batch.set_table(frame)
 
 
 @pytest.fixture

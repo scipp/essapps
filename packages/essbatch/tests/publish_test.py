@@ -121,7 +121,7 @@ def test_a_row_without_a_result_is_refused(
 ) -> None:
     fake.measure(3, 3.0, role='sample', sample='B')
     fake.measure(1003, 1.0, role='transmission', sample='B')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
 
     with pytest.raises(ValueError, match='not outdated: 3'):
         publisher.publish(batch.label, ['1', '3'])

@@ -34,9 +34,9 @@ The LoKI arrivals take `--follow [SECONDS]`, which makes their first batch with 
 
 ## The batch table
 
-The rows of the page are the batch table (`Batch.frame()`): one row per key, a parameter column per parameter that each row sets, and the note columns, shown as text.
+The rows of the page are the batch table (`Batch.table()`): one row per key, a parameter column per parameter that each row sets, and the note columns, shown as text.
 A row is shown by its note `name`, else by its key; **+ Add row** takes its key.
-Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selected** and **Load table**, makes the new batch table and puts it to the batch (`Batch.put`); what the batch refuses is said, and nothing changes.
+Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selected** and **Load table**, makes the new batch table and puts it to the batch (`Batch.set_table`); what the batch refuses is said, and nothing changes.
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole batch table, its columns too; the page then shows the cells and the settings form of the parameter columns loaded.
 It is refused while the settings form holds a change, which the new form would drop, as "Make this a column" and "Make this a setting" are.
@@ -183,7 +183,7 @@ batch = intake.create(spec, title=title, source=source,
                       parameter_columns=['thickness'],          # ticked: an empty column
                       settings=settings,                        # less those at the source columns
                       follow=follow)                            # Follow ticked
-batch = manager.create(spec, title=title, rows=table,           # from a table file, or rows=None
+batch = manager.create(spec, title=title, table=table,           # from a table file, or table=None
                        parameter_columns=['thickness'], settings=settings)
 ```
 
@@ -316,7 +316,7 @@ flowchart TD
     page -->|"token, shown, unsubmitted, clear_submit_errors"| last_step
     page -->|"available_rows, add_rows, stop()"| intake
     page -->|"batch(label), change"| manager
-    page -->|"put, reduce"| batch
+    page -->|"set_table, reduce"| batch
     intake --> manager
     manager -->|one per label| batch
 ```
@@ -326,7 +326,7 @@ flowchart TD
 | `static/` | the page: `index.html`, `app.js`, `tables.js`, `form.js`; what is shown: selection, filter, view, tab, sort, axes |
 | `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch; `serve(app, port=...)` runs it on localhost |
 | `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It steps Follow (`tick`) |
-| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its revision. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Runs` for the listing and `LastStep` for what to show of Follow |
+| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its revision. Through the manager and the `Intake` it writes its batch: the rows (each change a table set with `set_table`), the settings at Apply, its header, the rows added from the source, Follow's stop. It asks `Runs` for the listing and `LastStep` for what to show of Follow |
 | `runs.py` | `Runs`: the listing of what the client lists, shared by every page, its revision (`SafeListing.revision`), and the Runs view with the corrections of runs |
 | `last_step.py` | `LastStep`: what the last step of Follow said, for the page of the batch that follows |
 | `draft.py` | `Draft`: the settings form of a `Page`, a draft until Apply: what it holds, what it showed of the batch's settings, and the settings it could not show |

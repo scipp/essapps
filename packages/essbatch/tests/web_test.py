@@ -28,8 +28,8 @@ from ess.batch import (
     RowSource,
 )
 from ess.batch.definition import (
-    ROWS,
     SETTINGS,
+    TABLE,
     DefinitionWriteError,
     Key,
 )
@@ -122,7 +122,7 @@ def http(
     sample(1, 'water')
     sample(2, 'sds')
     sample(3, 'oil', partner=False)
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
     return opened(pages, label)
 
 
@@ -217,11 +217,11 @@ def test_a_poll_sees_a_row_that_another_caller_put_without_a_record(
 ) -> None:
     now = state(http)
     after = {'after': now['revision'], 'start': now['start']}
-    batch.put(batch.frame())
+    batch.set_table(batch.table())
     assert http.get('/api/state', params=after).status_code == 204
 
     sample(4, 'salt', partner=False)
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
     polled = http.get('/api/state', params=after).json()
 
     salt = {row['key']: row for row in polled['rows']}['4']
@@ -279,21 +279,21 @@ def test_an_edit_of_several_rows_writes_each_and_says_so(
 ) -> None:
     notice = thickness(http, ['1', '2'], 5.0)['notice']
 
-    assert list(batch.frame().loc[['1', '2'], 'thickness']) == [5.0, 5.0]
+    assert list(batch.table().loc[['1', '2'], 'thickness']) == [5.0, 5.0]
     assert notice == 'Thickness set on 2 rows.'
 
 
 def test_an_edit_of_several_rows_with_one_unknown_edits_none(
     http: TestClient, batch: Batch
 ) -> None:
-    before = batch.frame()
+    before = batch.table()
 
     refused = http.post(
         '/api/cells', json={'keys': ['1', '9'], 'column': 'thickness', 'value': 5}
     )
 
     assert 'no row 9' in refused.json()['message']
-    pd.testing.assert_frame_equal(batch.frame(), before)
+    pd.testing.assert_frame_equal(batch.table(), before)
 
 
 def test_a_file_cell_is_set_by_the_label_of_its_option_and_kept_as_its_name(
@@ -307,7 +307,7 @@ def test_a_file_cell_is_set_by_the_label_of_its_option_and_kept_as_its_name(
 
     assert statuses(http)['3'] == 'ready'
     assert rows(http)['3']['cells']['transmission']['text'] == 'run 1001'
-    table = batch.frame()
+    table = batch.table()
     assert table.at['3', 'transmission'] == table.at['1', 'transmission']
 
 
@@ -315,7 +315,7 @@ def test_a_cell_emptied_is_empty_in_the_table(http: TestClient, batch: Batch) ->
     http.post('/api/cells', json={'keys': ['1'], 'column': 'transmission'})
 
     assert statuses(http)['1'] == 'incomplete'
-    assert pd.isna(batch.frame().at['1', 'transmission'])
+    assert pd.isna(batch.table().at['1', 'transmission'])
 
 
 @pytest.mark.parametrize(
@@ -350,7 +350,7 @@ def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
 ) -> None:
     # The state of a batch does not read the records that a cell references,
     # so only the refusal of the submission, kept by the page, marks the cell.
-    batch.put(batch.frame().assign(offset='nope.x'))
+    batch.set_table(batch.table().assign(offset='nope.x'))
     assert rows(http)['1']['cells']['offset']['problem'] is None
 
     response = http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
@@ -563,7 +563,7 @@ def test_the_setting_of_a_column_without_a_default_can_be_reset_to_none(
         {'sample': [None], 'transmission': ['run:1001']}, index=pd.Index(['a'])
     )
     settings = {'sample': FileRef(file='run:1')}
-    label = manager.create(STAGED.name, title='T', rows=table, settings=settings).label
+    label = manager.create(STAGED.name, title='T', table=table, settings=settings).label
     page = opened(pages, label)
     shown = state(page)
 
@@ -675,7 +675,7 @@ def test_a_row_reduced_by_another_spec_version_is_outdated(
     with local(proposal='p1', files=files, bind=bind) as client:
         pages = started(client, definitions)
         label = toys.from_pairs(pages.intake, PLAIN.name, title='New')
-        old = Batch(client, PLAIN, label=label, rows=toys.rows(client))
+        old = Batch(client, PLAIN, label=label, table=toys.rows(client))
         client.wait(old.reduce(['1']))
         page = opened(pages, label)
 
@@ -825,10 +825,10 @@ def test_the_table_downloaded_and_uploaded_gives_the_same_table(
 
     assert loaded.json()['notice'] == f'Loaded 3 rows from rows.{suffix}.'
     # A cell of .xlsx has a type; a note of .csv is text.
-    expected = batch.frame()
+    expected = batch.table()
     if suffix == 'csv':
         expected = expected.astype({'run': 'string'})
-    pd.testing.assert_frame_equal(manager.batch(other).frame(), expected)
+    pd.testing.assert_frame_equal(manager.batch(other).table(), expected)
 
 
 def test_a_table_loaded_replaces_the_rows_the_columns_and_so_the_forms(
@@ -1187,7 +1187,7 @@ def test_a_drawing_that_raises_says_so_in_place_of_the_figure(
         raise RuntimeError('released')
 
     sample(1, 'water')
-    intake.manager.batch(label).put(toys.rows(client))
+    intake.manager.batch(label).set_table(toys.rows(client))
     pages = Pages(intake, draw={STAGED.name: broken})
     page = opened(pages, label)
     reduced(page, client)
@@ -1213,7 +1213,7 @@ def test_plotting_and_saving_chosen_rows_reads_their_records_only(
     manager = BatchManager(counting, definitions=definitions)  # type: ignore[arg-type]
     for run in (1, 2, 3):
         sample(run, f's{run}')
-    label = manager.create(STAGED.name, title='Scan', rows=toys.rows(client)).label
+    label = manager.create(STAGED.name, title='Scan', table=toys.rows(client)).label
     pages = Pages(Intake(manager, sources=SOURCES), draw={STAGED.name: draw})
     page = opened(pages, label)
     reduced(page, client, 'all')
@@ -1304,7 +1304,7 @@ def test_a_row_added_on_the_page_is_empty_and_rows_removed_are_gone(
     after = http.post('/api/rows/remove', json={'keys': ['extra', '2']}).json()
 
     assert after['notice'] == 'Removed 2 rows.'
-    assert list(batch.frame().index) == ['1', '3']
+    assert list(batch.table().index) == ['1', '3']
 
 
 def available(http: TestClient) -> dict[str, str]:
@@ -1365,7 +1365,7 @@ def test_rows_the_manager_does_not_take_answer_422_and_none_is_added(
         answer.json()['message']
         == 'No row was added: rows [\'1\'] are in the batch already.'
     )
-    assert list(batch.frame().index) == ['1', '2', '3']
+    assert list(batch.table().index) == ['1', '2', '3']
 
 
 def failing(error: Exception) -> Callable[[Any], Any]:
@@ -1494,14 +1494,14 @@ def test_a_column_made_a_setting_whose_table_is_refused_keeps_its_cells(
     http: TestClient, client: Client, refusing: Refusing, definitions: DefinitionStore
 ) -> None:
     thickness(http, ['1', '2', '3'], 2.5)
-    refusing.part = 'rows'
+    refusing.part = 'table'
 
     answer = make_setting(http)
 
     assert answer.status_code == 422
     batch = started(client, definitions).intake.manager.batch('scan')
     assert batch.parameter_columns == ('sample', 'transmission', 'thickness')
-    assert batch.frame()['thickness'].tolist() == [2.5, 2.5, 2.5]
+    assert batch.table()['thickness'].tolist() == [2.5, 2.5, 2.5]
 
 
 def test_a_column_whose_rows_differ_is_made_a_setting_of_the_row_chosen(
@@ -1534,7 +1534,7 @@ def test_a_setting_made_a_column_is_shown_in_the_form_and_in_each_empty_cell(
         'Thickness is a column: a row takes the setting until its cell is set.'
     )
     assert batch.parameter_columns == ('sample', 'transmission', 'thickness')
-    assert batch.frame()['thickness'].isna().all()
+    assert batch.table()['thickness'].isna().all()
     assert batch.settings['thickness'] == 2.5
     assert [r['cells']['thickness']['text'] for r in made['rows']] == [''] * 3
     # The grid shows an empty cell in grey as the value it takes.
@@ -1559,7 +1559,7 @@ def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
     bins(http, 5)
 
     column = http.post('/api/settings/column', json={'name': 'binning'}).json()
-    cells = batch.frame()['binning'].tolist()
+    cells = batch.table()['binning'].tolist()
     setting = http.post('/api/columns/setting', json={'name': 'binning'}).json()
 
     assert [c['name'] for c in column['columns']][-1] == 'binning'
@@ -1586,7 +1586,7 @@ def test_columns_do_not_change_while_the_form_holds_a_change(
         'Nothing was changed: apply or discard the settings first.'
     )
     assert batch.parameter_columns == ('sample', 'transmission', 'thickness')
-    assert list(batch.frame().index) == ['1', '2', '3']
+    assert list(batch.table().index) == ['1', '2', '3']
     assert form_bins(state(http)) == 9
 
 
@@ -1649,7 +1649,7 @@ def form(files: CorrectedFiles, definitions: DefinitionStore) -> Iterator[TestCl
     with local(proposal='p1', files=files, bind=bind) as client:
         pages = started(client, definitions)
         rows = pd.DataFrame(columns=['sample'])
-        label = pages.intake.manager.create(FORMS.name, title='Forms', rows=rows).label
+        label = pages.intake.manager.create(FORMS.name, title='Forms', table=rows).label
         yield opened(pages, label)
 
 
@@ -1797,7 +1797,7 @@ def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
 ) -> None:
     for run in range(10, 200):
         sample(run, f'sample {run}')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
 
     plain = http.get('/api/state', headers={'Accept-Encoding': 'identity'})
     packed = http.get('/api/state', headers={'Accept-Encoding': 'gzip'})
@@ -1814,7 +1814,7 @@ def test_a_large_answer_is_compressed_for_a_client_that_accepts_gzip(
 def test_each_batch_has_its_page_at_its_label(
     http: TestClient, manager: BatchManager, pages: Pages, client: Client
 ) -> None:
-    other = manager.create(STAGED.name, title='Other', rows=toys.rows(client)).label
+    other = manager.create(STAGED.name, title='Other', table=toys.rows(client)).label
     page = opened(pages, other)
 
     bins(page, 5)
@@ -2008,8 +2008,8 @@ def test_the_counts_give_the_rows_of_each_batch_by_status(
 ) -> None:
     sample(1, 'water')
     sample(2, 'oil', partner=False)
-    manager.create('plain', title='Morning', rows=toys.rows(client), label='a')
-    manager.create('plain', title='Afternoon', rows=toys.rows(client), label='b')
+    manager.create('plain', title='Morning', table=toys.rows(client), label='a')
+    manager.create('plain', title='Afternoon', table=toys.rows(client), label='b')
     client.wait(manager.batch('a').reduce(['1']))
 
     counted = pages.counts()
@@ -2026,14 +2026,14 @@ def test_a_batch_that_cannot_be_counted_has_its_reason(
 ) -> None:
     sample(1, 'water')
     first = BatchManager(client, definitions=definitions)
-    first.create('plain', title='Fine', rows=toys.rows(client), label='a')
-    first.create('plain', title='Broken', rows=toys.rows(client), label='b')
-    definitions.save(ROWS.key('b'), {'nonsense': 1})
+    first.create('plain', title='Fine', table=toys.rows(client), label='a')
+    first.create('plain', title='Broken', table=toys.rows(client), label='b')
+    definitions.save(TABLE.key('b'), {'nonsense': 1})
 
     counted = restarted(client, definitions).counts()
 
     assert list(counted.rows) == list(counted.files) == ['a']
-    assert 'rows.json: not a table' in counted.failed['b']
+    assert 'table.json: not a table' in counted.failed['b']
 
 
 # The batches of each run
@@ -2047,7 +2047,9 @@ def named(http: TestClient) -> dict[str, list[str]]:
 def test_the_counts_name_the_runs_of_each_batch_also_a_run_two_share(
     http: TestClient, manager: BatchManager, client: Client
 ) -> None:
-    manager.create('plain', title='Water', rows=toys.rows(client).loc[['1']], label='w')
+    manager.create(
+        'plain', title='Water', table=toys.rows(client).loc[['1']], label='w'
+    )
 
     assert named(http) == {
         'scan': [
@@ -2212,7 +2214,7 @@ def test_a_batch_without_a_source_is_made_with_the_columns_sent_and_no_rows(
     made = TestClient(create_app(pages)).post('/api/batches', json=sent).json()
 
     batch = manager.batch(made['label'])
-    assert (batch.spec.name, batch.parameter_columns, len(batch.frame())) == (
+    assert (batch.spec.name, batch.parameter_columns, len(batch.table())) == (
         'find',
         ('sample',),
         0,
@@ -2287,7 +2289,7 @@ def test_a_batch_of_the_rows_that_arrive_later_takes_none_now_and_follow_adds_th
     listed = source_rows(http, later='true').json()['rows']
 
     made = http.post('/api/batches', json=new_batch(later=True, follow=True)).json()
-    empty = list(manager.batch(made['label']).frame().index)
+    empty = list(manager.batch(made['label']).table().index)
     sample(4, 'ethanol')
     fake.measure(1003, 1.0, role='transmission', sample='oil')  # 3 waited
     pages.tick()
@@ -2298,7 +2300,7 @@ def test_a_batch_of_the_rows_that_arrive_later_takes_none_now_and_follow_adds_th
         ('3', 'incomplete'),
     ]
     assert empty == []
-    assert list(manager.batch(made['label']).frame().index) == ['3', '4']
+    assert list(manager.batch(made['label']).table().index) == ['3', '4']
 
 
 class RefusingAt:
@@ -2364,7 +2366,7 @@ def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
 
     batch = pages.intake.manager.batch(made.label)
     assert at > 4  # settings, rows, header, source, following
-    assert batch.frame()['thickness'].isna().tolist() == [True]
+    assert batch.table()['thickness'].isna().tolist() == [True]
     assert batch.settings['thickness'] == 2.0
     assert pages.intake.following == made.label
 
@@ -2405,7 +2407,7 @@ def test_a_setting_of_the_batch_at_a_column_of_the_new_one_is_its_empty_cells(
 
     batch = manager.batch(made['label'])
     assert batch.parameter_columns == tuple(columns)
-    assert batch.frame()['thickness'].isna().tolist() == [True, True]
+    assert batch.table()['thickness'].isna().tolist() == [True, True]
     assert [c['thickness'] for c in batch.cells().values()] == [2.5, 2.5]
 
 
@@ -2451,7 +2453,7 @@ def test_a_column_that_the_rows_fill_keeps_its_cells_over_a_setting_of_its_name(
         given = ['run:5', 'run:6']
 
     batch = manager.batch(made['label'])
-    assert batch.frame()['sample'].tolist() == given
+    assert batch.table()['sample'].tolist() == given
     # A source fills the column, so an empty cell there waits for a run; a
     # table file has no source, and the setting is for the rows added later.
     assert ('sample' in batch.settings) is kept
@@ -2472,7 +2474,7 @@ def test_a_batch_made_from_a_table_file_has_its_rows_and_columns_and_no_source(
 
     batch = manager.batch(made['label'])
     assert batch.parameter_columns == ('sample', 'transmission')
-    assert list(batch.frame().index) == ['a', 'b']
+    assert list(batch.table().index) == ['a', 'b']
     assert intake.source(made['label']) is None
     assert manager.headers()[made['label']].title == 'From a file'
 
@@ -2595,7 +2597,7 @@ def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
 ) -> None:
     first = BatchManager(client, definitions=definitions)
     label = first.create(STAGED.name, title='Odd').label
-    definitions.save(ROWS.key(label), {'nonsense': 1})
+    definitions.save(TABLE.key(label), {'nonsense': 1})
     pages = restarted(client, definitions)
 
     shown = opened(pages, label).get('/api/state')
@@ -2822,7 +2824,7 @@ def with_rows(pages: Pages, label: str, sample: Measure, client: Client) -> Test
     sample(1, 'water')
     sample(2, 'sds')
     sample(3, 'oil', partner=False)
-    pages.intake.manager.batch(label).put(toys.rows(client))
+    pages.intake.manager.batch(label).set_table(toys.rows(client))
     reduced(http, client)
     return http
 

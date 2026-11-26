@@ -172,7 +172,7 @@ def test_a_step_that_changes_one_thing_the_page_shows_tells_the_page(
         # incomplete, but it is ready as given, and no cell is resolved while
         # the settings are refused.
         sample(2, 'oil')
-        page.batch.put(toys.rows(client))
+        page.batch.set_table(toys.rows(client))
         page.edit(CellEdit(keys=['2'], column='thickness', value=-1.0))
     page.pages.tick()
     client.wait(client.records())
@@ -468,7 +468,7 @@ def test_a_row_a_person_put_without_a_result_is_reduced_by_the_next_step(
     page: Page, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    page.batch.put(toys.rows(client))
+    page.batch.set_table(toys.rows(client))
     page.edit(CellEdit(keys=['1'], column='thickness', value=2.0))
 
     page.pages.tick()

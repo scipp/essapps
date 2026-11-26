@@ -130,8 +130,8 @@ def test_a_setting_of_a_template_at_a_column_is_read_and_kept_out_of_the_templat
     template = Template(toys.STAGED, params=params, blanks=())
 
     settings = checked_settings(batch.client, batch.spec, template)
-    frame = batch.frame()
-    made = Batch(batch.client, batch.spec, label='b', settings=settings, rows=frame)
+    frame = batch.table()
+    made = Batch(batch.client, batch.spec, label='b', settings=settings, table=frame)
 
     assert settings == params
     assert made.settings == params

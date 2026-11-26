@@ -6,7 +6,7 @@
 
 ## Context
 
-*Batch*, *template*, *blank*, *row*, *key*, `put` are the words of [ADR 0012](0012-a-batch-is-a-table.md): a batch is a template and a table, which only `put` changes and which is not computed again from the source at each read.
+*Batch*, *template*, *blank*, *row*, *key*, `set_table` are the words of [ADR 0012](0012-a-batch-is-a-table.md): a batch is a template and a table, which only `set_table` changes and which is not computed again from the source at each read.
 *Source*, *Follow* and *step* are those of [ADR 0011](0011-a-person-makes-the-batches-of-a-workspace.md): a row source, the source for short, is code of the application that makes rows from the files, and a batch that follows is reduced as its files arrive, by a step every few seconds.
 
 ADR 0012 leaves open how a batch is amended from the files, with two conditions: what amends a batch uses the table as a person does, and what it needs to know is its own state next to the batch.
@@ -28,12 +28,12 @@ To do the third, a batch has to know who wrote each cell. To do the first withou
 ```python
 def step(batch, source, seen_keys):
     given = rows_of(batch.client, source)                  # every row the source makes from the files now
-    table = batch.frame()
+    table = batch.table()
     columns = list(batch.source_columns)                   # source.source_columns as at making; each is a column of the table
     is_new = ~given.index.isin(seen_keys) & ~given.index.isin(table.index)
     is_ready = given[columns].notna().all(axis=1)
     new = given[is_new & is_ready].reindex(columns=table.columns)
-    batch.put(pd.concat([table, new]))                     # ADR 0012: the table is changed with `put`
+    batch.set_table(pd.concat([table, new]))               # ADR 0012: the table is changed with `set_table`
     seen_keys |= set(new.index) | (set(given.index) & set(table.index))   # kept, after the table is
     incomplete = given.index[is_new & ~is_ready]           # shown on the page, not kept
     batch.reduce(not_reduced(batch.state()))              # ready, and without a result

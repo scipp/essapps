@@ -43,7 +43,7 @@ manager = BatchManager(client, definitions=FolderDefinitions(folder))
 intake = Intake(manager, sources={'sample-runs': SAMPLE_RUNS})
 label = intake.create('loki-iofq', title='Afternoon', source='sample-runs').label
 manager.headers()              # {label: Header(title, description)}, sorted by label
-manager.batch(label)           # the Batch: frame(), put(), state(), reduce(), cancel(), settings
+manager.batch(label)           # the Batch: table(), set_table(), state(), reduce(), cancel(), settings
 manager.change(label, title='Afternoon, 2 mm cells')
 manager.remove(label)
 ```

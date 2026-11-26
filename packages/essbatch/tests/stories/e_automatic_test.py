@@ -35,7 +35,7 @@ def iofq_batch(client: Client) -> Batch:
         client,
         toys.IOFQ,
         label='iofq',
-        rows=rows_of(client, PER_RUN),
+        table=rows_of(client, PER_RUN),
         persist=True,
         settings={'normalization': None},
     )
@@ -73,7 +73,7 @@ def test_e1_series_grows_reduction_follows(
         client,
         toys.STITCH,
         label='reflectivity',
-        rows=rows_of(client, source),
+        table=rows_of(client, source),
         persist=True,
         settings={'reference': reference},
     )
@@ -94,7 +94,7 @@ def test_e1_series_grows_reduction_follows(
     states = batch.state()
     user = connect()  # any client of the proposal
     newest = user.latest('reflectivity', member='si@2,3,4')
-    assert list(batch.frame().index) == ['si@2', 'si@2,4', 'si@2,3,4']
+    assert list(batch.table().index) == ['si@2', 'si@2,4', 'si@2,3,4']
     assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
     assert user.output(newest, 'stitched').curve.values.tolist() == [
         1.0,

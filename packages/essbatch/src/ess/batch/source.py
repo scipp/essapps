@@ -6,7 +6,7 @@ files.
 
 A row source is code of the application, registered by name with an
 :class:`~.intake.Intake`. Its :data:`RowFunction` takes the files with
-their metadata and returns a frame, the form that ``Batch.put`` takes::
+their metadata and returns a frame, the form that ``Batch.set_table`` takes::
 
     key     run    name         sample      sample_transmission
     60339   60339  D2O buffer   run:60339   run:60305

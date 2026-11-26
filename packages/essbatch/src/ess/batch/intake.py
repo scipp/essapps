@@ -12,10 +12,10 @@ each batch made from a source::
 
     made = SOURCE.load(definitions, label)                   # source.json
     done = step(batch(label), sources[made.source], made.seen_keys)
-    source.json = replace(made, seen_keys=done.seen_keys)  # after rows.json
+    source.json = replace(made, seen_keys=done.seen_keys)  # after table.json
     # if the step raised: made.seen_keys | the keys of the batch table
 
-A process that stops between ``rows.json`` and ``source.json`` leaves rows
+A process that stops between ``table.json`` and ``source.json`` leaves rows
 whose keys are not seen yet. The next step sees them: it
 sees every key of the source that the batch table has. The order of the
 writes of :meth:`Intake.create` and :meth:`Intake.follow` is in the guide,
@@ -291,7 +291,7 @@ class Intake:
         batch = self.manager.create(
             spec,
             title=title,
-            rows=rows,
+            table=rows,
             source_columns=found.source_columns,
             parameter_columns=parameter_columns,
             description=description,
@@ -356,7 +356,7 @@ class Intake:
             with suppress(
                 DefinitionWriteError
             ):  # the exception of the step is what to say
-                kept = made.seen_keys | set(batch.frame().index)
+                kept = made.seen_keys | set(batch.table().index)
                 self._mark_seen(label, made, kept)
             raise
         self._mark_seen(label, made, done.seen_keys)
@@ -385,7 +385,7 @@ class Intake:
                 f'the source {made.source}: {error_text(error)}'
             ) from error
         return given.assign(incomplete=incomplete)[
-            ~given.index.isin(batch.frame().index)
+            ~given.index.isin(batch.table().index)
         ]
 
     def add_rows(self, label: str, keys: Iterable[str]) -> None:
@@ -404,10 +404,12 @@ class Intake:
         if unknown := [k for k in keys if k not in given.index]:
             raise ValueError(f'the source {made.source} makes no rows {unknown}')
         batch = self.manager.batch(label)
-        table = batch.frame()
+        table = batch.table()
         if held := [k for k in keys if k in table.index]:
             raise ValueError(f'rows {held} are in the batch already')
-        batch.put(pd.concat([table, given.loc[keys].reindex(columns=table.columns)]))
+        batch.set_table(
+            pd.concat([table, given.loc[keys].reindex(columns=table.columns)])
+        )
         self._mark_seen(label, made, made.seen_keys | set(keys))
 
     def _mark_seen(

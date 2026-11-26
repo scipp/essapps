@@ -18,7 +18,7 @@ The page shows the batch table as it is kept, without its source and
 without the files: a cell that names a file that is not found, or that the
 file source cannot read, is a problem of its row. Each action that changes
 rows builds a frame with one change and gives it to
-:meth:`~ess.batch.Batch.put`: an edit of cells, a row added or removed,
+:meth:`~ess.batch.Batch.set_table`: an edit of cells, a row added or removed,
 a table file loaded, which replaces the batch table. A cell is plain
 data (:mod:`..table`): a value that a picker gives is kept as
 :func:`~..table.cell_of` makes it, and shown as the listing names it. A row is
@@ -366,21 +366,21 @@ class Page:
             return None
         return self.state()
 
-    def _frame(self, keys: Iterable[str] = ()) -> pd.DataFrame:
+    def _table(self, keys: Iterable[str] = ()) -> pd.DataFrame:
         """
         The batch table, a copy; a ``Rejected`` unless it has a row of each of
         ``keys``.
         """
-        frame = self.batch.frame()
+        frame = self.batch.table()
         for key in keys:
             if key not in frame.index:
                 raise Rejected(f'There is no row {key}.')
         return frame
 
-    def _put(self, frame: pd.DataFrame) -> None:
-        """Make ``frame`` the batch table; what the batch refuses is a ``Rejected``."""
+    def _set_table(self, table: pd.DataFrame) -> None:
+        """Make ``table`` the batch table; what the batch refuses is a ``Rejected``."""
         try:
-            self.batch.put(frame)
+            self.batch.set_table(table)
         except ValueError as error:
             raise Rejected(f'{request_error_text(error)}.') from None
 
@@ -392,7 +392,7 @@ class Page:
         states, unusable = self._states()
         unsubmitted = self.pages.last_step.unsubmitted(self.label, states)
         failures = self._failures(states)
-        frame = batch.frame()
+        frame = batch.table()
         requested = batch.cells()
         named = row_names(frame, columns)
         notes = [n for n in frame.columns if n not in columns and n != NAME]
@@ -554,13 +554,13 @@ class Page:
     def edit(self, edit: CellEdit) -> str:
         """Set one column of rows, as its field reads the value sent."""
         value = view.read(self._cells, edit)
-        frame = self._frame(edit.keys)
+        frame = self._table(edit.keys)
         # As objects, so that the batch, not pandas, refuses a cell.
         column = frame[edit.column].astype(object)
         column.loc[edit.keys] = (
             None if value is UNSET or value is None else cell_of(value)
         )
-        self._put(frame.assign(**{edit.column: column}))
+        self._set_table(frame.assign(**{edit.column: column}))
         self._forget(edit.keys, edit.column)
         if len(edit.keys) < 2:
             return ''
@@ -578,7 +578,7 @@ class Page:
     @_action
     def remove(self, keys: Sequence[str]) -> str:
         """Remove rows from the table."""
-        self._put(self._frame(keys).drop(index=list(keys)))
+        self._set_table(self._table(keys).drop(index=list(keys)))
         return f'Removed {_rows(len(keys))}.'
 
     @_action
@@ -587,8 +587,8 @@ class Page:
         key = key.strip()
         if not key:
             raise Rejected('Give the new row a key.')
-        frame = self._frame()
-        self._put(frame.reindex(pd.Index([*frame.index, key], name=KEY)))
+        frame = self._table()
+        self._set_table(frame.reindex(pd.Index([*frame.index, key], name=KEY)))
         return f'Added {key}: fill in its cells.'
 
     @_locked
@@ -687,7 +687,7 @@ class Page:
     @_action
     def reduce(self, request: Reduce) -> str:
         """Submit the rows asked for, all or none."""
-        frame = self._frame(request.keys)
+        frame = self._table(request.keys)
         if unapplied := self.draft.unapplied():
             raise Rejected(f'Nothing was reduced: {unapplied.lower()}.')
         try:
@@ -789,7 +789,7 @@ class Page:
         Show the settings that the result of row ``key`` was reduced with
         (:meth:`~ess.batch.Batch.settings_of`).
         """
-        frame = self._frame([key])
+        frame = self._table([key])
         name = row_names(frame, self.batch.parameter_columns)[key]
         try:
             settings = self.batch.settings_of(key)
@@ -858,7 +858,7 @@ class Page:
         parameter that the row took, its own cells and the settings, and
         where its request differs from the row's now.
         """
-        self._frame([key])
+        self._table([key])
         state = self._states([key])[0][key]
         record = state.record
         if record is None or state.spec_changed:
@@ -881,7 +881,7 @@ class Page:
         The figure of the results among the rows ``keys``, or of the first
         results if none is given, and a note of what it shows.
         """
-        frame = self.batch.frame()
+        frame = self.batch.table()
         order = {key: i for i, key in enumerate(frame.index)}
         states, _ = self._states(
             sorted({k for k in keys if k in order}, key=order.__getitem__)
@@ -942,7 +942,7 @@ class Page:
             params = self.batch.spec.params
             frame = read_file(name, content, lambda path: read_table(path, params))
             with reject_on_write_error():  # a fault of the definitions, not of the file
-                self.batch.put(frame)
+                self.batch.set_table(frame)
         except (ValueError, OSError) as error:
             raise Rejected(f'Cannot load {name}: {request_error_text(error)}') from None
         finally:
@@ -989,7 +989,7 @@ class Page:
         ``results.csv``.
         """
         batch = self.batch
-        frame = batch.frame()
+        frame = batch.table()
         known = [k for k in keys if k in frame.index]
         states, _ = self._states(known if keys else None)
         done = [k for k, s in states.items() if s.record_status is Status.COMPLETED]

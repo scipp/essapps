@@ -38,7 +38,7 @@ RUNS = RowSource(_runs, source_columns=('sample',))
 def _found(client: Client) -> Batch:
     """The rows of the runs, whose offset is found under the label ``found``."""
     rows = rows_of(client, RUNS)
-    return Batch(client, toys.FIND, label='found', rows=rows, persist=True)
+    return Batch(client, toys.FIND, label='found', table=rows, persist=True)
 
 
 def _table(client: Client) -> pd.DataFrame:

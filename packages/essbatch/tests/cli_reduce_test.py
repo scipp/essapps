@@ -211,7 +211,7 @@ def test_a_batch_on_the_label_reduced_has_the_settings_and_rows_of_the_files(
 ) -> None:
     with app(reduced_once) as batch:
         assert batch.settings == {'offset': {'value': 0.5}}
-        assert batch.frame()['sample'].to_dict() == {
+        assert batch.table()['sample'].to_dict() == {
             'row-0': 'run:1',
             'row-1': 'run:2',
         }
@@ -248,7 +248,7 @@ def test_a_table_given_to_the_command_takes_the_place_of_an_edit_of_an_app(
     assert main([*command, 'reduce', str(template), str(runs), '-l', 'x']) == 0
 
     with app(reduced_once) as batch:
-        assert batch.frame().loc['row-1', 'sample'] == 'run:2'
+        assert batch.table().loc['row-1', 'sample'] == 'run:2'
 
 
 def test_a_value_of_the_template_at_a_column_is_that_of_each_empty_cell(
@@ -268,7 +268,7 @@ def test_a_value_of_the_template_at_a_column_is_that_of_each_empty_cell(
 
     assert totals == {'row-0': 2.0, 'row-1': 1.0}
     with app(folder) as batch:
-        assert batch.frame()['sample'].isna().tolist() == [False, True]
+        assert batch.table()['sample'].isna().tolist() == [False, True]
         state = batch.state()
         totals = {k: batch.client.output(s.record, 'total') for k, s in state.items()}
     assert totals == {'row-0': 2.0, 'row-1': 3.0}
@@ -282,7 +282,7 @@ def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
         label = later(intake)
         batch = intake.manager.batch(label)
         waits = pd.DataFrame({'sample': [None]}, index=pd.Index(['9'], name=KEY))
-        batch.put(pd.concat([batch.frame(), waits]))
+        batch.set_table(pd.concat([batch.table(), waits]))
     template = folder / 'one.yaml'
     template.write_text(
         'spec: {name: cli-toy, version: 1}\n'

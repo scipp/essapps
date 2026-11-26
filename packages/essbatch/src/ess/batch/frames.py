@@ -62,7 +62,7 @@ def reduce_table(
         cell is empty. A file in it may be named as in a cell
         (:func:`~.table.as_request`), and a record by ``@latest``.
     table:
-        The rows, as :meth:`~.reduction.Batch.put` takes them.
+        The rows, as :meth:`~.reduction.Batch.set_table` takes them.
     label:
         The label of the records. A batch is found again by it, so each batch
         has its own.
@@ -87,7 +87,7 @@ def reduce_table(
         spec,
         label=label,
         settings=checked_settings(client, spec, template),
-        rows=table,
+        table=table,
         staged=staged,
         persist=persist,
     )
@@ -172,7 +172,7 @@ def with_results(
     client = batch.client
     kept = batch.definitions
     published = {} if kept is None else definition.published(kept, batch.label)
-    frame = batch.frame()
+    frame = batch.table()
     if keys is not None:
         frame = frame.loc[list(keys)]
     keys = list(frame.index)

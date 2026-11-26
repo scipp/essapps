@@ -274,10 +274,10 @@ def rows(client: Client) -> pd.DataFrame:
 
 def edit(batch: Batch, key: str, **cells: Any) -> None:
     """Set cells of the row of ``key``, ``pd.NA`` to empty one; a new key adds a row."""
-    frame = batch.frame()
+    frame = batch.table()
     for column, cell in cells.items():
         frame.loc[key, column] = cell
-    batch.put(frame)
+    batch.set_table(frame)
 
 
 def from_pairs(intake: Intake, spec: str, **options: Any) -> str:

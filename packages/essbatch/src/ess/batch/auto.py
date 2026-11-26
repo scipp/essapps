@@ -107,12 +107,12 @@ def step(batch: Batch, source: RowSource, seen_keys: Collection[str]) -> Step:
         If the source raises ``ValueError``, or the batch refuses the rows it
         made; nothing is added.
     """
-    table = batch.frame()
+    table = batch.table()
     try:
         given = rows_of(batch.client, source)
         new, incomplete = added(table, given, batch.source_columns, seen_keys)
         if len(new):
-            batch.put(pd.concat([table, new]))
+            batch.set_table(pd.concat([table, new]))
     except ValueError as error:
         raise SourceError(error_text(error)) from error
     now = frozenset(seen_keys) | set(new.index) | (set(given.index) & set(table.index))

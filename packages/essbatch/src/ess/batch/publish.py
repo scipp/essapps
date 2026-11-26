@@ -93,7 +93,7 @@ class Publisher:
         else ``ValueError``.
         """
         batch = self.writing.manager.batch(label)
-        if unknown := sorted(set(keys) - set(batch.frame().index)):
+        if unknown := sorted(set(keys) - set(batch.table().index)):
             raise ValueError(f'the batch has no row {", ".join(unknown)}')
         states, _ = batch.shown(list(keys))
         may = set(publishable(states))

@@ -39,7 +39,7 @@ def test_a_table_with_results_has_what_came_of_each_row(
 ) -> None:
     sample(1, 'water')
     sample(2, 'sds')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
     client.wait(batch.reduce(['1']))
 
     table = with_results(batch, batch.state())
@@ -54,7 +54,7 @@ def test_reduce_batch_reduces_the_rows_of_keys_and_returns_them_in_order(
 ) -> None:
     for run in (1, 2, 3):
         sample(run, f's{run}')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
 
     table = reduce_batch(batch, ['3', '1'])
 

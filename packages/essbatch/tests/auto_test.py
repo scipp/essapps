@@ -85,7 +85,7 @@ def loop(batch: Batch) -> Stepping:
 
 def _loop(client: Any, make: RowFunction = pair) -> Stepping:
     """A loop on ``client``, which may be a fake that wraps a client."""
-    batch = Batch(client, PLAIN, label='scan', rows=rows(client))
+    batch = Batch(client, PLAIN, label='scan', table=rows(client))
     return Stepping(batch, replace(PAIRS, rows=make))
 
 
@@ -168,7 +168,7 @@ def test_a_row_waits_until_it_is_complete_and_is_not_in_the_table(
 
     assert loop.step() == {}
     assert loop.incomplete == ('1',)
-    assert list(loop.batch.frame().index) == []
+    assert list(loop.batch.table().index) == []
 
 
 def _per_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
@@ -193,7 +193,7 @@ def _repeated(client: Client) -> Stepping:
         client,
         REPEATED,
         label='repeated',
-        rows=table,
+        table=table,
         source_columns=source.source_columns,
     )
     return Stepping(batch, source)
@@ -259,11 +259,11 @@ def test_each_new_row_is_reduced_once(
 def test_a_step_adds_no_row_that_is_seen(client: Client, sample: Measure) -> None:
     sample(1, 'water')
     sample(2, 'sds')
-    batch = Batch(client, PLAIN, label='scan', rows=rows(client).drop('1'))
+    batch = Batch(client, PLAIN, label='scan', table=rows(client).drop('1'))
     loop = Stepping(batch, PAIRS, seen_keys={'1'})
 
     assert list(loop.step()) == ['2']
-    assert list(batch.frame().index) == ['2']
+    assert list(batch.table().index) == ['2']
 
 
 @pytest.mark.parametrize(
@@ -305,7 +305,7 @@ def test_a_new_loop_of_any_submitter_reduces_only_the_rows_without_a_result(
     client.wait(loop.step())
     sample(2, 'sds')
 
-    batch = Batch(other, STAGED, label='scan', rows=loop.batch.frame())
+    batch = Batch(other, STAGED, label='scan', table=loop.batch.table())
     restarted = Stepping(batch, PAIRS)
 
     assert list(restarted.step()) == ['2']
@@ -334,7 +334,7 @@ def test_a_restart_on_the_same_folder_reduces_nothing_again(
 
     def loop(client: Client) -> Stepping:
         table = rows_of(client, source)
-        batch = Batch(client, PLAIN, label='auto', rows=table, persist=True)
+        batch = Batch(client, PLAIN, label='auto', table=table, persist=True)
         return Stepping(batch, source)
 
     with open_folder(folder, folder_bindings) as first:
@@ -356,7 +356,7 @@ def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
     with_offset = _changed(
         pair, **{k: {'offset': cell_of(r)} for k, r in offsets.items()}
     )
-    batch = Batch(client, PLAIN, label='scan', rows=rows(client).assign(offset=None))
+    batch = Batch(client, PLAIN, label='scan', table=rows(client).assign(offset=None))
     loop = Stepping(batch, replace(PAIRS, rows=with_offset))
     for run, name in [(2, 'sds'), (3, 'dmso'), (4, 'd2o')]:
         sample(run, name)
@@ -395,7 +395,7 @@ def test_a_refusal_that_names_no_row_refuses_every_row_of_the_step(
     bind = [function_binding(PLAIN, staged_binding.function)]
     with closing(Workspace(proposal='p1', files=files, bind=bind)) as storeless:
         submits = Submits(Client(storeless, submitter='anna'))
-        batch = Batch(submits, PLAIN, label='scan', rows=rows(submits), persist=True)  # type: ignore[arg-type]
+        batch = Batch(submits, PLAIN, label='scan', table=rows(submits), persist=True)  # type: ignore[arg-type]
         loop = Stepping(batch, PAIRS)
         sample(1, 'water')
         sample(2, 'sds')
@@ -448,7 +448,7 @@ def test_a_row_whose_key_changes_is_added_and_reduced_under_its_new_key(
     files.correct(FileRef(file='uuid:run-1001'), sample='oil')
 
     assert list(loop.step()) == ['oil']
-    assert list(loop.batch.frame().index) == ['water', 'oil']
+    assert list(loop.batch.table().index) == ['water', 'oil']
 
 
 def test_refused_settings_refuse_every_ready_row_without_a_result_until_they_change(
@@ -490,7 +490,7 @@ def test_a_changed_setting_reduces_no_row_again_and_its_rows_read_settings_chang
 def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
     client: Client, sample: Measure
 ) -> None:
-    find = Batch(client, FIND, label='find', rows=rows_of(client, SAMPLES))
+    find = Batch(client, FIND, label='find', table=rows_of(client, SAMPLES))
 
     def with_offset(files: Sequence[FileInfo]) -> pd.DataFrame:
         found = {k: s.record for k, s in find.state().items() if s.record}
@@ -500,7 +500,7 @@ def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(
     source = RowSource(with_offset, source_columns=(*PAIRS.source_columns, 'offset'))
     table = rows_of(client, source)
     reduce = Batch(
-        client, PLAIN, label='reduce', rows=table, source_columns=source.source_columns
+        client, PLAIN, label='reduce', table=table, source_columns=source.source_columns
     )
     loops = [Stepping(find, SAMPLES), Stepping(reduce, source)]
     sample(1, 'water')
@@ -582,7 +582,7 @@ def test_a_batch_made_from_a_source_sees_every_row_it_gave(
     following.step()
 
     client.wait(client.records(label='a'))
-    assert list(following.manager.batch('a').frame().index) == ['3', '4']
+    assert list(following.manager.batch('a').table().index) == ['3', '4']
     assert {r.member for r in client.records(label='a')} == {'3', '4'}
     assert seen_keys(definitions) == {'1', '2', '3', '4'}
 
@@ -603,18 +603,18 @@ def test_a_row_of_a_sample_measured_before_its_transmission_waits_then_is_added(
     assert isinstance(waits, Step)
     assert isinstance(adds, Step)
     assert (waits.incomplete, adds.incomplete) == (('5',), ())
-    assert list(following.manager.batch('a').frame().index) == ['3', '4', '5']
+    assert list(following.manager.batch('a').table().index) == ['3', '4', '5']
     assert '5' in {r.member for r in client.records(label='a')}
     assert seen_keys(definitions) == {'1', '2', '3', '4', '5'}
 
 
 def test_a_row_that_a_person_removes_stays_away(following: Intake) -> None:
     batch = following.manager.batch('a')
-    batch.put(batch.frame().drop('4'))
+    batch.set_table(batch.table().drop('4'))
 
     following.step()
 
-    assert list(batch.frame().index) == ['3']
+    assert list(batch.table().index) == ['3']
 
 
 def test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_removed(
@@ -624,29 +624,29 @@ def test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_r
     edit(batch, '5', sample='uuid:run-1', transmission='uuid:run-1')
     sample(5, 'oil')
     following.step()  # the table has 5: the step adds no row, and sees it
-    batch.put(batch.frame().drop('5'))
+    batch.set_table(batch.table().drop('5'))
 
     following.step()
 
-    assert list(batch.frame().index) == ['3', '4']
+    assert list(batch.table().index) == ['3', '4']
 
 
 def test_a_row_of_a_step_cut_off_before_seen_stays_away_once_removed(
     following: Intake, refusing: Refusing, client: Client, sample: Measure
 ) -> None:
     sample(5, 'oil')
-    refusing.part = 'source'  # as a process that stops after rows.json
+    refusing.part = 'source'  # as a process that stops after table.json
     with pytest.raises(DefinitionWriteError):
         following.step()
     refusing.part = None
     client.wait(client.records(label='a'))
     following.step()  # the table has 5: the step sees it
     batch = following.manager.batch('a')
-    batch.put(batch.frame().drop('5'))
+    batch.set_table(batch.table().drop('5'))
 
     following.step()
 
-    assert list(batch.frame().index) == ['3', '4']
+    assert list(batch.table().index) == ['3', '4']
 
 
 def test_an_error_of_a_step_is_said_also_if_seen_keys_is_refused_after_it(
@@ -694,11 +694,11 @@ def test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed(
     with pytest.raises(ConnectionError):
         intake.step()
     batch = intake.manager.batch('a')
-    batch.put(batch.frame().drop('1'))
+    batch.set_table(batch.table().drop('1'))
 
     intake.step()
 
-    assert batch.frame().empty
+    assert batch.table().empty
     assert seen_keys(definitions) == {'1'}
 
 
@@ -735,7 +735,7 @@ def test_a_step_after_a_restart_adds_the_rows_that_arrived_meanwhile(
     again.step()
 
     assert again.following == 'a'
-    assert list(again.manager.batch('a').frame().index) == ['3', '4', '6']
+    assert list(again.manager.batch('a').table().index) == ['3', '4', '6']
 
 
 def test_a_transmission_measured_again_changes_no_row(
@@ -747,6 +747,6 @@ def test_a_transmission_measured_again_changes_no_row(
     following.step()
 
     assert (
-        following.manager.batch('a').frame().loc['3', 'transmission'] == 'uuid:run-1003'
+        following.manager.batch('a').table().loc['3', 'transmission'] == 'uuid:run-1003'
     )
     assert following.rows_of('pairs').loc['3', 'transmission'] == 'uuid:run-2003'

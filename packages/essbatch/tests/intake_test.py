@@ -62,7 +62,7 @@ def test_a_batch_made_from_a_source_takes_and_sees_its_complete_rows(
 ) -> None:
     kept = SOURCE.load(definitions, 'a')
 
-    assert list(made.manager.batch('a').frame().index) == ['3', '4', 'mine']
+    assert list(made.manager.batch('a').table().index) == ['3', '4', 'mine']
     assert made.source('a') == 'pairs'
     assert kept.seen_keys == {'1', '2', '3', '4'}  # not 5, which is incomplete
 
@@ -100,7 +100,7 @@ def test_choose_may_give_columns_that_the_source_does_not(
         choose=lambda given: given.assign(thickness=2.0),
     )
 
-    assert batch.frame()['thickness'].tolist() == [2.0]
+    assert batch.table()['thickness'].tolist() == [2.0]
 
 
 def test_columns_given_are_empty_and_a_column_of_the_table_keeps_its_cells(
@@ -115,7 +115,7 @@ def test_columns_given_are_empty_and_a_column_of_the_table_keeps_its_cells(
         parameter_columns=['sample', 'thickness'],
     )
 
-    frame = batch.frame()
+    frame = batch.table()
     assert frame['sample'].tolist() == ['uuid:run-1']
     assert frame['thickness'].isna().tolist() == [True]
 
@@ -147,7 +147,7 @@ def test_a_range_takes_the_complete_rows_between_its_ends_and_sees_all(
 ) -> None:
     batch = four.create(PLAIN.name, title='A', source='pairs', choose=chosen)
 
-    assert list(batch.frame().index) == taken
+    assert list(batch.table().index) == taken
     seen_keys = SOURCE.load(definitions, batch.label).seen_keys
     assert seen_keys == {'1', '2', '4'}  # not 3, which is incomplete
 
@@ -185,7 +185,7 @@ def test_a_batch_of_the_rows_that_arrive_later_that_follows_gets_only_those(
 
     four.step()
 
-    assert list(batch.frame().index) == ['3', '5']
+    assert list(batch.table().index) == ['3', '5']
 
 
 def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_complete(
@@ -198,7 +198,7 @@ def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_complete(
 
     intake.step()
 
-    assert list(batch.frame().index) == ['1', '2']
+    assert list(batch.table().index) == ['1', '2']
 
 
 def test_a_batch_made_without_a_source_has_none(intake: Intake) -> None:
@@ -257,7 +257,7 @@ def test_the_available_rows_are_those_of_the_source_that_the_table_lacks(
     made: Intake,
 ) -> None:
     batch = made.manager.batch('a')
-    batch.put(batch.frame().drop('4'))
+    batch.set_table(batch.table().drop('4'))
 
     available = made.available_rows('a')
 
@@ -291,24 +291,24 @@ def test_rows_added_are_put_as_the_source_makes_them_and_seen(
     sample(2, 'oil', partner=False)
 
     intake.add_rows('a', ['2'])
-    taken = batch.frame().loc['2']
-    batch.put(batch.frame().drop('2'))
+    taken = batch.table().loc['2']
+    batch.set_table(batch.table().drop('2'))
     fake.measure(1002, 1.0, role='transmission', sample='oil')
     intake.step()
 
     assert taken['sample'] == 'uuid:run-2'
     assert pd.isna(taken['transmission'])
-    assert list(batch.frame().index) == ['1']
+    assert list(batch.table().index) == ['1']
     assert SOURCE.load(definitions, 'a').seen_keys == {'1', '2'}
 
 
 def test_a_row_that_a_person_removed_is_added_again(made: Intake) -> None:
     batch = made.manager.batch('a')
-    batch.put(batch.frame().drop('4'))
+    batch.set_table(batch.table().drop('4'))
 
     made.add_rows('a', ['4'])
 
-    assert list(batch.frame().index) == ['3', 'mine', '4']
+    assert list(batch.table().index) == ['3', 'mine', '4']
 
 
 @pytest.mark.parametrize('added_by', ['step', 'add_rows'])
@@ -330,7 +330,7 @@ def test_a_row_added_after_make_column_takes_the_setting(
         intake.add_rows('a', ['2'])
         client.wait(batch.reduce(['2']))
 
-    assert pd.isna(batch.frame().loc['2', 'thickness'])
+    assert pd.isna(batch.table().loc['2', 'thickness'])
     assert batch.state()['2'].record.request.params['thickness'] == 2.0
     assert batch.state()['1'].status == 'done'
 
@@ -380,8 +380,8 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     sources = dict(SOURCES)
     intake = Intake(BatchManager(client, definitions=definitions), sources=sources)
     batch = intake.create('plain', title='A', source='pairs', label='a', follow=True)
-    typed = batch.frame().rename(index={'1': 'typed'})
-    batch.put(pd.concat([batch.frame(), typed]))
+    typed = batch.table().rename(index={'1': 'typed'})
+    batch.set_table(pd.concat([batch.table(), typed]))
     del sources['pairs']
 
     with pytest.raises(ValueError, match=_not_registered('pairs', 'none')):
@@ -401,12 +401,12 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
 def test_rows_that_cannot_be_added_are_refused_and_nothing_changes(
     made: Intake, keys: list[str], said: str
 ) -> None:
-    before = made.manager.batch('a').frame()
+    before = made.manager.batch('a').table()
 
     with pytest.raises(ValueError, match=said):
         made.add_rows('a', keys)
 
-    pd.testing.assert_frame_equal(made.manager.batch('a').frame(), before)
+    pd.testing.assert_frame_equal(made.manager.batch('a').table(), before)
 
 
 def test_a_batch_made_without_a_source_offers_and_takes_no_rows_and_cannot_follow(
@@ -598,7 +598,7 @@ def test_a_stopped_batch_gets_no_rows_at_a_step(
 
     intake.step()
 
-    assert list(batch.frame().index) == ['1']
+    assert list(batch.table().index) == ['1']
     assert intake.available_rows('a')['incomplete'].to_dict() == {'2': False}
 
 
@@ -617,7 +617,7 @@ def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_complete_since
     intake.step()
 
     assert intake.following == 'a'
-    assert list(batch.frame().index) == ['2', '3']  # 1 was left out at making
+    assert list(batch.table().index) == ['2', '3']  # 1 was left out at making
 
 
 def test_a_batch_that_follows_again_adds_the_rows_that_another_took_meanwhile(
@@ -630,8 +630,8 @@ def test_a_batch_that_follows_again_adds_the_rows_that_another_took_meanwhile(
     two.follow('a')
     two.step()
 
-    assert list(two.manager.batch('a').frame().index) == ['1']
-    assert list(two.manager.batch('b').frame().index) == ['1']
+    assert list(two.manager.batch('a').table().index) == ['1']
+    assert list(two.manager.batch('b').table().index) == ['1']
 
 
 def test_a_batch_told_to_follow_ends_follow_on_the_one_before_then_writes_its_own(

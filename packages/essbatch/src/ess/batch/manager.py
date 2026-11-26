@@ -12,19 +12,21 @@ that holds its template and its batch table; the manager makes the one ``Batch``
 each batch. A batch is kept as these entries of the definitions
 (:mod:`.definition`), each with one writer::
 
-    header      title, description                      BatchManager
-    settings    the template, with the source columns as blanks  the Batch
-    rows        the batch table                         the Batch
-    source      the source, the keys seen, and    Intake; only for a
-                whether the batch follows               batch made from a source
-    form        the format its results are written as,  Writing; only for a
-                and what a person says of them          batch whose form is set
-    publish     the records published to the catalogue  Publisher; only for a
-                                                        batch published from
+    header          title, description              BatchManager
+    settings        the template, with the source   the Batch
+                    columns as blanks
+    table           the batch table                 the Batch
+    source          the source, the keys seen, and  Intake; only for a batch
+                    whether the batch follows       made from a source
+    output_options  the format its results are      Writing; only for a batch
+                    written as, and what a person   whose output options are
+                    says of them                    set
+    publish         the records published to the    Publisher; only for a
+                    catalogue                       batch published from
 
 so a manager made again, after a restart, makes the same ``Batch`` of a label
 from them, the specs that the workspace binds, and the specs that run staged.
-Making a batch makes its ``Batch``, which writes the settings and the rows;
+Making a batch makes its ``Batch``, which writes the settings and the table;
 then the manager writes the header: a label without a header is not a batch.
 Removing a batch deletes the header first, then every other entry of the
 label, whoever wrote it. So a ``create`` or a ``remove`` cut off at any
@@ -49,8 +51,8 @@ from ess.spec import WorkflowSpec
 from .definition import (
     HEADER,
     LABEL_ENTRIES,
-    ROWS,
     SETTINGS,
+    TABLE,
     DefinitionStore,
     DefinitionWriteError,
     Header,
@@ -147,7 +149,7 @@ class BatchManager:
         spec: str,
         *,
         title: str,
-        rows: pd.DataFrame | None = None,
+        table: pd.DataFrame | None = None,
         source_columns: Collection[str] = (),
         parameter_columns: Collection[str] = (),
         description: str = '',
@@ -172,19 +174,19 @@ class BatchManager:
             binds, the highest if several.
         title:
             What the batch is called.
-        rows:
-            The first batch table, as :meth:`~.reduction.Batch.put` takes it;
-            its parameter columns are the blanks of the template. One without
-            rows or columns if not given.
+        table:
+            The first batch table, as :meth:`~.reduction.Batch.set_table`
+            takes it; its parameter columns are the blanks of the template. One
+            without rows or columns if not given.
         source_columns:
             The parameters that a row source fills
             (:attr:`.reduction.Batch.source_columns`), kept as the blanks of the
-            settings: each is a column of ``rows``, an empty cell there means
+            settings: each is a column of ``table``, an empty cell there means
             that the row waits for its file, and the settings given are left
             out there (:meth:`.reduction.Batch.settable`).
         parameter_columns:
             Parameters that are parameter columns of the batch, of empty
-            cells, besides those of ``rows``; a column of ``rows`` keeps its
+            cells, besides those of ``table``; a column of ``table`` keeps its
             cells.
         description:
             What a person says of the batch.
@@ -202,8 +204,8 @@ class BatchManager:
             If ``title`` is empty or only spaces; if ``label`` is not letters,
             digits, ``_``, ``.`` and ``-``, starting with none of the last
             two, or has definitions or records; if the workspace binds no
-            spec ``spec``; or if the rows are refused, as ``put`` refuses
-            them, also for a batch table without a column of ``source_columns``.
+            spec ``spec``; or if the table is refused, as ``set_table``
+            refuses it, also for a batch table without a column of ``source_columns``.
         """
         self.check(spec, title=title, label=label)
         if label is None:
@@ -216,7 +218,7 @@ class BatchManager:
         bound = self.spec_named(spec)
         if settings is None:
             settings = self._settings.get(spec, {})
-        table = pd.DataFrame() if rows is None else rows
+        table = pd.DataFrame() if table is None else table
         empty = [c for c in parameter_columns if c not in table.columns]
         # Refused here, before anything is written.
         table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
@@ -224,7 +226,7 @@ class BatchManager:
         # what to delete if a write is refused
         written = [entry.key(label) for entry in LABEL_ENTRIES[1:]]
         try:
-            batch.put(table)
+            batch.set_table(table)
             batch.settings = batch.settable(settings)
             HEADER.save(self.definitions, label, header)
             written.insert(0, HEADER.key(label))
@@ -295,10 +297,10 @@ class BatchManager:
         if template is None:
             raise ValueError(f'{label}: no settings are kept')
         spec = self.spec_named(template.spec.name)
-        rows = self.definitions.load(
-            ROWS.key(label), lambda data: typed(ROWS.read(data), spec.params)
+        table = self.definitions.load(
+            TABLE.key(label), lambda data: typed(TABLE.read(data), spec.params)
         )
-        batch = self._new_batch(label, spec, template.params, rows, template.blanks)
+        batch = self._new_batch(label, spec, template.params, table, template.blanks)
         self._batches[label] = batch
         return batch
 
@@ -307,7 +309,7 @@ class BatchManager:
         label: str,
         spec: WorkflowSpec[Any, Any],
         settings: Mapping[str, Any],
-        rows: pd.DataFrame | None,
+        table: pd.DataFrame | None,
         source_columns: Collection[str],
     ) -> Batch:
         """The ``Batch`` of ``label``, which writes to the definitions."""
@@ -316,7 +318,7 @@ class BatchManager:
             spec,
             label=label,
             settings=settings,
-            rows=rows,
+            table=table,
             staged=spec.name in self._staged,
             persist=True,
             definitions=self.definitions,

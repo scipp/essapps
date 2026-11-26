@@ -24,7 +24,7 @@ This holds while the proposal's history is kept. A step keeps it, since its call
 
 The `Batch` keeps two caches.
 The first is what it read of the records: the newest record of each member under the label, read from the proposal's changes.
-The second is how it resolved each cell, until the next `put`.
+The second is how it resolved each cell, until the next `set_table`.
 The records and the file source rebuild both.
 
 ## Problems and refusals
@@ -75,7 +75,7 @@ A step compares only the rows without a result, so the lines "all reduced" overs
 | by identity | 0.05 s | 0.07 s |
 | each row's sample by run | 0.06 s | 1.7 s |
 
-`put` of the whole batch table costs tens of milliseconds at 3000 rows (ADR 0012); it was not measured at the sizes below.
+`set_table` of the whole batch table costs tens of milliseconds at 3000 rows (ADR 0012); it was not measured at the sizes below.
 
 | Rows (2 files each) | 10 000 | 30 000 | 100 000 |
 |---|---|---|---|

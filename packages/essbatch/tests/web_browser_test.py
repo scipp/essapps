@@ -26,7 +26,7 @@ import pandas as pd
 import pytest
 import uvicorn
 from ess.batch import Batch, BatchManager, CorrectedFiles, Header, Intake
-from ess.batch.definition import ROWS
+from ess.batch.definition import TABLE
 from ess.batch.web import Pages, Shown, create_app
 from ess.batch.web.api import STATIC
 from ess.batch.writing import Writing
@@ -108,7 +108,7 @@ def url(
     """
     for run, name in enumerate(['water', 'sds', 'oil'], start=1):
         sample(run, name)
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
     with serve(create_app(pages)) as root:
         try:
             yield f'{root}batches/{label}/'
@@ -194,18 +194,18 @@ def test_a_click_on_a_cell_edits_it(page: Any, batch: Batch) -> None:
     editor(page).press('Enter')
 
     cell(page, 'sds', 'thickness').filter(has_text='2.5').wait_for()
-    assert batch.frame().at['2', 'thickness'] == 2.5
+    assert batch.table().at['2', 'thickness'] == 2.5
 
 
 def test_an_editor_left_unchanged_writes_nothing_and_the_table_updates_after(
     page: Any, batch: Batch
 ) -> None:
-    before = batch.frame()
+    before = batch.table()
     cell(page, 'water', 'transmission').click()
     page.click('#title')
     cell(page, 'water', 'thickness').click()
     editor(page).press('Escape')
-    unchanged = batch.frame()
+    unchanged = batch.table()
 
     toys.edit(batch, '3', thickness=7.0)
 
@@ -225,7 +225,7 @@ def test_an_edit_in_a_row_checked_with_others_writes_each(
     editor(page).press('Enter')
 
     page.wait_for_selector('#toast:has-text("set on 2 rows")')
-    thickness = batch.frame()['thickness']
+    thickness = batch.table()['thickness']
     assert (list(thickness[['1', '3']]), pd.isna(thickness['2'])) == ([4.0, 4.0], True)
 
 
@@ -256,7 +256,7 @@ def test_a_row_is_added_by_typing_its_name(page: Any, batch: Batch) -> None:
     page.keyboard.press('Enter')
 
     page.wait_for_selector('#rows .tabulator-row:has-text("blank")')
-    assert 'blank' in batch.frame().index
+    assert 'blank' in batch.table().index
 
 
 def test_typing_in_a_run_cell_replaces_what_it_shows(page: Any, batch: Batch) -> None:
@@ -265,7 +265,7 @@ def test_typing_in_a_run_cell_replaces_what_it_shows(page: Any, batch: Batch) ->
     page.keyboard.press('Enter')
 
     cell(page, 'water', 'transmission').filter(has_text='run 1002').wait_for()
-    table = batch.frame()
+    table = batch.table()
     assert table.at['1', 'transmission'] == table.at['2', 'transmission']
 
 
@@ -287,7 +287,7 @@ def test_an_empty_run_cell_left_writes_nothing_and_tab_goes_on(
         'cells.thickness.value'
     )
     editor(page).press('Escape')
-    assert batch.frame().loc['blank'].isna().all()
+    assert batch.table().loc['blank'].isna().all()
 
 
 def test_the_zoom_stays_when_the_selection_changes(page: Any, client: Client) -> None:
@@ -315,7 +315,7 @@ def test_an_edit_the_server_does_not_get_is_taken_back_and_said(
 
     page.wait_for_selector('#message:has-text("The server does not answer")')
     assert cell(page, 'sds', 'thickness').inner_text() == '1.0'
-    assert pd.isna(batch.frame().at['2', 'thickness'])
+    assert pd.isna(batch.table().at['2', 'thickness'])
     assert page.errors == ['Failed to load resource: net::ERR_FAILED']
     page.errors.clear()
 
@@ -428,7 +428,7 @@ def test_the_page_loads_its_rows_under_a_path_prefix(
     browser: Any, pages: Pages, batch: Batch, sample: Measure, client: Client
 ) -> None:
     sample(1, 'water')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
     parent = FastAPI()
     parent.mount('/batch', create_app(pages))
     with serve(parent) as url:
@@ -665,7 +665,7 @@ def holder(page: Any, batch: Batch, sample: Measure, client: Client) -> Any:
     """The holder of the rows of the page, with more rows than it shows."""
     for run in range(4, 60):
         sample(run, f'r{run}')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
     page.wait_for_selector('#n-rows:text-is("59")')
     return page.locator('#rows .tabulator-tableholder')
 
@@ -678,7 +678,7 @@ def test_the_scroll_position_stays_when_a_row_arrives(
     height = holder.evaluate('h => h.scrollHeight')
 
     sample(60, 'r60')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
 
     page.wait_for_function(
         f'h => h.scrollHeight > {height}', arg=holder.element_handle()
@@ -938,7 +938,7 @@ def test_a_button_of_the_row_tab_keeps_the_focus_when_the_row_changes(
 def test_the_batches_view_counts_the_rows_every_two_seconds_while_shown(
     page: Any, batch: Batch, client: Client
 ) -> None:
-    batch.put(batch.frame().drop(index=['3']))
+    batch.set_table(batch.table().drop(index=['3']))
     page.click('[data-view=batches]')
     page.wait_for_selector('#batches .pill.st-ready:text-is("2 ready")')
 
@@ -1102,7 +1102,7 @@ def batches_of(page: Any, run: str) -> Any:
 def test_the_runs_view_names_the_batches_of_each_run_and_sorts_those_in_none_first(
     second: str, page: Any, batch: Batch
 ) -> None:
-    batch.put(batch.frame().drop(index=['3']))  # runs 3 and 1003 in no batch
+    batch.set_table(batch.table().drop(index=['3']))  # runs 3 and 1003 in no batch
     page.click('[data-view=runs]')
 
     page.wait_for_selector(f'#runs {BATCHES}:has-text("Other, Scan")')
@@ -1173,7 +1173,7 @@ def test_a_correction_typed_in_the_runs_view_stays_while_the_batches_change(
     page.locator(f'{roles}:has-text("sample")').first.click()
     page.keyboard.type('backgr')
 
-    batch.put(batch.frame().drop(index=['3']))
+    batch.set_table(batch.table().drop(index=['3']))
     for _ in range(2):
         with page.expect_response('**/api/batches/counts'):
             pass
@@ -1302,8 +1302,8 @@ def test_an_answer_for_the_batch_before_is_dropped(
 
     assert page.locator('#rows .tabulator-row').count() == 1
     assert 'Other' in page.inner_text('#title')
-    assert batch.frame().at['1', 'thickness'] == 2.5
-    assert list(manager.batch(second).frame()['thickness']) == [5.0]
+    assert batch.table().at['1', 'thickness'] == 2.5
+    assert list(manager.batch(second).table()['thickness']) == [5.0]
 
 
 def test_a_value_typed_goes_to_its_batch_after_an_action_on_its_way(
@@ -1607,7 +1607,7 @@ def test_a_batch_of_the_rows_that_arrive_later_is_made_without_rows_and_follows(
     page.wait_for_selector('#stop-follow:not([hidden])')
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Later')
     assert intake.following == label
-    assert manager.batch(label).frame().empty
+    assert manager.batch(label).table().empty
     said = 'No rows yet. Follow adds the rows of the runs that arrive.'
     page.wait_for_selector(f'#rows .empty:text-is("{said}")')
 
@@ -1682,7 +1682,7 @@ def test_a_batch_is_made_of_the_range_of_rows_chosen_of_the_source(
 
     page.wait_for_selector('#title:has-text("Later")')
     (label,) = (k for k, h in manager.headers().items() if h.title == 'Later')
-    assert list(manager.batch(label).frame().index) == ['2', '3']
+    assert list(manager.batch(label).table().index) == ['2', '3']
 
 
 def test_rows_picked_in_the_dialog_are_added_from_the_runs(
@@ -1699,7 +1699,7 @@ def test_rows_picked_in_the_dialog_are_added_from_the_runs(
     page.click('#add-rows [value=add]')
 
     page.wait_for_selector('#rows .tabulator-row:has-text("ethanol")')
-    assert list(batch.frame().index) == ['1', '2', '3', '4']
+    assert list(batch.table().index) == ['1', '2', '3', '4']
 
 
 def test_a_column_made_a_setting_and_a_column_again_keeps_its_cell_editors(
@@ -1727,8 +1727,8 @@ def test_a_column_made_a_setting_and_a_column_again_keeps_its_cell_editors(
     editor(page).fill('3')
     editor(page).press('Enter')
     cell(page, 'water', 'thickness').filter(has_text='3').wait_for()
-    assert batch.frame()['thickness'].isna().tolist() == [False, True, True]
-    assert (batch.frame().loc['1', 'thickness'], batch.settings['thickness']) == (
+    assert batch.table()['thickness'].isna().tolist() == [False, True, True]
+    assert (batch.table().loc['1', 'thickness'], batch.settings['thickness']) == (
         3.0,
         2.5,
     )
@@ -1800,9 +1800,9 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
 ) -> None:
     sample(1, 'water')
     first = BatchManager(client, definitions=refusing)
-    first.create(STAGED.name, title='Good', rows=toys.rows(client), label='good')
+    first.create(STAGED.name, title='Good', table=toys.rows(client), label='good')
     first.create(STAGED.name, title='Broken', label='broken')
-    refusing.save(ROWS.key('broken'), {'nonsense': 1})
+    refusing.save(TABLE.key('broken'), {'nonsense': 1})
     manager = BatchManager(client, definitions=refusing)
     pages = Pages(Intake(manager, sources=SOURCES), files=files, marks=Marks)
     with serve(create_app(pages)) as url:

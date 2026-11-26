@@ -113,7 +113,7 @@ The stories use these calls:
 
 ```python
 source = RowSource(rows_of_files, source_columns=(...))   # rows_of_files: the files -> a DataFrame of rows
-batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
+batch = Batch(client, SPEC, label=..., table=rows_of(client, source), persist=True)
 done = step(batch, source, seen_keys)   # reads batch.settings at each step
 done.records      # the step added the new rows of the source, and reduced the ready rows without a result; their records by key
 done.submit_errors # why rows of the step were refused by submit, by key
@@ -651,7 +651,7 @@ def per_run(files):                                            # every raw file
 PER_RUN = RowSource(per_run, source_columns=('sample',))
 
 def iofq_batch(client):
-    return Batch(client, IOFQ, label='iofq', rows=rows_of(client, PER_RUN),
+    return Batch(client, IOFQ, label='iofq', table=rows_of(client, PER_RUN),
                  persist=True, settings={'normalization': None})
 ```
 
@@ -675,7 +675,7 @@ def angles(files):                                             # a row per sampl
                          'runs': [[f.ref.file for f in found] for found in runs.values()]}, index=keys)
 
 source = RowSource(angles, source_columns=('runs',))
-batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
+batch = Batch(client, STITCH, label='reflectivity', table=rows_of(client, source),
               persist=True, settings={'reference': reference})
 counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}
 seen_keys, reduced = frozenset(), {}
@@ -690,14 +690,14 @@ for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:   # 4 
 states = batch.state()
 user = connect()                                               # any client of the proposal
 newest = user.latest('reflectivity', member='si@2,3,4')
-assert list(batch.frame().index) == ['si@2', 'si@2,4', 'si@2,3,4']
+assert list(batch.table().index) == ['si@2', 'si@2,4', 'si@2,3,4']
 assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
 assert user.output(newest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 assert {k: s.record for k, s in states.items()} == reduced     # the earlier rows keep their results
 assert len(user.records(label='reflectivity')) == 3            # none is reduced again
 ```
 
-A person compares the curve with and without the last angle, or removes the earlier rows: `batch.put(frame.groupby('sample').tail(1))`, which is no part of Follow.
+A person compares the curve with and without the last angle, or removes the earlier rows: `batch.set_table(frame.groupby('sample').tail(1))`, which is no part of Follow.
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether the automatic reduction pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 

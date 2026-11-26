@@ -75,7 +75,7 @@ def batch_of(tmp_path: Path) -> Callable[[list[Binding]], Batch]:
     def make(bindings: list[Binding]) -> Batch:
         client: Client = open_folder(tmp_path, bindings)
         rows = pd.DataFrame({'bins': [5]}, index=['5'])
-        return Batch(client, bindings[0].spec, label='c', rows=rows)
+        return Batch(client, bindings[0].spec, label='c', table=rows)
 
     with open_folder(tmp_path, WRITTEN) as client:
         client.submit(CENTRE, params={'bins': 5}, label='c', member='5', persist=True)

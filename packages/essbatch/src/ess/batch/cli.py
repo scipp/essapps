@@ -546,7 +546,7 @@ def _reduce(given: _Context) -> pd.DataFrame:
     once the template is right.
 
     For a label with a batch, the template becomes its settings and the table
-    file replaces its batch table (:meth:`.reduction.Batch.put`); ``--source``
+    file replaces its batch table (:meth:`.reduction.Batch.set_table`); ``--source``
     is refused.
 
     A template must be of the batch's spec and its version, as the page's
@@ -574,7 +574,7 @@ def _reduce(given: _Context) -> pd.DataFrame:
     if args.table is not None:
         rows = read_table(args.table, spec.params)
     elif batch is not None:
-        rows = batch.frame()
+        rows = batch.table()
     elif args.source is None:
         rows = pd.DataFrame(index=pd.Index([label], name=KEY))
     else:
@@ -588,7 +588,7 @@ def _reduce(given: _Context) -> pd.DataFrame:
             raise ValueError(f'{args.template}: {error}') from None
     made = batch is None
     if batch is not None:
-        batch.put(rows)
+        batch.set_table(rows)
         if settings is not None:
             batch.settings = batch.settable(settings)
     elif args.source is not None:
@@ -603,7 +603,7 @@ def _reduce(given: _Context) -> pd.DataFrame:
         )
     else:
         batch = manager.create(
-            spec.name, title=label, rows=rows, settings=settings, label=label
+            spec.name, title=label, table=rows, settings=settings, label=label
         )
     try:
         return frames.reduce_batch(

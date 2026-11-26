@@ -5,13 +5,13 @@ Where the definition of batches is kept: what a person makes of them, so that a
 batch made again, after a restart or in another process, has it.
 
 The definition is these entries, each with one writer. The settings and the
-rows of a batch are written by its ``Batch``, which the manager makes:
+batch table are written by its ``Batch``, which the manager makes:
 
     corrections     metadata of a file set by hand, by file    CorrectedFiles
     header          title, description                         BatchManager
     settings        the template: spec, settings, source       Batch.settings
                     columns
-    rows            the batch table                            Batch.put
+    table           the batch table                            Batch.set_table
     source          the row source a batch was made from, the  Intake
                     keys of it that the batch has seen,
                     and whether the batch follows
@@ -30,7 +30,7 @@ under a key::
     ('corrections',)
     ('labels', label, 'header')
     ('labels', label, 'settings')
-    ('labels', label, 'rows')
+    ('labels', label, 'table')
     ('labels', label, 'source')
     ('labels', label, 'output_options')
     ('labels', label, 'publish')
@@ -47,7 +47,7 @@ The plain data of each entry, as its :class:`Entry` below writes and reads it
     corrections     {'pid:20.500.12269/abc': {'role': 'sample'}}
     header          {'title': 'Sample runs', 'description': ''}
     settings        {'spec': ..., 'params': {...}, 'blanks': ['sample']}
-    rows            {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
+    table           {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
     source          {'source': 'sample-runs', 'seen_keys': ['60337', '60338'],
                      'follows': True}
     output_options  {'format': 'scipp-hdf5', 'outputs': ['iofq'],
@@ -91,7 +91,7 @@ from pydantic_core import from_json, to_json
 from ess.apps.records import Template
 from ess.spec import FileRef
 
-from .table import data_of, frame_of
+from .table import data_of, table_of
 
 type Key = tuple[str, ...]
 """Names an entry: ``('corrections',)``, or ``('labels', label, part)``."""
@@ -155,7 +155,7 @@ class FolderDefinitions:
         definitions/corrections.json
         definitions/labels/auto%2Fiofq/header.json
         definitions/labels/auto%2Fiofq/settings.json
-        definitions/labels/auto%2Fiofq/rows.json
+        definitions/labels/auto%2Fiofq/table.json
         definitions/labels/auto%2Fiofq/source.json
 
     Each name of a key is a folder or a file, with ``/``, ``%`` and ``.``
@@ -457,13 +457,13 @@ def _source_data(made: FromSource) -> dict[str, Any]:
 
 HEADER = _adapted('header', Header)
 SETTINGS = Entry('settings', template_data, template_of)
-ROWS = Entry('rows', data_of, frame_of)
+TABLE = Entry('table', data_of, table_of)
 """Read as the rows are kept; :meth:`.manager.BatchManager.batch` types them."""
 SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(FromSource)))
 OUTPUT_OPTIONS = _adapted('output_options', OutputOptions)
 PUBLISH = _adapted('publish', Publishing)
 
-LABEL_ENTRIES = (HEADER, SOURCE, ROWS, SETTINGS, OUTPUT_OPTIONS, PUBLISH)
+LABEL_ENTRIES = (HEADER, SOURCE, TABLE, SETTINGS, OUTPUT_OPTIONS, PUBLISH)
 """Every entry of a label: the header first, then the others."""
 
 

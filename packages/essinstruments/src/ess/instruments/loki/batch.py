@@ -17,7 +17,7 @@ read yet, have a row per raw run, with no role (:func:`per_run`).
 a :class:`~ess.batch.BatchManager`, the batches of I(Q). A batch without
 a manager keeps nothing::
 
-    Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS), staged=True)
+    Batch(client, IOFQ, label='iofq', table=rows_of(client, SAMPLE_RUNS), staged=True)
 
 The command takes the sources as ``essbatch -s
 ess.instruments.loki.batch:SOURCES``, and a source by its name, such as

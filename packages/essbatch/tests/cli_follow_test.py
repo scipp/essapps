@@ -84,7 +84,7 @@ def test_a_step_that_raises_is_said_while_it_changes_and_the_steps_go_on(
 
     assert capsys.readouterr().err.count(f'Follow could not step: {said}') == 2
     assert {line['error'] for line in lines} == {None, said}
-    assert list(intake.manager.batch(label).frame().index) == ['1', '2']
+    assert list(intake.manager.batch(label).table().index) == ['1', '2']
 
 
 def test_a_stop_asked_ends_the_steps_once_the_reductions_that_run_end(
@@ -108,7 +108,7 @@ def test_a_stop_asked_ends_the_steps_once_the_reductions_that_run_end(
 
     record = following.state()['1'].record
     assert following.client.status([record]) == [Status.COMPLETED]
-    assert list(following.frame().index) == ['1']
+    assert list(following.table().index) == ['1']
     assert lines[0]['reducing'] == ['1']
     assert lines[-1]['ended'] == {'1': 'done'}
 

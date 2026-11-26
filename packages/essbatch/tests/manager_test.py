@@ -22,8 +22,8 @@ from ess.batch import (
 )
 from ess.batch.definition import (
     HEADER,
-    ROWS,
     SETTINGS,
+    TABLE,
     Key,
 )
 
@@ -54,7 +54,11 @@ def test_a_batch_made_is_listed_with_its_header(
     manager: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
     batch = manager.create(
-        'plain', title='Morning', rows=rows(client), description='2 mm cells', label='b'
+        'plain',
+        title='Morning',
+        table=rows(client),
+        description='2 mm cells',
+        label='b',
     )
 
     header = Header('Morning', '2 mm cells')
@@ -70,7 +74,7 @@ def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
     sample: Measure,
 ) -> None:
     sample(1, 'water')
-    batch = manager.create('staged', title='Morning', rows=rows(client), label='b')
+    batch = manager.create('staged', title='Morning', table=rows(client), label='b')
     batch.settings = {'binning': {'bins': 3}, 'thickness': 3.0}  # thickness: a column
     edit(batch, '1', thickness=2.0)
     edit(batch, 'mine', sample='run:1')
@@ -81,14 +85,14 @@ def test_a_manager_made_again_on_the_definitions_hands_out_the_batch_as_it_was(
     assert again.parameter_columns == COLUMNS
     assert again.settings == batch.settings
     assert again.cells() == batch.cells()
-    pd.testing.assert_frame_equal(again.frame(), batch.frame())
+    pd.testing.assert_frame_equal(again.table(), batch.table())
 
 
 def test_the_columns_of_a_batch_are_the_parameter_columns_of_its_rows(
     manager: BatchManager, client: Client
 ) -> None:
     given = rows(client)[['thickness', 'transmission', 'name', 'sample']]
-    chosen = manager.create('plain', title='Evening', rows=given)
+    chosen = manager.create('plain', title='Evening', table=given)
     empty = manager.create('plain', title='Morning')
 
     assert chosen.parameter_columns == ('thickness', 'transmission', 'sample')
@@ -110,7 +114,7 @@ def test_rows_that_a_batch_refuses_are_refused_and_nothing_is_kept(
     manager: BatchManager, definitions: FolderDefinitions, table: Any, said: str
 ) -> None:
     with pytest.raises(ValueError, match=said):
-        manager.create('plain', title='Morning', rows=table)
+        manager.create('plain', title='Morning', table=table)
     assert manager.headers() == {}
     assert definitions.labels() == []
 
@@ -142,7 +146,7 @@ def test_a_batch_starts_with_the_settings_registered_for_its_spec(
     with_defaults: BatchManager, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    batch = with_defaults.create('plain', title='Morning', rows=rows(client))
+    batch = with_defaults.create('plain', title='Morning', table=rows(client))
 
     assert batch.settings == {'thickness': 2.0, 'binning': {'bins': 3}}
     assert batch.cells()['1']['thickness'] == 2.0  # the column's empty cell
@@ -153,7 +157,7 @@ def test_settings_given_to_create_replace_those_registered(
 ) -> None:
     settings = {'thickness': 3.0, 'offset': {'value': 1.0}}
     batch = with_defaults.create(
-        'plain', title='Morning', rows=rows(client), settings=settings
+        'plain', title='Morning', table=rows(client), settings=settings
     )
 
     assert batch.settings == settings
@@ -168,7 +172,7 @@ def test_a_batch_has_no_setting_at_a_column_of_its_fills(
     batch = with_defaults.create(
         'plain',
         title='Morning',
-        rows=rows(client),
+        table=rows(client),
         source_columns=source_columns,
         settings=settings,
     )
@@ -187,7 +191,7 @@ def test_the_fills_of_a_batch_are_kept_as_the_blanks_of_its_settings(
     manager.create(
         'plain',
         title='Morning',
-        rows=rows(client),
+        table=rows(client),
         source_columns=source_columns,
         label='b',
     )
@@ -207,14 +211,14 @@ def test_a_table_without_a_column_of_its_fills_is_refused_and_nothing_is_kept(
     table = rows(client).drop(columns='transmission')
 
     with pytest.raises(ValueError, match='fills transmission: a row waits'):
-        manager.create('plain', title='M', rows=table, source_columns=['transmission'])
+        manager.create('plain', title='M', table=table, source_columns=['transmission'])
     assert definitions.labels() == []
 
 
 def test_settings_registered_later_leave_the_settings_of_a_batch_made_before(
     with_defaults: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
-    batch = with_defaults.create('plain', title='Morning', rows=rows(client))
+    batch = with_defaults.create('plain', title='Morning', table=rows(client))
     later = {'plain': {'binning': {'bins': 7}}}
 
     again = BatchManager(client, definitions=definitions, settings=later)
@@ -248,7 +252,7 @@ def _with_definitions(client: Client, definitions: FolderDefinitions) -> None:
 
 
 def _with_records(client: Client, definitions: FolderDefinitions) -> None:
-    batch = Batch(client, PLAIN, label='b', rows=rows(client))
+    batch = Batch(client, PLAIN, label='b', table=rows(client))
     client.wait(batch.reduce(['1']))
 
 
@@ -380,7 +384,7 @@ def test_a_staged_batch_removed_releases_its_stage(
         staged=STAGED_NAMES,
     )
     sample(1, 'water')
-    batch = manager.create('staged', title='Morning', rows=rows(client))
+    batch = manager.create('staged', title='Morning', table=rows(client))
     client.wait(batch.reduce(['1']))
 
     manager.remove(batch.label)
@@ -394,7 +398,7 @@ def test_a_batch_whose_header_is_refused_is_not_made(
     refusing.part = 'header'
 
     with pytest.raises(DefinitionWriteError):
-        manager.create('plain', title='Morning', rows=rows(client), label='b')
+        manager.create('plain', title='Morning', table=rows(client), label='b')
     assert manager.headers() == {}
     assert refusing.labels() == []
     refusing.part = None
@@ -405,9 +409,9 @@ def test_the_header_of_a_batch_is_written_after_its_tables(
     manager: BatchManager, client: Client, refusing: Refusing, sample: Measure
 ) -> None:
     sample(1, 'water')
-    manager.create('plain', title='Morning', rows=rows(client), label='b')
+    manager.create('plain', title='Morning', table=rows(client), label='b')
 
-    assert refusing.saved == [ROWS.key('b'), SETTINGS.key('b'), HEADER.key('b')]
+    assert refusing.saved == [TABLE.key('b'), SETTINGS.key('b'), HEADER.key('b')]
 
 
 def test_a_setting_keeps_its_value_if_the_table_that_makes_it_a_column_is_refused(
@@ -419,11 +423,11 @@ def test_a_setting_keeps_its_value_if_the_table_that_makes_it_a_column_is_refuse
 ) -> None:
     sample(1, 'water')
     table = rows(client).drop(columns='thickness')
-    batch = manager.create('plain', title='M', rows=table, settings={'thickness': 2.0})
-    refusing.part = 'rows'
+    batch = manager.create('plain', title='M', table=table, settings={'thickness': 2.0})
+    refusing.part = 'table'
 
     with pytest.raises(DefinitionWriteError):
-        batch.put(batch.frame().assign(thickness=3.0))
+        batch.set_table(batch.table().assign(thickness=3.0))
 
     assert _again(client, definitions).batch(batch.label).settings == {'thickness': 2.0}
 
@@ -435,7 +439,7 @@ def test_rows_reduced_are_not_outdated_in_a_manager_made_again(
     sample: Measure,
 ) -> None:
     sample(1, 'water')
-    batch = manager.create('plain', title='Morning', rows=rows(client))
+    batch = manager.create('plain', title='Morning', table=rows(client))
     batch.settings = {'binning': {'bins': 3}}
     edit(batch, '1', thickness=1 / 3)
     client.wait(list(batch.reduce(['1']).values()))
@@ -475,12 +479,12 @@ def test_a_batch_made_without_rows_takes_the_rows_put(
     manager: BatchManager, client: Client, definitions: FolderDefinitions
 ) -> None:
     batch = manager.create('plain', title='Morning')
-    assert batch.frame().empty
+    assert batch.table().empty
 
-    batch.put(pd.DataFrame({'sample': ['run:2']}, index=['mine']))
+    batch.set_table(pd.DataFrame({'sample': ['run:2']}, index=['mine']))
 
     again = _again(client, definitions).batch(batch.label)
-    assert list(again.frame().index) == ['mine']
+    assert list(again.table().index) == ['mine']
 
 
 @pytest.mark.parametrize(

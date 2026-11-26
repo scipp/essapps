@@ -379,7 +379,7 @@ class Pages:
                 new.spec,
                 title=new.title,
                 description=new.description,
-                rows=rows,
+                table=rows,
                 parameter_columns=new.parameter_columns,
                 settings=settings,
             )

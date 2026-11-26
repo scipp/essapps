@@ -92,7 +92,7 @@ def test_add_puts_available_rows_into_the_batch_and_reduces_nothing(
         {'key': '1', 'status': 'ready'}
     ]
     with intake_on(folder) as intake:
-        assert list(intake.manager.batch(label).frame().index) == ['2', '3', '1']
+        assert list(intake.manager.batch(label).table().index) == ['2', '3', '1']
         assert intake.manager.client.records(label=label) == []
 
 
