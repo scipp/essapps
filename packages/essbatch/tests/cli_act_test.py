@@ -108,6 +108,41 @@ def test_remove_removes_the_batch_and_says_that_its_records_stay(
     assert main([*command, 'remove', '-l', 'x']) == 2
 
 
+def test_clear_clears_the_results_of_a_batch_and_reduce_computes_them_again(
+    command: list[str], reduced_once: Path
+) -> None:
+    shown = reduced_once / 'shown.csv'
+
+    assert main([*command, 'clear', '-l', 'x']) == 0
+
+    assert main([*command, 'show', '-l', 'x', '-o', str(shown)]) == 0
+    assert set(read_text(shown)['status']) == {'cleared'}
+    assert main([*command, 'reduce', '-l', 'x', '--remaining', '-o', str(shown)]) == 0
+    assert set(read_text(shown)['status']) == {'done'}
+
+
+def test_clear_all_clears_the_records_of_a_removed_batch(
+    command: list[str], reduced_once: Path
+) -> None:
+    assert main([*command, 'remove', '-l', 'x']) == 0
+
+    assert main([*command, 'clear', '--all']) == 0
+
+    with intake_on(reduced_once) as intake:
+        client = intake.manager.client
+        assert client.cleared(client.records(label='x')) == [True, True]
+
+
+def test_remove_with_clear_clears_the_results_of_the_batch(
+    command: list[str], reduced_once: Path
+) -> None:
+    assert main([*command, 'remove', '-l', 'x', '--clear']) == 0
+
+    with intake_on(reduced_once) as intake:
+        client = intake.manager.client
+        assert client.cleared(client.records(label='x')) == [True, True]
+
+
 def test_stop_ends_follow_and_says_on_which_batch(
     command: list[str], folder: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

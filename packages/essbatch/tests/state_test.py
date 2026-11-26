@@ -100,6 +100,39 @@ def test_what_is_left_to_do_by_status(status: Status, left: bool) -> None:
     assert left_to_reduce(found) == (['a'] if left else [])
 
 
+def test_a_row_whose_result_is_cleared_is_shown_so_and_left_to_do() -> None:
+    found = row_states(
+        {'a': row(sample='x')},
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': Status.COMPLETED},
+        {'a': frozenset({'shared'})},  # a setting changed, which a clear outranks
+        cleared={'1': 'iofq'},
+        overrides=OVERRIDES,
+    )
+
+    assert found['a'].status == 'cleared'
+    assert left_to_reduce(found) == ['a']
+    assert with_changed_settings(found) == []
+
+
+def test_a_cell_reading_a_cleared_record_names_the_batch_to_reduce_again() -> None:
+    ref = OutputRef(record='c', output='centre')
+    found = row_states(
+        {'a': row(sample=ref)},
+        COLUMNS,
+        {},
+        {'c': Status.COMPLETED},
+        cleared={'c': 'centres'},
+        overrides=OVERRIDES,
+    )
+
+    assert ready(found) == []
+    assert [str(e) for e in found['a'].problems] == [
+        'a: sample: its outputs are cleared; reduce the batch centres again'
+    ]
+
+
 def test_a_row_without_a_result_is_left_to_do() -> None:
     assert left_to_reduce(states({'a': row(sample='x')})) == ['a']
 

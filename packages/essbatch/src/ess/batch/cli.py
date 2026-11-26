@@ -115,7 +115,11 @@ A first session, in this order. Each command has its own --help:
     $B follow -l water --steps 3  # add and reduce the rows that arrive: 3 steps,
                                   # or until Ctrl-C without --steps
     $B stop                       # no batch follows
-    $B remove -l water            # remove the batch; its records stay
+    $B clear -l water             # delete the stored results of water, to free
+                                  # disk; reduce -l water --remaining computes them
+                                  # again; --all: of every record of the folder
+    $B remove -l water            # remove the batch; its records stay; --clear:
+                                  # clear its results first
 
 A template is YAML: the spec, and a value for each parameter that the rows
 share. A parameter that each row gives in its own column of the batch table (a
@@ -149,7 +153,8 @@ folder, not in files.csv. The commands see it too, either way.
 The status of a row:
     ready             no result yet; it can be reduced, unless the settings are invalid
     incomplete        it cannot be reduced: a value is missing or invalid, such as an
-                      empty cell, or a record that it reads failed or was cancelled
+                      empty cell, or a record that it reads failed, was cancelled
+                      or was cleared
     running           submitted, not finished
     done              reduced with the cells and settings it has now
     settings changed  reduced, but a setting it uses changed since; --remaining
@@ -158,6 +163,8 @@ The status of a row:
                       another version, or the settings are invalid, so not compared
     failed            the reduction failed; the column failure states why
     cancelled         the reduction was cancelled
+    cleared           reduced, but its results were cleared; --remaining reduces it
+                      again
 
 follow -l water: water follows its row source, with a step every --interval
 seconds (5). A step adds the rows of the source that are complete and that
@@ -493,7 +500,10 @@ def _batches(given: _Context) -> pd.DataFrame:
             row |= {
                 'spec': batch.spec.name,
                 'rows': len(states),
-                'reduced': sum(s.record_status is Status.COMPLETED for s in states),
+                'reduced': sum(
+                    s.record_status is Status.COMPLETED and not s.cleared
+                    for s in states
+                ),
                 'row_source': intake.row_source(label),
             }
         except ValueError as error:
@@ -672,7 +682,7 @@ def _remove(given: _Context) -> int:
     """
     label = given.args.label
     try:
-        given.manager.remove(label)
+        given.manager.remove(label, clear=given.args.clear)
     except KeyError:
         raise ValueError(
             f'{label}: no batch has the label; batches lists them'
@@ -686,6 +696,22 @@ def _remove(given: _Context) -> int:
             if records
             else 'it had no records, so the label is free\n'
         )
+    )
+    return 0
+
+
+def _clear(given: _Context) -> int:
+    """Clear the outputs of a batch, of rows of it, or of every record."""
+    args = given.args
+    if args.all:
+        given.manager.clear()
+        sys.stderr.write('cleared the results of every record of the folder\n')
+        return 0
+    given.batch(args.label).clear(args.keys or None)
+    rows = f'rows {" ".join(args.keys)} of ' if args.keys else ''
+    sys.stderr.write(
+        f'cleared the results of {rows}{args.label}; '
+        f'reduce -l {args.label} --remaining computes them again\n'
     )
     return 0
 
@@ -975,6 +1001,37 @@ def _rows_arguments(command: argparse.ArgumentParser) -> None:
 
 def _show_arguments(command: argparse.ArgumentParser) -> None:
     _label(command, required=True, help='the label of the batch')
+
+
+def _remove_arguments(command: argparse.ArgumentParser) -> None:
+    _label(command, required=True, help='the label of the batch')
+    command.add_argument(
+        '--clear', action='store_true', help='clear the results of its records first'
+    )
+
+
+def _clear_arguments(command: argparse.ArgumentParser) -> None:
+    _label(command, required=False, help='the label of the batch')
+    command.add_argument(
+        'keys',
+        metavar='KEY',
+        nargs='*',
+        help='the key of a row whose results to clear (default: every row)',
+    )
+    command.add_argument(
+        '--all',
+        action='store_true',
+        help='clear the results of every record of the folder, also of removed batches',
+    )
+
+
+def _clear_check(args: argparse.Namespace) -> str | None:
+    """What is wrong with the arguments of clear: -l LABEL or --all, not both."""
+    if args.all == (args.label is not None):
+        return 'give -l LABEL or --all, one of them'
+    if args.all and args.keys:
+        return 'KEY goes with -l LABEL'
+    return None
 
 
 def _reduce_arguments(command: argparse.ArgumentParser) -> None:
@@ -1315,13 +1372,28 @@ _COMMANDS = {
         description='Let no batch follow, and report which one did.',
         output=None,
     ),
+    'clear': _Command(
+        _clear,
+        description='Delete the stored results of the records of the batch of '
+        'LABEL, or of its rows KEY, or with --all of every record of the folder, '
+        'to free disk space. A record stays, with its request and its status: '
+        'show gives the row status cleared, and reduce --remaining reduces it '
+        'again, as a new record. A row of another batch that reads a cleared '
+        'result is incomplete. '
+        'Nothing is cleared while a record is running or a running record reads '
+        'it.',
+        arguments=_clear_arguments,
+        check=_clear_check,
+        output=None,
+    ),
     'remove': _Command(
         _remove,
         description='Remove the batch of LABEL: its batch table, settings, '
         'output options, what it stores of its row source, and the list of what '
         'it published (the datasets stay in the catalogue). Its records stay in '
-        'the folder, under the label, so a new batch takes another label.',
-        arguments=_show_arguments,
+        'the folder, under the label, so a new batch takes another label. With '
+        '--clear, the results of its records are cleared first (see clear).',
+        arguments=_remove_arguments,
         output=None,
     ),
 }

@@ -257,6 +257,13 @@ class BatchManager:
             source_columns=source_columns,
         )
 
+    def clear(self) -> None:
+        """
+        Clear the outputs of every record of the workspace, also of the
+        records of removed batches (:meth:`~ess.apps.Client.clear`).
+        """
+        self.client.clear(self.client.records())
+
     def change(
         self, label: str, *, title: str | None = None, description: str | None = None
     ) -> None:
@@ -270,7 +277,7 @@ class BatchManager:
         self._headers[label] = header
         self._revision += 1
 
-    def remove(self, label: str) -> None:
+    def remove(self, label: str, *, clear: bool = False) -> None:
         """
         Remove the batch of ``label`` and every entry of the label. Its records
         stay, and running ones keep running.
@@ -280,9 +287,15 @@ class BatchManager:
         as an interrupted :meth:`create` or :meth:`remove` leaves it, is
         removed too. Raises ``KeyError`` if the label has neither a batch nor
         an entry.
+
+        With ``clear``, the outputs of the records of the label are cleared
+        first (:meth:`~ess.apps.Client.clear`). If that raises, nothing is
+        removed.
         """
         if label not in self._headers and label not in self.definitions.labels():
             raise KeyError(label)
+        if clear:
+            self.client.clear(self.client.records(label=label))
         header, *parts = LABEL_ENTRIES
         self.definitions.delete(header.key(label))
         self._headers.pop(label, None)

@@ -47,8 +47,8 @@ def export_table(
     client: Client, table: pd.DataFrame, directory: Path, write: RowWriter
 ) -> None:
     """
-    Writes the result of each row whose record completed to ``directory /
-    key``, with ``write``.
+    Writes the result of each row whose record completed, and whose outputs
+    are not cleared, to ``directory / key``, with ``write``.
 
     ``table`` is indexed by key. The record of a row is the one in the column
     ``record``, so a later reduction under the same label does not change what
@@ -72,7 +72,12 @@ def export_table(
     except KeyError as error:
         raise ValueError(f'the workspace has no record {error.args[0]}') from None
     status = dict(zip((r.id for r in records), client.status(records), strict=True))
-    by_id = {r.id: r for r in records if status[r.id] is Status.COMPLETED}
+    cleared = dict(zip((r.id for r in records), client.cleared(records), strict=True))
+    by_id = {
+        r.id: r
+        for r in records
+        if status[r.id] is Status.COMPLETED and not cleared[r.id]
+    }
     directory.mkdir(parents=True, exist_ok=True)
     for key, i in ids.items():
         if i in by_id:

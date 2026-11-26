@@ -34,6 +34,7 @@ type RowStatus = Literal[
     'ready',
     'failed',
     'cancelled',
+    'cleared',
     'done',
     'settings changed',
     'outdated',
@@ -50,6 +51,8 @@ class RowState:
     ----------
     record:
         The result of the row, if any.
+    cleared:
+        Whether the outputs of the result are cleared.
     problems:
         Why the row cannot be reduced now.
     changed:
@@ -71,6 +74,7 @@ class RowState:
     key: str
     record: Record | None = None
     record_status: Status | None = None
+    cleared: bool = False
     problems: tuple[FieldError, ...] = ()
     changed: frozenset[str] | None = frozenset()
     spec_changed: bool = False
@@ -84,7 +88,8 @@ class RowState:
         The status of the row.
 
         A failed or cancelled result shows its status even if the request
-        changed since: the row needs reducing either way. A completed result
+        changed since: the row needs reducing either way, and so does a
+        cleared one. A completed result
         that was not compared, as while the settings are rejected, shows
         ``outdated``: it cannot be told to match them.
         """
@@ -98,6 +103,8 @@ class RowState:
             return 'failed'
         if self.record_status is Status.CANCELLED:
             return 'cancelled'
+        if self.cleared:
+            return 'cleared'
         if self.settings_changed:
             return 'settings changed'
         return 'done' if self.outdated is False else 'outdated'
@@ -108,21 +115,34 @@ def problems(
     cells: Mapping[str, Any],
     parameter_columns: Collection[str],
     status: Mapping[str, Status],
+    cleared: Mapping[str, str | None] = MappingProxyType({}),
 ) -> tuple[FieldError, ...]:
     """
     Why the row ``key`` cannot be reduced: a column of ``parameter_columns``
     missing from ``cells``, or a reference to a record that failed or was
-    cancelled, per ``status`` by record ID.
+    cancelled, per ``status`` by record ID, or whose outputs are cleared, per
+    ``cleared``, the label of each such record by ID.
     """
     found = [
         FieldError(key, (c,), 'empty') for c in parameter_columns if c not in cells
     ]
-    found += [
-        FieldError(key, loc, f'the record it reads is {status[ref.record]}')
-        for loc, ref in iter_refs(cells)
-        if isinstance(ref, OutputRef) and status.get(ref.record) in _RERUN
-    ]
+    for loc, ref in iter_refs(cells):
+        if not isinstance(ref, OutputRef):
+            continue
+        if (record_status := status.get(ref.record)) in _RERUN:
+            found.append(
+                FieldError(key, loc, f'the record it reads is {record_status}')
+            )
+        elif ref.record in cleared:
+            found.append(FieldError(key, loc, _cleared(cleared[ref.record])))
     return tuple(found)
+
+
+def _cleared(label: str | None) -> str:
+    """The problem of a reference to a record whose outputs are cleared."""
+    if label is None:
+        return 'its outputs are cleared'
+    return f'its outputs are cleared; reduce the batch {label} again'
 
 
 def results(records: Iterable[Record]) -> dict[str, Record]:
@@ -163,6 +183,7 @@ def row_states(
     changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
+    cleared: Mapping[str, str | None] = MappingProxyType({}),
     *,
     overrides: Mapping[str, AbstractSet[str]],
 ) -> dict[str, RowState]:
@@ -172,7 +193,8 @@ def row_states(
     Parameters
     ----------
     cells:
-        The values of the parameter columns of each row, by key.
+        The values of the parameter columns of each row, by key, with the
+        settings outside the columns.
     found:
         The result of each row that has one, by key.
     status:
@@ -184,6 +206,9 @@ def row_states(
         The problems of the cells that the workspace rejected, by key.
     spec_changed:
         The keys of :attr:`RowState.spec_changed`.
+    cleared:
+        The label of each cleared record, by ID: of the results and of the
+        records that the cells reference.
     overrides:
         :attr:`RowState.overrides` of each row, by key.
     """
@@ -196,19 +221,22 @@ def row_states(
             outdated: bool | None = True
         else:
             outdated = None if names is None else bool(names)
-        found_problems = problems(key, row, parameter_columns, status)
+        found_problems = problems(key, row, parameter_columns, status, cleared)
         found_problems += refused.get(key, ())
         row_status = None if record is None else status[record.id]
+        row_cleared = record is not None and record.id in cleared
         states[key] = RowState(
             key=key,
             record=record,
             record_status=row_status,
+            cleared=row_cleared,
             problems=found_problems,
             changed=names,
             spec_changed=key in spec_changed,
             outdated=outdated,
             settings_changed=not found_problems
             and row_status is Status.COMPLETED
+            and not row_cleared
             and bool(names)
             and names.isdisjoint(overrides[key])
             and key not in spec_changed,
@@ -235,8 +263,8 @@ def with_changed_settings(states: Mapping[str, RowState]) -> list[str]:
 
 def left_to_reduce(states: Mapping[str, RowState]) -> list[str]:
     """
-    The ready rows without a result, or whose result failed, was cancelled or
-    is outdated, except those of :func:`with_changed_settings`.
+    The ready rows without a result, or whose result failed, was cancelled, is
+    cleared or is outdated, except those of :func:`with_changed_settings`.
 
     A row not compared counts as not outdated.
     """
@@ -247,6 +275,7 @@ def left_to_reduce(states: Mapping[str, RowState]) -> list[str]:
         and (
             states[k].record_status is None
             or states[k].record_status in _RERUN
+            or states[k].cleared
             or states[k].outdated
         )
     ]

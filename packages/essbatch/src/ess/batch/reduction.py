@@ -136,6 +136,11 @@ class LabelRecords:
         statuses = self.client.status(records)
         return {r.id: s for r, s in zip(records, statuses, strict=True)}
 
+    def cleared(self, records: list[Record]) -> dict[str, str | None]:
+        """The label of each of ``records`` whose outputs are cleared, by ID."""
+        cleared = self.client.cleared(records)
+        return {r.id: r.label for r, c in zip(records, cleared, strict=True) if c}
+
 
 class Batch:
     """
@@ -566,21 +571,27 @@ class Batch:
         changed: Mapping[str, frozenset[str]] | None,
         refused: Mapping[str, tuple[FieldError, ...]],
     ) -> dict[str, RowState]:
-        upstream = self._records.known(sorted(state.references(cells.values())))
+        settings = {
+            n: v for n, v in self._settings.items() if n not in self.parameter_columns
+        }
+        checked = {key: {**settings, **row} for key, row in cells.items()}
+        upstream = self._records.known(sorted(state.references(checked.values())))
         status = self._records.status([*found.values(), *upstream])
+        cleared = self._records.cleared([*found.values(), *upstream])
         given = self._table.loc[list(cells), list(self.parameter_columns)].notna()
         overrides = {
             key: frozenset(c for c, filled in row.items() if filled)
             for key, row in given.to_dict('index').items()
         }
         return state.row_states(
-            cells,
+            checked,
             self.parameter_columns,
             found,
             status,
             changed,
             refused,
             self._spec_changed(found),
+            cleared,
             overrides=overrides,
         )
 
@@ -726,6 +737,30 @@ class Batch:
             for e in errors
         ]
         return list(dict.fromkeys(placed))
+
+    def clear(self, keys: Sequence[str] | None = None) -> None:
+        """
+        Clear the outputs of every record of the members ``keys``, or of every
+        member, under the label (:meth:`~ess.apps.Client.clear`).
+
+        Raises ``ValueError``, and clears nothing, if the result of one of these
+        members is running, naming its row, or as the client raises.
+        """
+        records = [
+            r
+            for r in self.client.records(label=self.label)
+            if keys is None or r.member in keys
+        ]
+        self._records.poll()
+        found = self._records.found
+        results = [r for k, r in found.items() if keys is None or k in keys]
+        status = self._records.status(results)
+        if running := [r.member for r in results if status[r.id] is Status.PENDING]:
+            names = row_names(self._table, self.parameter_columns)
+            raise ValueError(
+                f'{", ".join(names.get(k, k) for k in running)}: still running'
+            )
+        self.client.clear(records)
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """

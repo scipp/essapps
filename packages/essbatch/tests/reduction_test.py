@@ -1180,6 +1180,73 @@ def test_a_cell_reading_a_cancelled_record_stops_only_its_row(
     assert [e.msg for e in states['2'].problems] == ['the record it reads is cancelled']
 
 
+# Clearing outputs
+
+
+def test_a_cleared_row_shows_so_and_a_reduction_gives_it_a_new_record(
+    measured: Batch, client: Client
+) -> None:
+    first = measured.reduce(['1', '2'])
+    client.wait(first)
+
+    measured.clear(['1'])
+    states = measured.state()
+
+    assert {k: s.status for k, s in states.items()} == {'1': 'cleared', '2': 'done'}
+    assert left_to_reduce(states) == ['1']
+    again = measured.reduce(['1'])
+    client.wait(again)
+    assert again['1'].id != first['1'].id
+    assert measured.state()['1'].status == 'done'
+    assert client.cleared([first['1'], again['1']]) == [True, False]
+
+
+def test_a_cell_reading_a_cleared_record_names_the_batch_to_reduce_again(
+    chain: tuple[Batch, Batch], client: Client
+) -> None:
+    find, reduce = chain
+    found = find.reduce(['1'])
+    client.wait(found)
+    edit(reduce, '1', offset=cell_of(found['1'].ref('offset')))
+
+    find.clear()
+
+    assert [str(e) for e in reduce.state()['1'].problems] == [
+        '1: offset: its outputs are cleared; reduce the batch find again'
+    ]
+
+
+def test_a_setting_reading_a_cleared_record_is_a_problem_of_every_row(
+    chain: tuple[Batch, Batch], measured: Batch, client: Client
+) -> None:
+    find, _ = chain
+    found = find.reduce(['1'])
+    client.wait(found)
+    measured.settings = {**SETTINGS, 'offset': found['1'].ref('offset')}
+
+    find.clear()
+
+    assert {k: [str(e) for e in s.problems] for k, s in measured.state().items()} == {
+        k: [f'{k}: offset: its outputs are cleared; reduce the batch find again']
+        for k in ('1', '2')
+    }
+
+
+def test_a_batch_with_a_running_row_clears_nothing_and_names_the_row(
+    measured: Batch, client: Client, gate: Gate
+) -> None:
+    done = measured.reduce(['2'])
+    client.wait(done)
+    gate.close()
+    running = measured.reduce(['1'])
+
+    with pytest.raises(ValueError, match=r'^water: still running$'):
+        measured.clear()
+    gate.open()
+    client.wait(running)
+    assert client.cleared(done['2']) is False
+
+
 def test_an_unknown_record_in_a_cell_touches_only_its_row(
     chain: tuple[Batch, Batch], client: Client
 ) -> None:

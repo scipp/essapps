@@ -37,6 +37,7 @@ from .toys import (
     SOURCES,
     STAGED,
     STAGED_NAMES,
+    Gate,
     Measure,
     Refusing,
     edit,
@@ -357,6 +358,52 @@ def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
     assert [r.member for r in client.records(label=label)] == ['1']
     with pytest.raises(KeyError):
         manager.batch(label)
+
+
+def test_clearing_the_workspace_takes_the_records_of_a_removed_batch(
+    intake: Intake, client: Client, sample: Measure
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    label = from_pairs(intake, 'plain', title='Morning')
+    records = manager.batch(label).reduce(['1'])
+    client.wait(records)
+    manager.remove(label)
+
+    manager.clear()
+
+    assert client.cleared(records['1']) is True
+
+
+def test_a_batch_removed_with_clear_has_the_outputs_of_its_records_cleared(
+    intake: Intake, client: Client, sample: Measure
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    label = from_pairs(intake, 'plain', title='Morning')
+    records = manager.batch(label).reduce(['1'])
+    client.wait(records)
+
+    manager.remove(label, clear=True)
+
+    assert manager.headers() == {}
+    assert client.cleared(client.records(label=label)) == [True]
+
+
+def test_a_batch_whose_clear_is_refused_is_not_removed(
+    intake: Intake, client: Client, sample: Measure, gate: Gate
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    label = from_pairs(intake, 'plain', title='Morning')
+    gate.close()
+    records = manager.batch(label).reduce(['1'])
+
+    with pytest.raises(ValueError, match='is pending'):
+        manager.remove(label, clear=True)
+    gate.open()
+    client.wait(records)
+    assert list(manager.headers()) == [label]
 
 
 class Releases:
