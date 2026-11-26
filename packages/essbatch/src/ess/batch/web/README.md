@@ -88,7 +88,7 @@ A step is `Intake.step`:
 
 ```python
 done = intake.step()   # a Step, None if no batch follows
-done.refused           # why a row could not be submitted, by key
+done.submit_errors     # why a row could not be submitted, by key
 done.waiting           # the keys of the rows of the source not filled yet
 ```
 

@@ -119,7 +119,7 @@ def test_e2_automatic_reduction_goes_quiet(
 
     done = step(batch, PER_RUN, ())
     assert done.records == {}
-    assert done.refused == {'1': 'unknown spec sans-iofq/v1'}
+    assert done.submit_errors == {'1': 'unknown spec sans-iofq/v1'}
 
 
 @pytest.mark.xfail(reason=NO_PUBLISH)

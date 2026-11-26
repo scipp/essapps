@@ -66,7 +66,7 @@ class LastStep:
         if self._intake.following != label:
             return None
         step = self._step(label)
-        shown = None if step is None else (len(step.waiting), step.refused)
+        shown = None if step is None else (len(step.waiting), step.submit_errors)
         return self.failure, shown
 
     def shown(self, label: str) -> Following:
@@ -93,9 +93,9 @@ class LastStep:
         if (step := self._step(label)) is None:
             return {}
         return {
-            key: f'Follow could not reduce it: {forms.message(step.refused[key])}'
+            key: f'Follow could not reduce it: {forms.message(step.submit_errors[key])}'
             for key in not_reduced(states)
-            if key in step.refused
+            if key in step.submit_errors
         }
 
     def clear_submit_errors(self, label: str) -> None:
@@ -104,4 +104,4 @@ class LastStep:
         whose page applied settings: its next step tries them with these.
         """
         if (step := self._step(label)) is not None:
-            self._last = (label, replace(step, refused={}))
+            self._last = (label, replace(step, submit_errors={}))

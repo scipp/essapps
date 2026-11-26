@@ -38,9 +38,9 @@ from .models import (
     Format,
     Output,
     OutputShown,
-    Refused,
     SourceRow,
     SourceRows,
+    SubmitProblem,
 )
 
 if TYPE_CHECKING:
@@ -158,13 +158,13 @@ def settings_problem(
 
 def refusal(
     error: FieldError, named: Mapping[str, str], titles: Mapping[str, str]
-) -> Refused:
+) -> SubmitProblem:
     """``error`` of a reduction refused, with its row named as ``named`` names it."""
     text = _said_at(error, titles)
     if error.request_key is not None:
         text = f'{named.get(error.request_key, error.request_key)}: {text}'
-    return Refused(
-        entry=error.request_key, loc=list(error.loc), message=error.msg, text=text
+    return SubmitProblem(
+        request_key=error.request_key, loc=list(error.loc), message=error.msg, text=text
     )
 
 

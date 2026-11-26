@@ -358,7 +358,7 @@ def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
     assert response.status_code == 422
     assert response.json() == {'message': 'Nothing was reduced: one value is refused.'}
     shown = state(http)
-    (refused,) = shown['refused']
+    (refused,) = shown['submit_errors']
     assert refused['text'] == 'water: Offset: unknown record or accumulator nope'
     problem = shown['rows'][0]['cells']['offset']['problem']
     assert problem == 'Offset: unknown record or accumulator nope'
@@ -371,7 +371,7 @@ def test_a_refused_value_stays_marked_until_it_is_edited(http: TestClient) -> No
     thickness(http, ['2'], 3)
     assert rows(http)['1']['cells']['thickness']['problem']
     thickness(http, ['1'], 3)
-    assert state(http)['refused'] == []
+    assert state(http)['submit_errors'] == []
 
 
 def refuse_thickness_of_water(http: TestClient) -> None:
@@ -382,12 +382,12 @@ def refuse_thickness_of_water(http: TestClient) -> None:
 
 def test_a_refusal_goes_when_a_reduction_succeeds(http: TestClient) -> None:
     refuse_thickness_of_water(http)
-    assert state(http)['refused'] != []
+    assert state(http)['submit_errors'] != []
 
     reduce = http.post('/api/reduce', json={'which': 'selected', 'keys': ['2']})
 
     assert reduce.status_code == 200
-    assert reduce.json()['refused'] == []
+    assert reduce.json()['submit_errors'] == []
 
 
 def test_a_refusal_stays_when_another_cell_of_its_row_is_edited(
@@ -401,7 +401,7 @@ def test_a_refusal_stays_when_another_cell_of_its_row_is_edited(
         '/api/cells', json={'keys': ['1'], 'column': 'transmission', 'value': label}
     )
 
-    assert [r['entry'] for r in state(http)['refused']] == ['1']
+    assert [r['request_key'] for r in state(http)['submit_errors']] == ['1']
 
 
 def test_a_refusal_of_a_cell_stays_when_other_settings_are_applied(
@@ -411,7 +411,7 @@ def test_a_refusal_of_a_cell_stays_when_other_settings_are_applied(
 
     applied = bins(http, 3)
 
-    assert [r['entry'] for r in applied['refused']] == ['1']
+    assert [r['request_key'] for r in applied['submit_errors']] == ['1']
 
 
 def test_a_refusal_of_a_setting_goes_when_settings_are_applied(
@@ -419,11 +419,11 @@ def test_a_refusal_of_a_setting_goes_when_settings_are_applied(
 ) -> None:
     bins(http, 0)
     assert http.post('/api/reduce', json={'which': 'remaining'}).status_code == 422
-    assert [r['entry'] for r in state(http)['refused']] == [None]
+    assert [r['request_key'] for r in state(http)['submit_errors']] == [None]
 
     applied = bins(http, 3)
 
-    assert applied['refused'] == []
+    assert applied['submit_errors'] == []
 
 
 def test_reduce_then_the_state_shows_the_rows_done(

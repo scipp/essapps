@@ -54,7 +54,7 @@ A step instead drops the rows that the `SubmitError` names (`FieldError.request_
 A reason that names no row refuses every row of the step.
 Settings that the workspace does not accept make `Batch.state()` raise a `SubmitError`.
 The step then submits nothing.
-Its `refused` holds the reason for every row without a result that is ready as given, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
+Its `submit_errors` holds the reason for every row without a result that is ready as given, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
 
 ## Cost
 

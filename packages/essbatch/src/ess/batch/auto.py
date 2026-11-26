@@ -66,7 +66,7 @@ class Step:
     considered:
         The keys considered after the step: those given to it, those of the
         rows it added, and those of the source that the batch table has.
-    refused:
+    submit_errors:
         Why the submission refused each row, by key: the rows submitted that
         a ``SubmitError`` names, or every row submitted if the reason names
         none. If the settings are refused, every row without a result that is
@@ -80,7 +80,7 @@ class Step:
 
     added: tuple[str, ...]
     considered: frozenset[str]
-    refused: Mapping[str, str]
+    submit_errors: Mapping[str, str]
     waiting: tuple[str, ...]
     records: Mapping[str, Record]
 
@@ -89,7 +89,7 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     """
     Add the rows of ``source`` that are new and filled to ``batch``, then
     reduce the rows of :func:`~.state.not_reduced`. A row whose request is
-    refused does not hold back the others: :attr:`Step.refused` says why.
+    refused does not hold back the others: :attr:`Step.submit_errors` says why.
 
     Parameters
     ----------
@@ -121,10 +121,10 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     try:
         state = batch.state(candidates)
     except SubmitError as error:
-        refused = dict.fromkeys(candidates, str(error))
-        return Step(tuple(new.index), now, refused, tuple(waiting), {})
-    records, refused = _reduce(batch, not_reduced(state))
-    return Step(tuple(new.index), now, refused, tuple(waiting), records)
+        submit_errors = dict.fromkeys(candidates, str(error))
+        return Step(tuple(new.index), now, submit_errors, tuple(waiting), {})
+    records, submit_errors = _reduce(batch, not_reduced(state))
+    return Step(tuple(new.index), now, submit_errors, tuple(waiting), records)
 
 
 def _reduce(batch: Batch, keys: list[str]) -> tuple[dict[str, Record], dict[str, str]]:

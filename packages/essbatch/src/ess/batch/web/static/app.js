@@ -256,7 +256,7 @@ function render(state) {
   rows.update(state.rows, old ? undefined : {selected: view.selected, filter: view.filter, sort: view.sort});
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
   showBatches({application: state.application, runs: state.runs, rows: state.batches});
-  renderRefused(state.refused);
+  renderSubmitErrors(state.submit_errors);
   renderFollow(state.follow);
   $('files-problem').hidden = !state.files_problem;
   $('files-problem').textContent = $('files-problem').title = state.files_problem ?? '';
@@ -940,14 +940,14 @@ function renderChips(counts) {
 }
 
 // The reasons of a refused reduction, until closed or the next change.
-function renderRefused(refused) {
-  const key = JSON.stringify(refused);
-  if (!refused.length) {
+function renderSubmitErrors(errors) {
+  const key = JSON.stringify(errors);
+  if (!errors.length) {
     if (shownMessage) hideMessage();
     return;
   }
   if (key === view.dismissed || key === shownMessage) return;
-  showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
+  showMessage('Nothing was reduced.', errors.map((e) => e.text), key);
 }
 
 // "Add rows from the runs", unless the batch has no source; and while the

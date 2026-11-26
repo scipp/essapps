@@ -213,7 +213,7 @@ A row added later, by a step of Follow, by `take` or by hand, takes 1.5 until it
 ```python
 done = intake.step()         # a Step, or None if no batch follows
 done.waiting                 # the keys of the rows that wait
-done.refused                 # why rows of this step were refused, by key
+done.submit_errors           # why rows of this step were refused, by key
 done.records                 # the records of the rows reduced, by key
 ```
 
@@ -560,7 +560,7 @@ intake.following            # its label, or None
 intake.stop()               # none follows
 intake.follow(label)        # this batch follows; the batch that followed stops
 done = intake.step()        # a Step, or None if none follows
-done.refused                # why rows were refused, by key; they do not hold back the others
+done.submit_errors          # why rows were refused, by key; they do not hold back the others
 intake.offered(label)       # the rows of the source that the batch table lacks, with a boolean column `waits`
 intake.take(label, keys)    # put these rows as the source gives them now, also considered ones; then consider them
 ```
@@ -600,7 +600,7 @@ sequenceDiagram
         batch->>definitions: write rows.json
     end
     step->>batch: reduce(rows ready and without a result)
-    step-->>intake: Step: added, considered, refused, waiting, records
+    step-->>intake: Step: added, considered, submit_errors, waiting, records
     intake->>definitions: write source.json: considered, if it changed
     intake-->>timer: Step
 ```

@@ -116,7 +116,7 @@ source = RowSource(rows_of_files, fills=(...))   # rows_of_files: the files -> a
 batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
 done = step(batch, source, considered)   # reads batch.settings at each step
 done.records      # the step added the new rows of the source, and reduced the ready rows without a result; their records by key
-done.refused      # why rows of the step were refused by submit, by key
+done.submit_errors # why rows of the step were refused by submit, by key
 done.considered   # what the next step is given
 ```
 
@@ -714,7 +714,7 @@ measure(1, [1.0, 1.0], role='sample')
 
 done = step(batch, PER_RUN, ())
 assert done.records == {}
-assert done.refused == {'1': 'unknown spec sans-iofq/v1'}
+assert done.submit_errors == {'1': 'unknown spec sans-iofq/v1'}
 ```
 
 ### E3. Reduction of our own output

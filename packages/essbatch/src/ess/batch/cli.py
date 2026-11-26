@@ -879,7 +879,7 @@ def follow(
         else:
             added = list(stepped.added)
             reducing = list(stepped.records)
-            refused, waiting = dict(stepped.refused), list(stepped.waiting)
+            refused, waiting = dict(stepped.submit_errors), list(stepped.waiting)
             running |= stepped.records
         line = _ended(batch, running)
         if added or reducing or line['ended'] or (refused, waiting) != shown or fresh:

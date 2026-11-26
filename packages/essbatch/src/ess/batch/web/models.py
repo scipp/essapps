@@ -164,13 +164,13 @@ class Action(BaseModel):
     progress: tuple[int, int] | None
 
 
-class Refused(BaseModel):
+class SubmitProblem(BaseModel):
     """
     A reason a reduction was refused that a cell or a setting shows, kept until
     its value changes; ``text`` says it whole.
     """
 
-    entry: str | None
+    request_key: str | None
     loc: list[str | int]
     message: str
     text: str
@@ -288,7 +288,7 @@ class State(BaseModel):
     settings_problem: str | None
     settings_unapplied: bool
     may_be_columns: list[str]
-    refused: list[Refused]
+    submit_errors: list[SubmitProblem]
     follow: Following
     files_problem: str | None
     output: OutputShown

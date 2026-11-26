@@ -67,14 +67,14 @@ class Stepping:
     ) -> None:
         self.batch, self.source = batch, source
         self.considered = frozenset(considered)
-        self.refused: Mapping[str, str] = {}
+        self.submit_errors: Mapping[str, str] = {}
         self.waiting: tuple[str, ...] = ()
 
     def step(self) -> Mapping[str, Record]:
         """A step; the records of the rows it reduced, by key."""
         done = step(self.batch, self.source, self.considered)
         self.considered = done.considered
-        self.refused, self.waiting = done.refused, done.waiting
+        self.submit_errors, self.waiting = done.submit_errors, done.waiting
         return done.records
 
 
@@ -218,7 +218,7 @@ def test_a_row_is_added_once_filled_and_not_changed_when_its_files_change(
             )
             for key, r in records.items()
         }
-        assert loop.refused == {}
+        assert loop.submit_errors == {}
 
     assert {name: rows for name, rows in seen.items() if rows} == {
         't1': {'1': (['s1'], ['t1'])},
@@ -356,10 +356,10 @@ def test_refusals_that_only_submit_finds_are_tried_again_at_every_step(
     }
 
     assert list(loop.step()) == ['1', '4']
-    assert loop.refused == refused
+    assert loop.submit_errors == refused
     assert batch.state()['2'].status == 'ready'
     assert loop.step() == {}
-    assert loop.refused == refused
+    assert loop.submit_errors == refused
 
 
 class Submits:
@@ -391,7 +391,7 @@ def test_a_refusal_that_names_no_row_refuses_every_row_of_the_step(
         sample(2, 'sds')
 
         assert loop.step() == {}
-        assert loop.refused == dict.fromkeys(
+        assert loop.submit_errors == dict.fromkeys(
             ['1', '2'], 'persisting needs a store, which this workspace lacks'
         )
         assert submits.calls == 1
@@ -405,7 +405,7 @@ def test_a_row_whose_cell_is_refused_waits_for_a_person_to_set_it(
     sample(2, 'sds')
 
     assert list(loop.step()) == ['1']
-    assert loop.refused == {}
+    assert loop.submit_errors == {}
     assert loop.batch.state()['2'].status == 'incomplete'
     assert loop.step() == {}
 
@@ -452,13 +452,13 @@ def test_refused_settings_refuse_every_ready_row_without_a_result_until_they_cha
 
     loop.batch.settings = {'binning': {'bins': 0}}
     assert loop.step() == {}
-    assert loop.refused == dict.fromkeys(
+    assert loop.submit_errors == dict.fromkeys(
         ['2', '4'], 'binning.bins: Input should be greater than or equal to 1'
     )
 
     loop.batch.settings = SETTINGS
     assert list(loop.step()) == ['2', '4']
-    assert loop.refused == {}
+    assert loop.submit_errors == {}
 
 
 def test_a_changed_setting_reduces_no_row_again_and_its_rows_read_settings_changed(
@@ -523,7 +523,7 @@ def test_a_row_whose_file_cannot_be_read_waits_for_the_next_step(
     with unreachable(fake, 'resolve', [FileRef(file='uuid:run-2')]):
         first = loop.step()
 
-    assert (list(first), loop.refused) == (['1'], {})
+    assert (list(first), loop.submit_errors) == (['1'], {})
     assert list(loop.step()) == ['2']
 
 

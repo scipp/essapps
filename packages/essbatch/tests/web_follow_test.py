@@ -457,7 +457,7 @@ def test_a_refusal_of_a_running_row_is_said_once_and_not_kept(
     after = done(page, client)
 
     assert statuses(after) == {'water': 'done'}
-    assert after.refused == []
+    assert after.submit_errors == []
 
 
 def ids(client: Client) -> set[str]:
