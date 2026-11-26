@@ -26,9 +26,7 @@ from ess.batch import (
     rows_of,
 )
 from ess.batch.auto import Step, added, step
-from ess.batch.definition import (
-    SOURCE,
-)
+from ess.batch.definition import SOURCE
 from ess.batch.table import KEY, cell_of
 
 from ess.apps import Client, Record, Workspace

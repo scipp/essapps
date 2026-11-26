@@ -26,9 +26,7 @@ import pandas as pd
 import pytest
 import uvicorn
 from ess.batch import Batch, BatchManager, CorrectedFiles, Header, Intake
-from ess.batch.definition import (
-    ROWS,
-)
+from ess.batch.definition import ROWS
 from ess.batch.web import Pages, Shown, create_app
 from ess.batch.web.api import STATIC
 from ess.batch.writing import Writing
