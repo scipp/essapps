@@ -84,9 +84,9 @@ class Views:
 
     ``finished`` holds the event that finished each record. A record without
     one is pending. ``states`` holds the accumulator and number of pushes of the
-    record of each freeze. ``persisted`` names the outputs that each record
-    persists. Their write is part of the record: pending while the record is,
-    done once it completes. ``spec_digests`` holds the digest last logged for
+    record of each freeze. ``persisted`` holds the names of the outputs that each
+    record persists. Their write is part of the record: pending while the record
+    is, done once it completes. ``spec_digests`` holds the digest last logged for
     each spec, and ``digests`` the digest of each record's spec, the last logged
     before the record.
 
@@ -157,7 +157,7 @@ class Views:
         """
         The ``digests`` that the log does not hold, or holds with another digest.
 
-        An event that names these specs carries their digests.
+        An event that refers to these specs carries their digests.
         """
         return {
             str(s): d for s, d in digests.items() if self.spec_digests.get(str(s)) != d
