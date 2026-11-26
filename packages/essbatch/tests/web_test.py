@@ -462,6 +462,70 @@ def test_rows_running_show_progress_and_cancel_shows_as_cancelled(
     assert state(http)['action']['label'] == 'Retry 2 cancelled'
 
 
+def test_clear_outputs_of_rows_shows_them_cleared_and_reduce_computes_them_again(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+
+    cleared = http.post('/api/clear', json={'keys': ['1']}).json()
+
+    assert cleared['notice'] == (
+        'Cleared the outputs of 1 row. Reduce computes them again.'
+    )
+    shown = {k: r for k, r in rows(http).items() if k in ('1', '2')}
+    assert {k: (r['status'], r['result']) for k, r in shown.items()} == {
+        '1': ('cleared', None),
+        '2': ('done', 'current'),
+    }
+    assert shown['1']['reason'] == (
+        'Its outputs were cleared. "Reduce" computes them again.'
+    )
+    reduced(http, client)
+    assert statuses(http) == {'1': 'done', '2': 'done', '3': 'incomplete'}
+
+
+def test_clear_outputs_of_the_batch_clears_every_row(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+
+    cleared = http.post('/api/clear', json={}).json()
+
+    assert cleared['notice'] == (
+        'Cleared the outputs of the batch. Reduce computes them again.'
+    )
+    assert statuses(http) == {'1': 'cleared', '2': 'cleared', '3': 'incomplete'}
+
+
+def test_a_clear_of_a_batch_with_a_running_row_answers_422_and_names_the_row(
+    http: TestClient, client: Client, gate: Gate
+) -> None:
+    gate.close()
+    http.post('/api/reduce', json={'which': 'remaining'})
+
+    answer = http.post('/api/clear', json={})
+
+    gate.open()
+    client.wait(client.records())
+    assert answer.status_code == 422
+    assert answer.json()['message'] == (
+        'Nothing was cleared: water, sds: still running.'
+    )
+
+
+def test_clear_all_outputs_clears_the_outputs_of_every_batch(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+
+    cleared = http.post('/api/outputs/clear')
+
+    assert cleared.json() == {
+        'notice': 'Cleared the outputs of every batch. Reduce computes them again.'
+    }
+    assert statuses(http) == {'1': 'cleared', '2': 'cleared', '3': 'incomplete'}
+
+
 def test_the_action_counts_the_rows_running_and_the_rows_that_can_be_reduced_again(
     http: TestClient, client: Client, gate: Gate
 ) -> None:
@@ -2755,6 +2819,18 @@ def test_a_batch_removed_from_its_page_is_gone_and_its_results_stay(
         404,
         {'message': 'There is no batch scan.'},
     )
+
+
+def test_a_batch_removed_with_clear_has_the_outputs_of_its_records_cleared(
+    http: TestClient, manager: BatchManager, batch: Batch, client: Client
+) -> None:
+    client.wait(batch.reduce(['1']))
+
+    removed = http.post('/api/batch/remove', json={'clear': True})
+
+    assert removed.json() == {'notice': 'Removed Scan and cleared its outputs.'}
+    assert manager.headers() == {}
+    assert client.cleared(client.records(label='scan')) == [True]
 
 
 def test_removing_the_batch_that_follows_turns_follow_off(

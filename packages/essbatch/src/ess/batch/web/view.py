@@ -52,6 +52,7 @@ ORDER = (
     'outdated',
     'failed',
     'cancelled',
+    'cleared',
     'incomplete',
 )
 """The statuses of a row, in the order of the page."""
@@ -214,6 +215,8 @@ def reason(
             ' reduces them with the settings now.',
             f'{named} changed' if named else '',
         )
+    if status == 'cleared':
+        return 'Its outputs were cleared. "Reduce" computes them again.', ''
     if status == 'outdated' and state.outdated:
         return _outdated(state, titles), ''
     if status == 'outdated':
@@ -237,8 +240,15 @@ def _changed(state: RowState, titles: Mapping[str, str]) -> str:
 
 
 def result(state: RowState) -> str | None:
-    """``'current'`` or ``'outdated'`` for a completed result, else ``None``."""
-    if state.record is None or state.record_status is not Status.COMPLETED:
+    """
+    ``'current'`` or ``'outdated'`` for a completed result that is not cleared,
+    else ``None``.
+    """
+    if (
+        state.record is None
+        or state.record_status is not Status.COMPLETED
+        or state.cleared
+    ):
         return None
     return 'outdated' if state.status == 'outdated' else 'current'
 

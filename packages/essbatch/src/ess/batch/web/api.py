@@ -48,6 +48,7 @@ from .models import (
     Notice,
     Plot,
     Reduce,
+    RemoveBatch,
     RowDetail,
     Runs,
     SourceChoice,
@@ -211,6 +212,11 @@ def create_app(pages: Pages) -> FastAPI:
     def cancel(page: PageOfLabel) -> State:
         return page.cancel()
 
+    @batch.post('/api/clear')
+    def clear(page: PageOfLabel, body: Keys) -> State:
+        """Clear the outputs of the rows ``keys``, or of the batch if none."""
+        return page.clear(body.keys)
+
     @batch.post('/api/follow/stop')
     def stop_following(page: PageOfLabel) -> State:
         """Stop Follow if this batch follows. The page has no action to resume it."""
@@ -289,9 +295,9 @@ def create_app(pages: Pages) -> FastAPI:
         return page.publish(body.keys)
 
     @batch.post('/api/batch/remove')
-    def remove_batch(label: str) -> Notice:
-        """Remove the batch. Its results stay in the workspace."""
-        return pages.remove(label)
+    def remove_batch(label: str, body: RemoveBatch | None = None) -> Notice:
+        """Remove the batch. Its results stay in the workspace unless cleared."""
+        return pages.remove(label, clear=body is not None and body.clear)
 
     @batch.post('/api/results.zip', response_class=Response)
     def results_file(page: PageOfLabel, body: Keys) -> Response:
@@ -329,6 +335,11 @@ def create_app(pages: Pages) -> FastAPI:
             spec=spec, title=title, description=description, settings_from=settings_from
         )
         return pages.create(new, (name, content))
+
+    @workspace.post('/api/outputs/clear')
+    def clear_all() -> Notice:
+        """Clear the outputs of every record of the workspace."""
+        return pages.clear()
 
     @workspace.get('/api/sources')
     def sources() -> list[SourceChoice]:

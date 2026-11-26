@@ -23,6 +23,7 @@
   --failed: #b42318;       --failed-bg: #fde8e6;
   --incomplete: #6941c6;   --incomplete-bg: #efe9fc;
   --cancelled: #5b6270;    --cancelled-bg: #e6e8ec;
+  --cleared: #7a5c3e;      --cleared-bg: #f3ece4;
 }
 
 * { box-sizing: border-box; }
@@ -268,6 +269,7 @@ main {
 .st-failed { --chip: var(--failed); --chip-bg: var(--failed-bg); }
 .st-incomplete { --chip: var(--incomplete); --chip-bg: var(--incomplete-bg); }
 .st-cancelled { --chip: var(--cancelled); --chip-bg: var(--cancelled-bg); }
+.st-cleared { --chip: var(--cleared); --chip-bg: var(--cleared-bg); }
 
 .pill {
   display: inline-block;

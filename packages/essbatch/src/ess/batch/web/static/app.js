@@ -879,7 +879,7 @@ function renderAction(action, settingsChanged) {
   $('settings-changed-badge').title = `${count(settingsChanged)} with changed settings`;
 }
 
-const CHIPS = ['all', 'ready', 'running', 'done', 'settings changed', 'outdated', 'failed', 'incomplete', 'cancelled'];
+const CHIPS = ['all', 'ready', 'running', 'done', 'settings changed', 'outdated', 'failed', 'incomplete', 'cancelled', 'cleared'];
 
 // The chip of each status is made once and updated in place, so that a chip
 // with the keyboard focus does not lose it.
@@ -1013,15 +1013,40 @@ function saveBatch(event) {
   act('batch', {title: elements.title.value.trim(), description: elements.description.value.trim()}, say);
 }
 
-// Removes this batch, then shows the root in its place in the history.
+// Removes this batch, and its outputs if ticked, then shows the root in its
+// place in the history.
 async function removeBatch() {
-  const question = `Remove the batch "${view.state.title}"? Its title, description, settings, output options and table are removed. Its results stay in the workspace.`;
+  const clear = $('remove-clear').checked;
+  const results = clear
+    ? `Its outputs are deleted too. ${REDUCED_AGAIN}`
+    : 'Its results stay in the workspace.';
+  const question = `Remove the batch "${view.state.title}"? Its title, description, settings, output options and table are removed. ${results}`;
   if (!confirm(question)) return;
   const [page, at] = [here, changes];
-  const done = await queued(() => request('batch/remove', {body: {}, page}));
+  const done = await queued(() => request('batch/remove', {body: {clear}, page}));
   if (!done || at !== changes) return;
   await show(root(), null, 'replaceState');
   toast(done.notice);
+}
+
+const REDUCED_AGAIN = 'The records stay, and a reduction of the same rows computes the outputs again.';
+
+// Clears the outputs of the rows `keys`, or of the whole batch if none.
+function clearOutputs(keys) {
+  const what = keys.length ? `the ${count(keys.length)} selected` : `the batch "${view.state.title}"`;
+  if (confirm(`Clear the outputs of ${what}, to free disk space? ${REDUCED_AGAIN}`)) act('clear', {keys});
+}
+
+// Clears the outputs of every batch of the workspace, an action of the
+// workspace. The page of a batch then refreshes its state.
+function clearAll() {
+  if (!confirm(`Clear the outputs of every batch, removed ones too, to free disk space? ${REDUCED_AGAIN}`)) return;
+  queued(async () => {
+    const done = await request('outputs/clear', {body: {}});
+    if (!done) return;
+    toast(done.notice);
+    if (view.state) await refresh().catch(() => {});
+  });
 }
 
 function replaceChanges() {
@@ -1036,6 +1061,7 @@ function renderSelection() {
   const n = view.selected.length;
   $('selection').textContent = n ? `${n} selected` : '';
   $('remove').hidden = n === 0;
+  $('clear').hidden = n === 0;
   $('n-selected').textContent = n;
   document.querySelector('[data-reduce="selected"]').disabled = n === 0 || Boolean(view.state.action.blocked);
   renderResultFiles();
@@ -1459,6 +1485,9 @@ function wire() {
   $('publish').onclick = publish;
   $('remove-batch').onclick = removeBatch;
   $('remove').onclick = () => act('rows/remove', {keys: view.selected});
+  $('clear').onclick = () => clearOutputs(view.selected);
+  $('clear-batch').onclick = () => clearOutputs([]);
+  $('clear-all').onclick = clearAll;
   document.querySelector('#message .close').onclick = () => {
     view.dismissed = shownMessage;
     hideMessage();

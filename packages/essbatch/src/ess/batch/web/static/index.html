@@ -77,6 +77,7 @@
           </form>
           <span class="spacer"></span>
           <span id="selection"></span>
+          <button type="button" class="quiet" id="clear" hidden>Clear outputs</button>
           <button type="button" class="quiet" id="remove" hidden>Remove selected</button>
         </div>
       </div>
@@ -84,6 +85,8 @@
       <div class="view" id="view-batches" hidden>
         <div class="toolbar">
           <button type="button" id="new-batch-open">+ New batch</button>
+          <span class="spacer"></span>
+          <button type="button" class="quiet" id="clear-all" title="Delete the outputs of every batch, removed ones too, to free disk space.">Clear all outputs</button>
         </div>
         <form class="new-batch header-form" id="new-batch" hidden>
           <div class="field"><label for="new-title">Title</label><input type="text" id="new-title" name="title"></div>
@@ -178,8 +181,14 @@
           <div class="buttons"><button type="submit" class="primary">Save</button></div>
         </form>
         <section class="param">
+          <h3>Outputs</h3>
+          <p class="hint">Deletes the outputs of every row of the batch, to free disk space. The rows stay, and Reduce computes the outputs again.</p>
+          <button type="button" id="clear-batch">Clear outputs</button>
+        </section>
+        <section class="param">
           <h3>Remove</h3>
-          <p class="hint">Removes the title, description, settings and batch table of the batch, and whether it follows. Its results stay in the workspace.</p>
+          <p class="hint">Removes the title, description, settings and batch table of the batch, and whether it follows. Its results stay in the workspace, unless you clear them too.</p>
+          <p><label><input type="checkbox" id="remove-clear"> Clear its outputs too</label></p>
           <button type="button" id="remove-batch">Remove this batch</button>
         </section>
       </div>

@@ -423,7 +423,7 @@ export class Grid {
 // A status may contain a space, as in "settings changed".
 export const statusClass = (status) => `st-${status.replaceAll(' ', '-')}`;
 
-const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'settings changed', 'done'];
+const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'cleared', 'ready', 'running', 'settings changed', 'done'];
 
 export const statusColumn = {
   title: 'Status',
