@@ -1634,11 +1634,11 @@ class Workspace(WorkspaceProtocol):
             return checked[1]
         with self._changed:
             plain = self._views.plain(acc.id, upto)
-        refused = self._bound[plain.spec].checks.state_problem(
+        problem = self._bound[plain.spec].checks.state_problem(
             plain, acc.template.blanks
         )
-        acc.checked = (upto, refused)  # another check may overwrite it at once
-        return refused
+        acc.checked = (upto, problem)  # another check may overwrite it at once
+        return problem
 
     def _accumulator_locked(self, accumulator_id: str) -> _Accumulator:
         """
