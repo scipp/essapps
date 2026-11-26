@@ -203,8 +203,8 @@ class Intake:
         The rows that the source registered as ``source`` makes now, with a
         column ``incomplete``, whether the row is incomplete, and a column ``taken``,
         whether :meth:`create` takes it with ``choose``, such as
-        ``Range(first='60339')`` (:class:`~.source.Range`); every row that
-        does not wait if not given. Raises ``ValueError`` if no source is
+        ``Range(first='60339')`` (:class:`~.source.Range`); every complete
+        row if not given. Raises ``ValueError`` if no source is
         registered so, and what ``choose`` raises.
         """
         found = self._source(source)
@@ -229,7 +229,7 @@ class Intake:
     ) -> Batch:
         """
         Make a batch from the rows of ``source`` with the manager
-        (:meth:`~.manager.BatchManager.create`), and keep what it seen;
+        (:meth:`~.manager.BatchManager.create`), and store the keys seen;
         its ``Batch``. The source is listed once::
 
             given = rows_of(client, source)
