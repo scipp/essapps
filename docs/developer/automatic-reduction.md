@@ -24,7 +24,7 @@ If a step raises, `Intake` still marks the keys of the batch table as seen, so a
 A restarted application reduces no row again that has a result.
 A record that was running when the workspace ended fails at the restart, so a person retries its row.
 This holds while the proposal's history exists.
-The calls of a step keep the proposal from being idle, so a running step keeps the history.
+Each step calls the workspace, so a proposal with a running step is never idle.
 
 ## What `submit` rejects
 
@@ -43,8 +43,8 @@ What only `submit` rejects, and how a batch row meets it:
 | an output of a record of an unbound spec | the spec of the first batch's records is no longer bound |
 | an output whose data do not fit the field | a cell refers to the wrong output |
 
-`submit` also rejects a row that is still running, which happens when another client submitted it between `state` and `reduce`.
-It rejects a `persist` that names an output the spec lacks, or a workspace without a store.
+`Batch.reduce` also rejects a row that is still running, which happens when another client submitted it between `state` and `reduce`.
+`submit` rejects a `persist` that names an output the spec lacks, or a workspace without a store.
 For a staged batch, it rejects a stage that stopped, was released, or holds other values.
 `Batch` then opens a new stage and submits again.
 

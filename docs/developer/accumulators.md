@@ -111,12 +111,11 @@ Templates, stage calls, and pushes are validated in the same two phases as a pla
 
 | What | When logged | When it runs |
 |---|---|---|
-| a template | each fixed value and reference; the table rules on fixed tables | each fixed value, once |
+| a template | each fixed value and reference; length and distinct rows of fixed tables | each fixed value, once |
 | a stage call | each value given, and its references | each value given |
-| a push | each row and its references; the table rules | each row, with its data |
-| a read or a freeze of a state | the length constraints of each table | nothing |
+| a push | each row and its references; distinct rows | each row, with its data |
+| a read or a freeze of a state | the length constraints of each blank table | nothing |
 
-The *table rules* are a table's length constraints and distinct rows.
 A row that fails when it runs stops the accumulator, as any failing push does.
 
 ## Symmetries

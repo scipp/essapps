@@ -34,7 +34,7 @@ Property: a local file reaches the service only when a request that names it is 
 ### B2. Add a run to a sum
 
 Actor: user in a notebook. Goal: after a new run finishes, the sum including it comes back quickly.
-Property: with a driver that sums, such as `Summing`, pushing a run into an accumulator reduces only that run. Reading the sum computes the outputs from the driver, and reads no earlier run again. A driver that holds the rows instead reduces every run so far again at each read.
+Property: with a driver that sums, pushing a run into an accumulator reduces only that run. Reading the sum computes the outputs from the driver, and reads no earlier run again. A driver that holds the rows instead reduces every run so far again at each read.
 
 ### B4. Explore a 4D volume
 
@@ -73,7 +73,7 @@ Property: a cancel stops the started requests within seconds and frees their wor
 ### D7. Rotation scan over three hundred angles
 
 Actor: spectroscopy user. Goal: each run is added to the volume as it arrives, and a cut through the volume so far is ready within seconds of each run.
-Property: with a driver that adds in place, such as `Summing`, each push reduces its run and adds it to the driver, reading no earlier run. The volume is held once. A cut copies only its selection and creates no record. History grows by one push per run and one record for the freeze, which history stores as the accumulator and its number of pushes ([ADR 0004](adr/0004-history-is-append-only-lists.md)). The frozen volume is written once, and no copy of it is made.
+Property: with a driver that adds in place, each push reduces its run and adds it to the driver, reading no earlier run. The volume is held once. A cut copies only its selection and creates no record. History grows by one push per run and one record for the freeze, which history stores as the accumulator and its number of pushes ([ADR 0004](adr/0004-history-is-append-only-lists.md)). The frozen volume is written once, and no copy of it is made.
 
 ## F. Publication and provenance
 

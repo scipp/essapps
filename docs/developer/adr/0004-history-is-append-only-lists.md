@@ -31,11 +31,11 @@ Output values are not history, and history names no file of the store.
 The changes to a proposal's records have one order, which a client reads from a position (`client.changes`).
 A history that a process holds without a person, such as the automatic reduction's, is dropped as a whole once its proposal has been idle for the retention period, days to weeks.
 The framework deletes nothing in a folder that a person opened.
-How a deployment stores the lists is its choice.
+How a deployment stores the lists is its choice. `ess.apps.Workspace` appends them to one log of events.
 
 ## Alternatives considered
 
-- **One event log, with records and labels as views.** Only the change feed needs an order, and it would tie a hosted workspace to a log.
+- **History defined as one event log, with records and labels as views.** Only the change feed needs an order, and it would tie a hosted workspace to a log.
 - **A history held without a person kept as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
 - **Each record dropped by age, keeping the older records that a remaining record reads.** The automatic reduction would reduce again every row whose records were dropped.
 - **A proposal's history dropped a fixed time after its last record.** An automatic reduction that sees no new file for that long would reduce every row again, and a client still in use would lose its records.
