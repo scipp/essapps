@@ -725,7 +725,7 @@ class Page:
             reason = 'The settings cannot be used, so this result may not match them.'
         # An empty cell is shown empty, not as the setting or the default that
         # a request takes.
-        given = {c: requested[c] for c in requested if cells[c] is not None}
+        given = {c: requested[c] for c in requested if c in state.own}
         result = None
         if record is not None and state.status is Status.COMPLETED:
             result = 'outdated' if status == 'outdated' else 'current'
@@ -1060,15 +1060,8 @@ class Page:
                 f'{name} was reduced by another version of the workflow, '
                 'whose settings this one does not take.'
             )
-        batch = self.batch
-        given = (
-            frame.loc[[key], list(batch.parameter_columns)]
-            .notna()
-            .to_dict('index')[key]
-        )
-        own = {c for c, filled in given.items() if filled}
-        kept = {n: v for n, v in batch.settings.items() if n in own}
-        took = {n: v for n, v in row.record.request.params.items() if n not in own}
+        kept = {n: v for n, v in self.batch.settings.items() if n in row.own}
+        took = {n: v for n, v in row.record.request.params.items() if n not in row.own}
         self._fill({**took, **kept})
         return (
             f'The form shows the settings {name} was reduced with. Apply to use them.'
