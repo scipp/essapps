@@ -44,8 +44,8 @@ Every statement has one home. Other places link to it and do not repeat it.
 
 | Home | Reader | Holds | Does not hold |
 |---|---|---|---|
-| guide page (`.md`) | a user of that interface | purpose, one example, the concepts, what they would guess wrong | how the code is built, material for another reader |
-| module docstring | a maintainer of the module | what spans its functions; a pseudo-code sketch if the flow is not visible in one function | the interface (link to the guide), a retelling of functions |
+| guide page (`.md`) | a user of that interface | purpose, one example, the concepts, what they would guess wrong; a sketch of a mechanism, as pseudo-code or a Mermaid diagram | material for another reader, a retelling of functions |
+| module docstring | a maintainer of the module | what spans its functions, in words; a link to the guide section with the sketch | the interface, a sketch or drawing, a retelling of functions |
 | class or function docstring | a caller | first line: what it is or returns; parameters and errors the signature does not show | mechanism, consequences, reasons |
 | private function | a maintainer | one line, or none if the name says it | — |
 | comment | a maintainer at that line | a reason the code cannot show | what the next line does |
@@ -54,7 +54,7 @@ Every statement has one home. Other places link to it and do not repeat it.
 | error message | the person who hit it | where, what is wrong, what to do | the rule behind it |
 | `--help` | a person who runs the command | one example per task | design terms |
 
-If a guide and a module docstring both want a statement, ask who needs it: a user of the interface, or a maintainer of the code.
+A sketch of how a mechanism works lives in a docs page, since a docstring cannot hold a drawing. The module docstring links to that section.
 A guide section that is a copy of a module docstring, of `--help` or of an ADR is deleted, not polished.
 
 ## 3. Words
@@ -114,7 +114,7 @@ One idea per sentence. A first sentence has at most 25 words. Then check for the
 
 - The first line says what the thing is or returns, on its own line.
 - Describe a parameter under `Parameters` and an attribute at the attribute, only where name and type do not say it.
-- Refer to code by plain name in double backticks. Use a Sphinx role only for a public name in another module.
+- Refer to code by plain name in double backticks. Use a Sphinx role only for a public name in another module; the docs will be built with Sphinx (and MyST for Markdown).
 - Prefer an input → output example to a description:
 
 ```python
@@ -139,7 +139,7 @@ So run the passes in this order, one pass per commit, and do not do the work of 
 Rules for every pass:
 
 - **Never delete a statement of behaviour unless code, a test or an error message carries it.** Find the test first. If there is none, write it. If unsure whether a sentence carries weight, keep it and list it.
-- **Do not rename public names in pass 0 without the owner.** List the candidates (`put`, `take`, `considered`, `kept`, …) with what the docs could then drop.
+- **Pass 0 renames freely, public names included.** Nothing outside this repository uses the code. A rename changes every use: code, tests, docs, messages, help, and the names in files on disk.
 - **Check (pass 5):** the tests pass. Grep the repository for links to and mentions of every heading, term and name you removed. Every remaining statement is true of the code today; a second reader checks this against the code.
 - **Report** per pass: lines and words before and after; each deleted consequence with the test that covers it; statements kept because unsure; where these rules did not fit.
 

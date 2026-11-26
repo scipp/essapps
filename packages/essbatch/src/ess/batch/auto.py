@@ -1,20 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-One step of Follow on a batch::
-
-    table = batch.frame()
-    given = rows_of(batch.client, source)                  # lists every file
-    new, waiting = added(table, given, batch.fills, considered)
-    batch.put(pd.concat([table, new]))
-    considered |= set(new.index) | (set(given.index) & set(table.index))
-    candidates = not_reduced(batch.state(compare=False))   # resolves no cell
-    batch.reduce(not_reduced(batch.state(candidates)))     # resolves their cells
+One step of Follow on a batch.
 
 The caller keeps ``considered`` from one step to the next
 (:class:`~.intake.Intake` in ``source.json``).
 
-Guide: ``packages/essbatch/docs/batch.md``, "Follow".
+How a step works: ``packages/essbatch/docs/batch.md``, "Follow".
 Decision: ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
 Cost: ``docs/developer/automatic-reduction.md``, "Cost".
 """
