@@ -49,7 +49,7 @@ record finishes once they are written. The store may hold a value that no event
 names, written for a record cancelled meanwhile or by a write that failed
 part-way; nothing reads it.
 
-:meth:`Workspace._refusal` decides what may be read, in the request phase, from
+:meth:`Workspace._read_problem` decides what may be read, in the request phase, from
 the record's existence, whether the workspace holds it in memory, and what it
 persists. So whether a call is accepted does not depend on how far other work has
 run, and a pending record is as readable as a completed one. A read takes the
@@ -65,7 +65,7 @@ Records of another spec
 -----------------------
 The log holds the digest of each record's spec (see ``log.py``). A record is
 of the bound spec if a binding has its spec's name, version, and digest, and
-otherwise of another spec (:meth:`Workspace._other`, which
+otherwise of another spec (:meth:`Workspace._unbound_spec_problem`, which
 :meth:`Workspace.bound` answers to a client). Every record that this
 workspace logs is of the bound spec, so a record of another spec comes from
 the log it started from, and none of its values is in memory. Its persisted
@@ -714,7 +714,7 @@ class Workspace(WorkspaceProtocol):
                 )
             elif record_id not in needed:
                 self._finish(record_id, Status.CANCELLED, 'the workspace restarted')
-            elif (reason := self._unreadable(record_id, runs)) is not None:
+            elif (reason := self._restart_problem(record_id, runs)) is not None:
                 self._finish(
                     record_id, Status.FAILED, f'the workspace restarted: {reason}'
                 )
@@ -723,7 +723,7 @@ class Workspace(WorkspaceProtocol):
         for record_id in (i for i in pending if i in runs):
             self._schedule(record_id, self._request_plan(record_id))
 
-    def _unreadable(self, record_id: str, runs: Collection[str]) -> str | None:
+    def _restart_problem(self, record_id: str, runs: Collection[str]) -> str | None:
         """
         Why a record pending at a restart cannot read what it references, or
         ``None``;
@@ -732,11 +732,11 @@ class Workspace(WorkspaceProtocol):
         views = self._views
         if record_id in views.states:
             return 'the driver it reads is gone'
-        if (other := self._other(record_id)) is not None:
+        if (other := self._unbound_spec_problem(record_id)) is not None:
             return f'its spec is not bound: {other}'
         for ref in views.records[record_id].request.upstream():
             where = f'record {ref.record} output {ref.output}'
-            if (other := self._other(ref.record)) is not None:
+            if (other := self._unbound_spec_problem(ref.record)) is not None:
                 return f'{where}: the spec of its record is not bound: {other}'
             if ref.record in runs:
                 continue
@@ -756,7 +756,7 @@ class Workspace(WorkspaceProtocol):
         self._check_running()
         return [bound.spec for bound in self._bound.values()]
 
-    def _other(self, record_id: str) -> str | None:
+    def _unbound_spec_problem(self, record_id: str) -> str | None:
         """
         Why a record is of another spec than the one bound, or ``None`` if it
         is of the bound spec: one with the name, version, and digest of the
@@ -991,7 +991,7 @@ class Workspace(WorkspaceProtocol):
     ) -> SpecId:
         """
         The spec of a record a request may read; lock held. The record's
-        output must be one that may be referenced (see :meth:`_refusal`), and
+        output must be one that may be referenced (see :meth:`_read_problem`), and
         the record of the bound spec, by which the output's type is checked.
 
         An accumulator is refused: a reader of its state would hold back its
@@ -1017,9 +1017,11 @@ class Workspace(WorkspaceProtocol):
         record = self._views.records.get(ref.record)
         if record is None:
             raise SubmitError.at(loc, f'unknown record or accumulator {ref.record}')
-        if (why := self._refusal((ref.record, ref.output), stage_reads)) is not None:
+        if (
+            why := self._read_problem((ref.record, ref.output), stage_reads)
+        ) is not None:
             raise SubmitError.at(loc, why)
-        if (other := self._other(ref.record)) is not None:
+        if (other := self._unbound_spec_problem(ref.record)) is not None:
             raise SubmitError.at(
                 loc,
                 f"the output's type cannot be checked: record {ref.record} is of "
@@ -1027,7 +1029,7 @@ class Workspace(WorkspaceProtocol):
             )
         return record.spec
 
-    def _refusal(
+    def _read_problem(
         self, key: tuple[str, str], stage_reads: Collection[_OutputKey] = ()
     ) -> str | None:
         """
@@ -1208,7 +1210,7 @@ class Workspace(WorkspaceProtocol):
         if self._store is None:
             raise NotReadable(f'{ref}: the workspace has no store')
         tp = None
-        if self._other(ref.record) is None:
+        if self._unbound_spec_problem(ref.record) is None:
             spec = self._bound[self._views.records.spec(ref.record)].spec
             tp = spec.outputs.model_fields[ref.output].annotation
         try:
@@ -1436,7 +1438,7 @@ class Workspace(WorkspaceProtocol):
     def bound(self, ids: Sequence[str]) -> list[bool]:
         with self._changed:
             self._check_running()
-            return [self._other(self._record(i).id) is None for i in ids]
+            return [self._unbound_spec_problem(self._record(i).id) is None for i in ids]
 
     def readable(self, ids: Sequence[str]) -> list[tuple[str, ...]]:
         with self._changed:
@@ -1445,7 +1447,7 @@ class Workspace(WorkspaceProtocol):
                 tuple(
                     name
                     for name in self._record(record_id).outputs
-                    if self._refusal((record_id, name)) is None
+                    if self._read_problem((record_id, name)) is None
                 )
                 for record_id in ids
             ]
@@ -1501,7 +1503,7 @@ class Workspace(WorkspaceProtocol):
         value = self._read(record_id, [name], select=None)[name]
         info = _info(value)
         # read as stored, any output but an array is a DataGroup: a mapping
-        stored = self._other(record_id) is not None
+        stored = self._unbound_spec_problem(record_id) is not None
         group = isinstance(value, BaseModel) or (stored and isinstance(value, Mapping))
         return info if group else {name: info}
 
@@ -1520,7 +1522,7 @@ class Workspace(WorkspaceProtocol):
             self._check_running()
             record = self._record(record_id)
             if select is not None:
-                typed = self._other(record_id) is None
+                typed = self._unbound_spec_problem(record_id) is None
                 check_select(self._bound[record.spec].spec if typed else None, names)
             wanted = record.outputs if names is None else names
             for name in wanted:
@@ -1554,7 +1556,7 @@ class Workspace(WorkspaceProtocol):
         ``None`` every output that the workspace holds in memory or the record
         persists and that the workflow returned; lock held. Raises ``RecordFailed`` for
         a record that failed or was cancelled, and ``NotReadable`` for an
-        output that may not be read (see :meth:`_refusal`).
+        output that may not be read (see :meth:`_read_problem`).
         """
         views, record_id = self._views, record.id
         if names is None:
@@ -1572,7 +1574,7 @@ class Workspace(WorkspaceProtocol):
         if finished is not None and finished.status is not Status.COMPLETED:
             raise RecordFailed(record_id, finished.status, finished.failure)
         for name in names:
-            if (why := self._refusal((record_id, name))) is not None:
+            if (why := self._read_problem((record_id, name))) is not None:
                 raise NotReadable(why)
         return list(names)
 
@@ -1825,7 +1827,7 @@ class Workspace(WorkspaceProtocol):
             upto = len(self._views.pushes.get(accumulator_id, ()))
             self._readers[_StateKey(acc, upto)] += 1
         try:
-            if (refused := self._check_state(acc, upto)) is not None:
+            if (refused := self._state_problem(acc, upto)) is not None:
                 raise SubmitError.at((), refused)
             with self._changed:
                 self._check_running()
@@ -1982,7 +1984,7 @@ class Workspace(WorkspaceProtocol):
             self._let_go(reads)
         self._advance(acc)
 
-    def _check_state(self, acc: _Accumulator, upto: int) -> str | None:
+    def _state_problem(self, acc: _Accumulator, upto: int) -> str | None:
         """
         Why the plain request of the accumulator's state after ``upto`` pushes
         would be refused, or ``None``; needs no lock.
@@ -1991,7 +1993,7 @@ class Workspace(WorkspaceProtocol):
         template's fixed values, with each blank table filled by the rows
         pushed, in push order. The number of rows of each blank table must
         meet its length constraints, so a table that needs a row must have
-        one (see :meth:`.checks.Checks.state`).
+        one (see :meth:`.checks.Checks.state_problem`).
         ``acc.checked`` keeps the answer for the state checked last.
         """
         checked = acc.checked
@@ -1999,7 +2001,9 @@ class Workspace(WorkspaceProtocol):
             return checked[1]
         with self._changed:
             plain = self._views.plain(acc.id, upto)
-        refused = self._bound[plain.spec].checks.state(plain, acc.template.blanks)
+        refused = self._bound[plain.spec].checks.state_problem(
+            plain, acc.template.blanks
+        )
         acc.checked = (upto, refused)  # another check may overwrite it at once
         return refused
 
@@ -2059,13 +2063,13 @@ class Workspace(WorkspaceProtocol):
         The accumulator and its number of pushes logged (see
         :meth:`_logged_state`), the state held as a reader holds it for the
         block. Raises ``NotReadable`` if the state may not be read (see
-        :meth:`_check_state`).
+        :meth:`_state_problem`).
         """
         with self._changed:
             acc, upto = self._logged_state(accumulator_id)
             self._readers[_StateKey(acc, upto)] += 1
         try:  # a validator may raise anything
-            if (refused := self._check_state(acc, upto)) is not None:
+            if (refused := self._state_problem(acc, upto)) is not None:
                 raise NotReadable(refused)
             yield acc, upto
         finally:
@@ -2075,7 +2079,7 @@ class Workspace(WorkspaceProtocol):
     def plain_request(self, accumulator_id: str) -> Request:
         with self._changed:
             acc, upto = self._logged_state(accumulator_id)
-        if (refused := self._check_state(acc, upto)) is not None:
+        if (refused := self._state_problem(acc, upto)) is not None:
             raise NotReadable(refused)
         with self._changed:
             return self._views.plain(acc.id, upto)

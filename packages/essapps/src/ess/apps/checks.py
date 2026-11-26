@@ -16,7 +16,7 @@ checked::
     # a stage or an accumulator
     template, fixed, reads = checks.template(template, proposal)
     rows, reads = checks.push(blanks, rows, proposal)
-    refused = checks.state(plain, blanks)                  # at a read or a freeze
+    problem = checks.state_problem(plain, blanks)  # at a read or a freeze
 
 The methods differ in what they hold each value against, since a template and
 a push give only some of the params:
@@ -147,7 +147,7 @@ class Checks:
                 raise SubmitError.at((table,), 'a push gives no rows')
         return self._values(read_refs(dict(rows)), proposal)
 
-    def state(self, plain: Request, blanks: Collection[str]) -> str | None:
+    def state_problem(self, plain: Request, blanks: Collection[str]) -> str | None:
         """
         Why the plain request of an accumulator's state would be refused, or
         ``None``.
