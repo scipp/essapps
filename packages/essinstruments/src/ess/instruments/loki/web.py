@@ -5,7 +5,7 @@ Serves the batch page of LoKI's I(Q) (:mod:`ess.batch.web`) on a workspace folde
 It needs the extra ``[loki-app]``::
 
     python -m ess.instruments.loki.web FOLDER [--port 8000] [--interval SECONDS]
-        [--scicat PROFILE --proposal PROPOSAL]
+        [--scicat PROFILE]... [--no-local]
 
 ``FOLDER`` is a workspace folder (:mod:`ess.apps.folder`). Its ``files.csv`` lists
 the run, role and sample of each file, as ``essbatch files`` writes it. A row is a
@@ -38,14 +38,17 @@ and run two commands::
 ``files.csv`` lists it. The page lists the detector and the masks as batches of one
 row each. So it makes no batch of I(Q) at the start: make it with "New batch".
 
-With ``--scicat``, the runs are the raw datasets of ``PROPOSAL`` in SciCat
-(:class:`~ess.apps.scicat.ScicatFiles`) in place of ``files.csv``, such as
-``--scicat staging.ess --proposal 336349``. The login works as in :mod:`.scicat`.
-SciCat states no role, so the Runs view shows the runs without one until a person
-sets it. If the workspace has no batch at the start, it gets a batch of the bank
-histogram (:data:`~.specs.BANK_HISTOGRAM`), with a row per raw run. A run is read
-from the path SciCat states, such as ``/ess/raw/...``. So reducing works only where
-that path is mounted.
+The proposal of the folder and where its runs are listed are in its
+``workspace.json`` (:func:`ess.batch.read_workspace_header`). A folder whose runs
+are the raw datasets of its proposal in SciCat, ``"files": "scicat:staging.ess"``
+(:class:`~ess.apps.scicat.ScicatFiles`), opens only with ``--scicat staging.ess``,
+which logs in at the start as :mod:`.scicat` describes. ``--no-local`` refuses a
+folder whose runs are in ``files.csv``. SciCat states no role, so the Runs view
+shows the runs without one until a person sets it. If the workspace has no batch
+at the start, it gets a batch of the bank histogram
+(:data:`~.specs.BANK_HISTOGRAM`), with a row per raw run. A run is read from the
+path SciCat states, such as ``/ess/raw/...``. So reducing works only where that
+path is mounted.
 """
 
 from __future__ import annotations
@@ -60,14 +63,15 @@ from ess.batch import (
     CorrectedFiles,
     FolderDefinitions,
     Intake,
+    file_sources,
     open_workspace,
+    read_workspace_header,
 )
 from ess.batch.web import Pages, create_app, plots, serve
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from ess.apps import Client
-from ess.apps.protocol import FileSource
 
 from .batch import SOURCES, STAGED
 from .bindings import BINDINGS
@@ -157,20 +161,29 @@ def main() -> None:
     parser.add_argument(
         '--scicat',
         metavar='PROFILE',
-        help="list the runs of --proposal in SciCat, such as 'staging.ess' "
-        '(needs the extra scicat)',
+        action='append',
+        default=[],
+        help="open a folder whose runs are in the SciCat of PROFILE, such as "
+        "'staging.ess' (needs the extra scicat); may be given several times",
     )
-    parser.add_argument('--proposal', help='the proposal of the runs in SciCat')
+    parser.add_argument(
+        '--no-local',
+        action='store_true',
+        help='refuse a folder whose runs are in its files.csv',
+    )
     args = parser.parse_args()
-    if (args.scicat is None) != (args.proposal is None):
-        parser.error('give --scicat and --proposal together')
+    offered = [] if args.no_local else ['local']
+    offered += [f'scicat:{profile}' for profile in args.scicat]
+    if not offered:
+        parser.error('--no-local needs --scicat')
     try:
-        source, proposal = _scicat(args)
+        allowed = file_sources(offered)
         client, files, definitions = open_workspace(
-            args.folder, BINDINGS, source=source, proposal=proposal
+            args.folder, BINDINGS, allowed=allowed
         )
     except ValueError as error:  # such as definitions of another format
         parser.exit(1, f'{error}\n')
+    local = read_workspace_header(args.folder).files == 'local'
     with client:
         app = build(
             client,
@@ -178,21 +191,9 @@ def main() -> None:
             definitions,
             folder=args.folder.resolve().name,
             interval=args.interval,
-            first='sample-runs' if source is None else 'raw-runs',
+            first='sample-runs' if local else 'raw-runs',
         )
         serve(app, port=args.port)
-
-
-def _scicat(args: argparse.Namespace) -> tuple[FileSource | None, str]:
-    """The file source and the proposal that the arguments name."""
-    if args.scicat is None:
-        return None, 'local'
-    import scitacean
-
-    from ess.apps.scicat import ScicatFiles  # needs the extra scicat
-
-    client = scitacean.Client.login(args.scicat)
-    return ScicatFiles(client, args.proposal), args.proposal
 
 
 if __name__ == '__main__':

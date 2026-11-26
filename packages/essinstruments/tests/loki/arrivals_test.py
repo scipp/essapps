@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ess.batch import open_workspace
+from ess.batch import file_sources, open_workspace
 from ess.instruments.loki.arrivals import (
     EXPERIMENT,
     Instrument,
@@ -34,7 +34,9 @@ def test_the_experiment_comes_again_with_its_samples_numbered() -> None:
 @pytest.fixture
 def page(tmp_path: Path) -> Iterator[tuple[TestClient, Instrument, Client]]:
     instrument = Instrument(tmp_path)
-    client, files, definitions = open_workspace(tmp_path, BINDINGS)
+    client, files, definitions = open_workspace(
+        tmp_path, BINDINGS, allowed=file_sources(['local'])
+    )
     with client:
         given = settings(client, instrument)
         app = build(client, files, definitions, settings=given, follow=True)

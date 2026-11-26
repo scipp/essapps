@@ -436,3 +436,15 @@ def test_arriving_files_reads_the_table_again_when_it_is_replaced(
 
     assert [files.metadata(r)['run'] for r in files.list(Selector())] == ['1', '2']
     assert files.resolve(file(run=2)) == files.list(Selector())[1]
+
+
+def test_arriving_files_lists_no_file_until_the_table_is_written(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / '1.nxs').touch()
+    files = ArrivingFiles(tmp_path)
+    before = files.list(Selector())
+
+    write_files_table(tmp_path, [{'file': '1.nxs', 'run': 1}])
+
+    assert (before, len(files.list(Selector()))) == ([], 1)

@@ -44,6 +44,7 @@ from .. import (
     FolderDefinitions,
     Intake,
     RowSource,
+    file_sources,
     open_workspace,
 )
 from ..table import KEY, cell_of
@@ -306,7 +307,7 @@ def open_demo(
     if not (directory / 'files.csv').exists():
         runs = [run for group in measurements(samples) for run in group]
         measure(directory, runs)
-    return open_workspace(directory, BINDINGS)
+    return open_workspace(directory, BINDINGS, allowed=file_sources(['local']))
 
 
 def build(

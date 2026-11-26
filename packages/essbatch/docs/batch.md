@@ -558,6 +558,48 @@ iofq.set_table(table)
 
 A cell may refer to a record that still runs. If that record failed or was cancelled, the row has the problem "the record it reads is failed". If its outputs are cleared, the problem says how to point the cell to a new result ("Clearing outputs").
 
+## Workspaces of a root folder
+
+A workspace folder states in `workspace.json` the proposal and the file source it is opened with.
+A root folder holds workspaces:
+
+```
+ROOT/
+  336349/
+    workspace.json   {"proposal": "336349", "files": "scicat:staging.ess",
+                      "title": "LoKI commissioning", "description": "..."}
+    log.jsonl  store/  definitions/
+  local-test/
+    workspace.json   {"proposal": "local", "files": "local", ...}
+    files.csv  log.jsonl  store/  definitions/
+```
+
+| `files` | The file source |
+|---|---|
+| `local` | `files.csv` of the folder, as `essbatch files` writes it; no file without one |
+| `scicat:PROFILE` | the raw datasets of the proposal in the SciCat of the scitacean profile `PROFILE` |
+
+A folder without `workspace.json` is a local workspace of the proposal `local`.
+The proposal and the file source belong to the workspace, not to a batch.
+Cells such as `run:385`, `seen_keys` and the corrections refer to files by names that only this file source resolves.
+So another proposal is another workspace.
+Several workspaces may share a proposal: the name of the folder identifies a workspace.
+
+```python
+header = WorkspaceHeader(Header('LoKI commissioning'), proposal='336349',
+                         files='scicat:staging.ess')
+create_workspace(root, '336349', header)     # ROOT/336349/workspace.json
+workspaces(root)                             # {'336349': header, ...}
+allowed = file_sources(['local', 'scicat:staging.ess'])   # logs in to staging.ess now
+client, files, definitions = open_workspace(root / '336349', BINDINGS, allowed=allowed)
+remove_workspace(root, '336349')             # deletes the folder
+```
+
+An application states the file sources it allows, and `open_workspace` raises `ValueError` for a workspace of another one.
+`essbatch` allows the file source of the folder it opens.
+A test passes its own `FileSources`, such as a fake of SciCat, and needs no network.
+The name of a workspace follows the rule of a label of a batch (`definition.check_label`).
+
 ## What is stored on disk
 
 | File | Content | Writer |
@@ -571,6 +613,7 @@ A cell may refer to a record that still runs. If that record failed or was cance
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
 | `definitions/format.json` | `{"format": 2}`: the format of the files above | `FolderDefinitions`, before its first write |
 | `store/`, the log | the records | the workspace |
+| `workspace.json` | `{"proposal": ..., "files": ..., "title": ..., "description": ...}` | `create_workspace`, `essbatch files --proposal` |
 
 `source.json` exists only for a batch made from a row source, `output_options.json` once output options are set, and `publish.json` once a result is published.
 Each file has one writer, and `FolderDefinitions` writes it whole through a temporary file.

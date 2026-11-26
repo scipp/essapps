@@ -8,6 +8,13 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from ess.batch import (
+    Header,
+    WorkspaceHeader,
+    create_workspace,
+    read_workspace_header,
+    write_workspace_header,
+)
 from ess.batch.cli import main
 
 from ess.apps.folder import folder_files
@@ -18,6 +25,18 @@ from .conftest import (
     SOURCES,
     write_rows,
 )
+
+
+@pytest.fixture
+def by_stem(folder: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A reader that gives a JSON file ``run-N.json`` the run N."""
+    (folder / 'cli_toys_by_stem.py').write_text(
+        "def read(path):\n"
+        "    if path.suffix == '.json':\n"
+        "        return {'run': path.stem.removeprefix('run-')}\n"
+    )
+    monkeypatch.syspath_prepend(folder)
+    return 'cli_toys_by_stem:read'
 
 
 @pytest.fixture
@@ -55,14 +74,8 @@ def test_main_returns_2_and_says_why_if_two_files_are_of_one_run(
 
 
 def test_main_writes_the_files_with_a_run_table_over_a_table_that_exists(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
+    folder: Path, by_stem: str
 ) -> None:
-    (folder / 'cli_toys_by_stem.py').write_text(
-        "def read(path):\n"
-        "    if path.suffix == '.json':\n"
-        "        return {'run': path.stem.removeprefix('run-')}\n"
-    )
-    monkeypatch.syspath_prepend(folder)
     runs = str(folder / 'runs.csv')
     Path(runs).write_text('run,role\n1,sample\n999,sample\n')
     out = folder / 'files.csv'
@@ -72,7 +85,7 @@ def test_main_writes_the_files_with_a_run_table_over_a_table_that_exists(
             '-w',
             str(folder),
             'files',
-            'cli_toys_by_stem:read',
+            by_stem,
             '-o',
             str(out),
             '--with',
@@ -86,20 +99,12 @@ def test_main_writes_the_files_with_a_run_table_over_a_table_that_exists(
     assert '999' not in set(files['run'])
 
 
-def test_files_replaces_the_table_of_files_at_once(
-    folder: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (folder / 'cli_toys_by_stem.py').write_text(
-        "def read(path):\n"
-        "    if path.suffix == '.json':\n"
-        "        return {'run': path.stem.removeprefix('run-')}\n"
-    )
-    monkeypatch.syspath_prepend(folder)
+def test_files_replaces_the_table_of_files_at_once(folder: Path, by_stem: str) -> None:
     out = folder / 'files.csv'
     runs = folder / 'runs.csv'
     runs.write_text('run,role\n1,sample\n')
     text = out.read_text()
-    files = ['files', 'cli_toys_by_stem:read', '-o', str(out), '--with', str(runs)]
+    files = ['files', by_stem, '-o', str(out), '--with', str(runs)]
 
     with out.open() as old:
         assert main(['-w', str(folder), *files]) == 0
@@ -133,20 +138,40 @@ def test_a_table_of_files_in_error_is_refused_before_a_command_runs(
 
 
 def test_main_writes_the_table_of_files_that_a_later_command_opens_the_folder_with(
-    folder: Path, command: list[str], cli_template: Path
+    folder: Path, command: list[str], cli_template: Path, by_stem: str
 ) -> None:
-    reader = 'def read(path):\n'
-    reader += "    if path.suffix == '.json':\n"
-    reader += "        return {'run': path.stem.removeprefix('run-')}\n"
-    (folder / 'cli_toys_read_files.py').write_text(reader)
     (folder / 'files.csv').unlink()
     table = write_rows(folder, ['1', '2'])
 
     out = str(folder / 'files.csv')
-    scanned = main(['-w', str(folder), 'files', 'cli_toys_read_files:read', '-o', out])
+    scanned = main(['-w', str(folder), 'files', by_stem, '-o', out])
     reduced = main([*command, 'reduce', str(cli_template), str(table), '-l', 'scan'])
 
     assert (scanned, reduced) == (0, 0)
+
+
+def test_files_with_a_proposal_writes_it_to_the_workspace_header(
+    folder: Path, by_stem: str
+) -> None:
+    code = main(['-w', str(folder), 'files', by_stem, '--proposal', 'p1'])
+
+    assert code == 0
+    assert read_workspace_header(folder) == WorkspaceHeader(
+        Header(folder.name), proposal='p1'
+    )
+
+
+def test_files_with_another_proposal_than_the_workspace_header_is_refused(
+    folder: Path, by_stem: str
+) -> None:
+    written = WorkspaceHeader(Header('Runs'), proposal='p1')
+    write_workspace_header(folder, written)
+
+    with pytest.raises(SystemExit) as exit_:
+        main(['-w', str(folder), 'files', by_stem, '--proposal', 'p2'])
+
+    assert exit_.value.code == 2
+    assert read_workspace_header(folder) == written
 
 
 CATALOGUE = '''
@@ -181,12 +206,14 @@ def test_main_writes_the_raw_files_of_a_proposal_in_the_catalogue_with_a_run_tab
     (tmp_path / 'runs.csv').write_text('run,role\n1,sample\n')
     folder = tmp_path / 'ws'
     folder.mkdir()
-    given = ['-w', str(folder), '-c', 'cli_toys_scicat:catalogue', '--proposal', 'p']
+    given = ['-w', str(folder), '-c', 'cli_toys_scicat:catalogue']
 
     code = main(
         [
             *given,
             'files',
+            '--proposal',
+            'p',
             '--with',
             str(tmp_path / 'runs.csv'),
             '-o',
@@ -218,3 +245,12 @@ def test_main_returns_2_without_read_unless_a_catalogue_and_proposal_are_given(
         main(['-w', str(tmp_path), *given])
 
     assert exit_.value.code == 2
+
+
+def test_a_command_opens_a_workspace_without_a_table_of_files(
+    tmp_path: Path, command: list[str]
+) -> None:
+    new = create_workspace(tmp_path, 'new', WorkspaceHeader(Header('New')))
+    *_, bind = command
+
+    assert main(['-w', str(new), '-b', bind, 'specs']) == 0

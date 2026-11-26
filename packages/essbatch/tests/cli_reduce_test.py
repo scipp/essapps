@@ -12,7 +12,9 @@ from ess.batch import (
     FolderDefinitions,
     Header,
     Range,
+    WorkspaceHeader,
     left_to_reduce,
+    write_workspace_header,
 )
 from ess.batch.cli import main
 from ess.batch.table import KEY, read_text
@@ -428,7 +430,7 @@ def test_reduce_refuses_a_label_that_is_not_one_segment_of_a_url(
     code = main([*command, 'reduce', str(cli_template), str(runs), '-l', 'auto/x'])
 
     assert code == 2
-    assert "'auto/x': a label is letters" in capsys.readouterr().err
+    assert "'auto/x': use letters" in capsys.readouterr().err
     assert FolderDefinitions(folder).labels() == []
 
 
@@ -739,7 +741,7 @@ def test_main_writes_the_results_as_the_suffix_of_the_output_says(
     assert list(read_text(out)['status']) == ['done']
 
 
-def test_main_runs_with_the_proposal_of_the_files(
+def test_main_runs_with_the_proposal_of_the_workspace_header(
     command: list[str], cli_template: Path, folder: Path
 ) -> None:
     table = folder / 'files.csv'
@@ -747,12 +749,13 @@ def test_main_runs_with_the_proposal_of_the_files(
     table.write_text(
         '\n'.join([lines[0] + ',proposal', *(f'{ln},p1' for ln in lines[1:])])
     )
+    write_workspace_header(folder, WorkspaceHeader(Header('Runs of p1'), 'p1'))
     out = folder / 'results.csv'
     runs = write_rows(folder, ['1'])
 
     reduce = ['reduce', str(cli_template), str(runs), '-l', 'x', '-o', str(out)]
 
-    code = main([*command, '--proposal', 'p1', *reduce])
+    code = main([*command, *reduce])
 
     assert code == 0
     assert list(read_text(out)['status']) == ['done']

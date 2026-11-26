@@ -2639,8 +2639,8 @@ def test_a_misspelt_column_of_a_table_file_is_a_note_and_its_setting_is_asked_fo
 @pytest.mark.parametrize(
     ('given', 'said'),
     [
-        ({'title': ''}, 'a batch has a title that is not empty'),
-        ({'title': '  '}, 'a batch has a title that is not empty'),
+        ({'title': ''}, 'give a title that is not empty'),
+        ({'title': '  '}, 'give a title that is not empty'),
         ({'source': 'other'}, 'the source other is not registered; registered: pairs'),
         ({'spec': 'other'}, 'the workspace binds no spec other'),
     ],
@@ -2833,7 +2833,7 @@ def test_a_header_the_manager_refuses_answers_422_and_changes_nothing(
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
-        'The batch was not changed: a batch has a title that is not empty.'
+        'The batch was not changed: give a title that is not empty.'
     )
     assert manager.headers() == before
 

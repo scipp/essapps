@@ -4,7 +4,7 @@
 LoKI's catalogues for the option ``-c`` of ``essbatch``. It needs the extra
 ``scicat``::
 
-    essbatch -c ess.instruments.loki.scicat:staging --proposal 336349 files
+    essbatch -c ess.instruments.loki.scicat:staging files --proposal 336349
 
 Each catalogue logs in to SciCat by single sign-on, once per command. The login
 opens a browser on this machine. With ``SCITACEAN_OAUTH_FLOW=device``, it prints

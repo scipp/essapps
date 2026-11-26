@@ -203,7 +203,8 @@ class ArrivingFiles:
     The file source of ``files.csv`` in ``directory``, read again when the file changes.
 
     A file added while a client is open is found. Write ``files.csv`` with
-    :func:`write_files_table`, so that no read sees half of it.
+    :func:`write_files_table`, so that no read sees half of it. Without
+    ``files.csv``, it lists no file.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -213,7 +214,10 @@ class ArrivingFiles:
         self._files: FolderFiles | None = None
 
     def _current(self) -> FolderFiles:
-        stat = (self._directory / 'files.csv').stat()
+        try:
+            stat = (self._directory / 'files.csv').stat()
+        except FileNotFoundError:
+            return FolderFiles(self._directory, [], root=self._directory)
         stamp = (stat.st_ino, stat.st_mtime_ns)
         with self._lock:
             if self._files is None or stamp != self._stamp:
