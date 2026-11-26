@@ -24,7 +24,7 @@ import pandas as pd
 from ess.apps import writers
 from ess.apps.client import Client
 from ess.apps.records import Record, Status
-from ess.apps.writers import SCIPP_HDF5, About, Writer
+from ess.apps.writers import SCIPP_HDF5, DatasetMetadata, Writer
 
 type RowWriter = Callable[[str, Record, Path], None]
 """Writes the result of the row of a key, its record, into a new folder."""
@@ -40,7 +40,7 @@ def by_writer(client: Client, writer: Writer = SCIPP_HDF5) -> RowWriter:
         client,
         record,
         writer,
-        About(name=key),
+        DatasetMetadata(name=key),
         directory,
         client.readable([record])[0],
     )

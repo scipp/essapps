@@ -20,8 +20,8 @@ the workspace::
     used_software       the Python packages installed now (installed_software)
     scientific_metadata the spec, the request and the record's ID
 
-A person gives the rest as :class:`~ess.apps.writers.About`. :class:`Catalogue`
-says where to publish: a ``scitacean.Client``, real or
+A person gives the rest as :class:`~ess.apps.writers.DatasetMetadata`.
+:class:`Catalogue` says where to publish: a ``scitacean.Client``, real or
 ``scitacean.testing.client.FakeClient``, with its file transfer. Whether the
 files are copied on a shared file system or sent over SFTP is the choice of
 that transfer, not of this module.
@@ -59,7 +59,7 @@ from ess.spec import FileRef
 from .client import Client
 from .files import Selector
 from .records import Record
-from .writers import About, Person
+from .writers import DatasetMetadata, Person
 
 _PID_PREFIX = 'pid:'
 
@@ -123,7 +123,7 @@ def publish(
     client: Client,
     record: Record,
     files: Sequence[Path],
-    about: About,
+    metadata: DatasetMetadata,
     format: str,
 ) -> str:
     """
@@ -141,11 +141,11 @@ def publish(
     inputs = [i.removeprefix(_PID_PREFIX) for i in identities if _is_pid(i)]
     dataset = Dataset(
         type='derived',
-        name=about.name,
-        description=about.description or None,
-        keywords=list(about.keywords),
-        owner=about.owner,
-        contact_email=about.contact_email,
+        name=metadata.name,
+        description=metadata.description or None,
+        keywords=list(metadata.keywords),
+        owner=metadata.owner,
+        contact_email=metadata.contact_email,
         owner_group=record.proposal,
         proposal_ids=[record.proposal],
         instrument_ids=[catalogue.instrument],

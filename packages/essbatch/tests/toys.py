@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ess.apps import Client
 from ess.apps.testing import FakeFiles
-from ess.apps.writers import About, Writer
+from ess.apps.writers import DatasetMetadata, Writer
 from ess.spec import FileRef, Referenced, RunFile, WorkflowSpec
 
 
@@ -78,8 +78,10 @@ STAGED = WorkflowSpec(
 )
 
 
-def _text(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
-    (directory / 'total.txt').write_text(f'{about.name}: {outputs["total"]}')
+def _text(
+    outputs: Mapping[str, Any], metadata: DatasetMetadata, directory: Path
+) -> None:
+    (directory / 'total.txt').write_text(f'{metadata.name}: {outputs["total"]}')
 
 
 TEXT = Writer(

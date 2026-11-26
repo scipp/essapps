@@ -31,7 +31,7 @@ from pathlib import Path
 from ess.apps.errors import error_text
 from ess.apps.records import Record
 from ess.apps.scicat import Catalogue, publish
-from ess.apps.writers import About
+from ess.apps.writers import DatasetMetadata
 
 from .definition import PUBLISH, NotKept, Published, Publishing, published
 from .export import RowWriter
@@ -66,7 +66,7 @@ class Publisher:
         If an upload fails, raises :class:`UploadFailed` that names the rows
         published before it, which are kept.
         """
-        write, abouts = self.writing.by_form(label)
+        write, metadata = self.writing.by_form(label)
         form = self.writing.form(label)
         records = self._results(label, keys)
         if missing := form.lacking:
@@ -75,7 +75,7 @@ class Publisher:
         for key, record in records.items():
             try:
                 pids[key] = self._publish(
-                    label, key, record, write, abouts[key], form.format
+                    label, key, record, write, metadata[key], form.format
                 )
             except NotKept:  # noqa: PERF203
                 raise
@@ -113,7 +113,7 @@ class Publisher:
         key: str,
         record: Record,
         write: RowWriter,
-        about: About,
+        metadata: DatasetMetadata,
         format: str,
     ) -> str:
         """Upload one result and keep that it was; its catalogue identifier."""
@@ -122,7 +122,7 @@ class Publisher:
             written = Path(folder) / key
             write(key, record, written)
             files = sorted(written.iterdir())
-            pid = publish(self.catalogue, client, record, files, about, format)
+            pid = publish(self.catalogue, client, record, files, metadata, format)
         kept = self._kept(label)
         upload = Published(key=key, record=record.id, pid=pid)
         try:

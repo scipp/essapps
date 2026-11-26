@@ -227,7 +227,7 @@ It says how the result of each row is written, and what is said of it:
 | Format | one of the writers that the application gives for the spec of the batch (`Pages(..., writers=writers)`), first the default, then `scipp HDF5`, which every spec has; the select shows each writer's title, with its description under it, and the form keeps its name |
 | Outputs | the outputs to write, for a format that writes those chosen (`Writer.outputs is None`); hidden for a format that reads outputs of its own, such as NXcanSAS |
 | Name | the pattern of the name of each result: `{title}` the batch's title, `{name}` the row's name, `{key}` its key |
-| Description, keywords, owner, contact email | what is said of each result (`ess.apps.writers.About`) |
+| Description, keywords, owner, contact email | what is said of each result (`ess.apps.writers.DatasetMetadata`) |
 
 Until a person applies the form, its format is the first of the formats, it names every output, its description is the batch's, and its owner and contact email are none, or, for an application given a catalogue, the principal investigator of the proposal, as the catalogue says (`ess.apps.scicat.principal_investigator`), asked once at the start: the ESS ingestor makes the same person owner and contact of each raw dataset.
 A kept form whose format the application lacks, such as one kept by `essbatch form` with other writers, writes nothing: the format shows none picked, the bar says why (`OutputShown.problem`), and the downloads and **Publish** wait until a person picks a format and applies it.

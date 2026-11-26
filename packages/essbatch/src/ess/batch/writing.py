@@ -10,7 +10,7 @@ files.
 The form picks a writer by the name of its format, among those the application gives for
 the spec of the batch and :data:`~ess.apps.writers.SCIPP_HDF5`, which every
 spec has, and names what a person says of the results
-(:class:`~ess.apps.writers.About`). A batch keeps its form in the entry
+(:class:`~ess.apps.writers.DatasetMetadata`). A batch keeps its form in the entry
 ``form`` of the definitions, which only :class:`Writing` writes::
 
     {'format': 'nxcansas', 'outputs': ['iofq'], 'name': '{title} {name}',
@@ -37,7 +37,7 @@ from pydantic import ValidationError
 from ess.apps import writers
 from ess.apps.errors import error_text
 from ess.apps.records import Record
-from ess.apps.writers import SCIPP_HDF5, About, Person, Writer
+from ess.apps.writers import SCIPP_HDF5, DatasetMetadata, Person, Writer
 
 from .definition import FORM, Form
 from .export import RowWriter
@@ -127,7 +127,7 @@ class Writing:
             raise ValueError(f'{writer.title} writes the outputs chosen: choose one')
         FORM.save(self.manager.definitions, label, form)
 
-    def by_form(self, label: str) -> tuple[RowWriter, dict[str, About]]:
+    def by_form(self, label: str) -> tuple[RowWriter, dict[str, DatasetMetadata]]:
         """
         What writes the result of a row of ``label`` into a folder, as the
         form says (:func:`ess.apps.writers.write`), and what the form says of
@@ -137,13 +137,15 @@ class Writing:
         """
         form = self.form(label)
         writer = self._writer(label, form.format)
-        abouts = self._abouts(label, form)
+        metadata = self._metadata(label, form)
         client = self.manager.client
 
         def write(key: str, record: Record, directory: Path) -> None:
-            writers.write(client, record, writer, abouts[key], directory, form.outputs)
+            writers.write(
+                client, record, writer, metadata[key], directory, form.outputs
+            )
 
-        return write, abouts
+        return write, metadata
 
     def form_text(self, label: str) -> str:
         """
@@ -163,12 +165,12 @@ class Writing:
             + yaml.safe_dump(fields, sort_keys=False, allow_unicode=True)
         )
 
-    def _abouts(self, label: str, form: Form) -> dict[str, About]:
+    def _metadata(self, label: str, form: Form) -> dict[str, DatasetMetadata]:
         """What ``form`` says of the result of each row of ``label``, by key."""
         batch = self.manager.batch(label)
         title = self.manager.headers()[label].title
         return {
-            key: About(
+            key: DatasetMetadata(
                 name=form.name.format(title=title, name=name, key=key),
                 owner=form.owner,
                 contact_email=form.contact_email,

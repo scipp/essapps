@@ -5,7 +5,7 @@ Writers of the outputs of a record to files. It needs scipp and h5py.
 
 A :class:`Writer` writes the files of one format, such as NXcanSAS, from the
 outputs of one completed record and what a person says of them,
-:class:`About`. :func:`write` writes a record into a new folder with a writer,
+:class:`DatasetMetadata`. :func:`write` writes a record into a new folder with a writer,
 and next to the writer's files the record itself, ``_record.json``, which names
 the values the outputs were computed from::
 
@@ -41,7 +41,7 @@ RECORD_FILE = '_record.json'
 """The file of the record in the folder of a record; no output is named so."""
 
 
-class About(BaseModel, frozen=True):
+class DatasetMetadata(BaseModel, frozen=True):
     """
     What a person says of the data of one record. A format such as ORSO holds
     it in the file, and the catalogue holds it with a dataset.
@@ -90,10 +90,12 @@ class Writer:
     title: str
     description: str
     outputs: tuple[str, ...] | None
-    write: Callable[[Mapping[str, Any], About, Path], None]
+    write: Callable[[Mapping[str, Any], DatasetMetadata, Path], None]
 
 
-def _write_hdf5(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
+def _write_hdf5(
+    outputs: Mapping[str, Any], metadata: DatasetMetadata, directory: Path
+) -> None:
     for name, value in outputs.items():
         hdf5.write(value, directory / f'{name}.h5')
 
@@ -111,7 +113,7 @@ def write(
     client: Client,
     record: Record,
     writer: Writer,
-    about: About,
+    metadata: DatasetMetadata,
     directory: Path,
     chosen: Sequence[str] = (),
 ) -> None:
@@ -128,4 +130,4 @@ def write(
     outputs = {name: client.output(record, name) for name in names}
     directory.mkdir(parents=True)
     (directory / RECORD_FILE).write_text(record.model_dump_json(indent=2))
-    writer.write(outputs, about, directory)
+    writer.write(outputs, metadata, directory)
