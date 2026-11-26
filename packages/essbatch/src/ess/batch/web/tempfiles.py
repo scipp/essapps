@@ -25,8 +25,9 @@ def named_file(name: str, content: bytes | None = None) -> Iterator[Path]:
 def read_file[T](name: str, content: bytes, read: Callable[[Path], T]) -> T:
     """
     What ``read`` returns for the file ``name`` with ``content``, which a
-    person uploaded. Raises ``ValueError`` for an empty file and for what
-    ``read`` raises, with ``name`` in place of the temporary path.
+    person uploaded. Raises ``ValueError`` for an empty file, and for an
+    ``OSError``, ``ValueError`` or ``KeyError`` of ``read``, with ``name`` in
+    place of the temporary path.
     """
     if not content:
         raise ValueError('the file is empty')

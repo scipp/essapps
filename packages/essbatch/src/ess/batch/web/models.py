@@ -159,8 +159,9 @@ class SubmitProblem(BaseModel):
     """
     Why a reduction was rejected, at a cell or a setting.
 
-    The page shows it until that value changes. ``message`` is the reason
-    alone. ``text`` adds the name of the row and the title of the field.
+    The page shows it until that value changes or a reduction succeeds. Apply
+    drops those at a setting. ``message`` is the reason alone. ``text`` adds
+    the name of the row and the title of the field.
     """
 
     request_key: str | None
@@ -216,8 +217,8 @@ class OutputShown(BaseModel):
     """
     The tab "Output". ``catalogue`` is true if the page can publish.
 
-    ``problem`` is why the ``options`` write nothing, such as a format that is
-    not among ``formats``. ``unpublishable`` is what the options lack to
+    ``problem`` is why the ``options`` write nothing: their format is not
+    among ``formats``. ``unpublishable`` is what the options lack to
     publish (:attr:`~ess.batch.definition.OutputOptions.lacking`).
     """
 
@@ -270,8 +271,10 @@ class State(BaseModel):
 
 class RowDetail(BaseModel):
     """
-    The settings that a row's result was reduced with, and ``differs``, the
-    names of those that differ from the current settings.
+    The parameters that a row's result was reduced with, and ``differs``, the
+    names of those that differ from what the row would be reduced with now.
+    ``reduced_with`` is ``None`` if the row has no result, or one of another
+    version of the workflow.
     """
 
     key: str
@@ -428,7 +431,8 @@ class NewBatch(BaseModel):
 
     With a ``source``, ``first``, ``last`` and ``later`` choose its rows
     among the complete rows of the source (:class:`~ess.batch.Range`).
-    ``parameter_columns`` include the columns that the source fills.
+    The columns that the source fills are columns whether or not
+    ``parameter_columns`` lists them.
     The batch starts with the settings of the batch ``settings_from``, else
     with the application's settings for ``spec``. With ``follow``, the new
     batch follows its source in place of the batch that followed before.

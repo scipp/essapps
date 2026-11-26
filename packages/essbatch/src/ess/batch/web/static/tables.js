@@ -159,8 +159,8 @@ const editorOf = (column, options, say) =>
     ? {editor: cellEditor(column, options, say)}
     : {editable: false};
 
-// With `revert`, a cell set by hand gets a button that restores its earlier
-// value.
+// With `revert`, a cell set by hand gets a button that restores its
+// `original` value.
 function cellFormatter(column, revert) {
   return (cell) => {
     const data = cell.getData();

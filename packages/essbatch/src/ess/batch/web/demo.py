@@ -320,9 +320,9 @@ def build(
 ) -> FastAPI:
     """
     The application on what :func:`open_demo` returns, with "Publish" if
-    given a ``catalogue``. If the workspace has no batch, it creates a batch of
-    all samples with a column of thickness, also after a person removed the
-    last batch.
+    given a ``catalogue``. If the workspace has no batch, such as after a
+    person removed the last one, it creates a batch of the samples with a
+    transmission run, with a column of thickness.
     """
     intake = Intake(
         BatchManager(client, definitions=definitions, staged=STAGED), sources=SOURCES

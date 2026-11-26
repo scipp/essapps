@@ -72,7 +72,7 @@ def listed(given: pd.DataFrame, source_columns: Collection[str]) -> SourceRows:
     The rows of a row source, as a dialog lists them.
 
     ``given`` has a column ``incomplete`` and may have a column ``taken``.
-    Every other column except ``source_columns`` is a note.
+    Every other column except ``NAME`` and ``source_columns`` is a note.
     """
     named = row_names(given, ())
     marks = {'incomplete', 'taken'}

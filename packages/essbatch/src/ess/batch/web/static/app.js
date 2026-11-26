@@ -327,7 +327,7 @@ function build(state) {
 function downloadResults(rows, name) {
   const done = rows.filter((row) => row.result);
   const old = done.filter((row) => row.result === 'outdated').length;
-  const question = `${old} of the ${done.length} results are outdated: the settings or their cells changed since. Download them anyway?`;
+  const question = `${old} of the ${done.length} results are outdated: they may not match the settings, the cells or the workflow now. Download them anyway?`;
   if (old && !confirm(question)) return;
   download('results.zip', name, {keys: done.map((row) => row.key)});
 }
@@ -438,7 +438,7 @@ function showBatches(listed) {
 // batch for a count, and the pages and Follow wait meanwhile. The Runs view
 // counts too and does not wait for a change of the runs, since Follow adds
 // rows that refer to runs without changing them. A failed count shows no
-// counts, and the Runs view keeps the batches of the last count. A page that
+// counts, and the Runs view still shows the batches of the last count. A page that
 // shows no batch also loads the list with each count. Nothing counts while
 // the browser tab is hidden.
 let counting = false; // whether a count is on its way
@@ -1074,8 +1074,8 @@ const publishedColumn = {
 
 // The tab "Output": the options by which results are downloaded and, with a
 // catalogue, published. The form holds changes until Apply, as the settings
-// form does, but in the browser: one page of a batch serves every person, so
-// a draft on the server would be shared. New options from the server refill
+// form does, but in the browser: the server holds one page per batch for
+// every browser, so a draft on the server would be shared. New options from the server refill
 // the inputs only if they hold no change, so that typed values stay.
 function renderOutput(state) {
   $('publishing').hidden = !state.output.catalogue;

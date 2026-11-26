@@ -80,7 +80,7 @@ class Runs:
     The files that the client lists, for the pickers (:attr:`listing`) and the
     Runs view (:meth:`shown`) of every page.
 
-    Each public method takes ``lock``. A property reads one value without it.
+    Each public method holds ``lock``. A property reads one value without it.
 
     Parameters
     ----------
