@@ -18,24 +18,27 @@ apart::
 :func:`fits` says whether data of one type can be the value of a field of
 another, so that an output of one spec can fill a parameter of another.
 
-The request type, and so the params schema of a spec and the Panel form,
-decide what a request writes at a field from its type, with these
-functions (see :mod:`ess.spec.request_types`)::
+What a request writes at a field follows from the field's type, read by
+:func:`shape` as the table of field types in
+``packages/essspec/docs/params.md`` gives it. The request type, and so the
+params schema of a spec (see :mod:`ess.spec.request_types`), the fields of a
+form, and the templates and tables of essbatch branch on its result::
 
-    # The type without | None, whether it is X | None, and its metadata.
-    tp, none, metadata = unwrapped(info.annotation, field_metadata(info))
-    # The part that a request writes, with its metadata, and the groups
-    # whose data a reference fills the field with, each T of Referenced[T].
-    inline, inline_metadata, referenced = split(tp, *metadata)
-    # A union of groups: show the fields of each alternative. None for any
-    # other type.
-    alternatives(inline, *inline_metadata)  # ('kind', {'given': ..., ...})
-    # The type of a file field, Annotated[Path, File(...)]: offer a picker
-    # of the files by the marker's metadata. None for any other type.
-    file_marker(inline, *inline_metadata)  # File(kind='mask')
-    # Groups that a reference fills the field with: offer a picker of
-    # records.
-    referenced  # (ComputedBeamCentre,)
+    field = shape(info.annotation, field_metadata(info))
+    field.none        # whether it is X | None
+    field.inline      # what a request writes inline, if anything:
+                      # Scalar(float), Group(Reduction), FileKind(File(kind='mask')),
+                      # Choice('kind', {'given': GivenCentre, 'find': FindCentre}),
+                      # List(SampleRunFile)
+    field.referenced  # the groups a reference fills the field with, each T
+                      # of Referenced[T]: (ComputedBeamCentre,)
+
+:func:`unwrapped`, :func:`split`, :func:`alternatives`, and
+:func:`file_marker` are the steps of :func:`shape`. The checks of a spec
+(:class:`~ess.spec.WorkflowSpec`) take a type apart with them, since they
+check the rules that :func:`shape` takes for granted, and so does the walk
+that places an error inside a value
+(:func:`ess.spec._param_errors.value_position`).
 
 :func:`field_metadata` gives the metadata of a field with its
 discriminator, and :func:`title` the label of a field.
@@ -215,10 +218,12 @@ def file_of(info: FieldInfo) -> File | None:
     The marker of the field with ``info``, if it is a file field, typed
     ``X`` or ``X | None``, or a list of one; ``None`` otherwise.
     """
-    tp, _, metadata = unwrapped(info.annotation, field_metadata(info))
-    if get_origin(tp) is list:
-        tp, _, metadata = unwrapped(get_args(tp)[0])
-    return file_marker(tp, *metadata)
+    field = shape(info.annotation, field_metadata(info))
+    if isinstance(field.inline, List):
+        field = shape(field.inline.element)
+    if isinstance(field.inline, FileKind) and not field.referenced:
+        return field.inline.marker
+    return None
 
 
 def is_scalar(tp: Any) -> bool:
@@ -562,6 +567,90 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
 def _tags(annotation: Any) -> tuple[Any, ...]:
     """The values of ``annotation`` if it is a ``Literal``, else none."""
     return get_args(annotation) if get_origin(annotation) is Literal else ()
+
+
+@dataclasses.dataclass(frozen=True)
+class Scalar:
+    """A value written as its JSON value, of ``type`` (see :func:`shape`)."""
+
+    type: Any
+
+
+@dataclasses.dataclass(frozen=True)
+class Group:
+    """A group, written as an object of its fields."""
+
+    type: type[BaseModel]
+
+
+@dataclasses.dataclass(frozen=True)
+class Choice:
+    """A union of groups: the alternatives by the value of the tag field ``tag``."""
+
+    tag: str
+    groups: dict[str, Any]
+
+
+@dataclasses.dataclass(frozen=True)
+class FileKind:
+    """A file field, ``Annotated[Path, File(...)]``, with its ``marker``."""
+
+    marker: File
+
+
+@dataclasses.dataclass(frozen=True)
+class List:
+    """``list[X]``, with ``element`` ``X``, a type to shape in turn."""
+
+    element: Any
+
+
+@dataclasses.dataclass(frozen=True)
+class FieldShape:
+    """
+    What a request writes at a field: what it writes ``inline``, if anything,
+    or a reference to an output whose data fit one of ``referenced``, each
+    ``T`` of ``Referenced[T]``; or ``None`` if ``none``. A :class:`List` has
+    no ``referenced``. ``metadata`` are those of the part written inline::
+
+        shape(float | None)
+        # FieldShape(none=True, inline=Scalar(float), referenced=(), metadata=())
+        shape(BeamCentre | Referenced[BeamCentre])
+        # FieldShape(inline=Group(BeamCentre), referenced=(BeamCentre,), ...)
+        shape(Referenced[PixelMask])
+        # FieldShape(inline=None, referenced=(PixelMask,), ...)
+        shape(Annotated[list[SampleRunFile], MinLen(1)])
+        # FieldShape(inline=List(SampleRunFile), metadata=(MinLen(1),), ...)
+    """
+
+    none: bool
+    inline: Scalar | Group | Choice | FileKind | List | None
+    referenced: tuple[Any, ...]
+    metadata: tuple[Any, ...]
+
+
+def shape(annotation: Any, metadata: tuple[Any, ...] = ()) -> FieldShape:
+    """
+    The shape of a field typed ``annotation``, with ``metadata`` (see
+    :func:`field_metadata`), a type that the checks of a spec accept. Of a type
+    they refuse, it raises ``ValueError`` for a union of groups that breaks a
+    rule (see :func:`alternatives`), and gives :class:`Scalar` for a type of
+    no other kind.
+    """
+    tp, none, metadata = unwrapped(annotation, metadata)
+    if REFERENCED not in metadata and get_origin(tp) is list:
+        return FieldShape(none, List(get_args(tp)[0]), (), metadata)
+    inline, inline_metadata, referenced = split(tp, *metadata)
+    written: Scalar | Group | Choice | FileKind | None = None
+    if (union := alternatives(inline, *inline_metadata)) is not None:
+        written = Choice(*union)
+    elif (marker := file_marker(inline, *inline_metadata)) is not None:
+        written = FileKind(marker)
+    elif is_group(inline):
+        written = Group(inline)
+    elif inline is not None:
+        written = Scalar(inline)
+    return FieldShape(none, written, referenced, inline_metadata)
 
 
 def tagged_members(tp: Any, metadata: tuple[Any, ...]) -> dict[Any, Any] | None:

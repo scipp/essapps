@@ -55,6 +55,7 @@ from pydantic_core import to_jsonable_python
 from ess.apps.client import Client
 from ess.apps.records import SpecId, Template
 from ess.spec import File, WorkflowSpec, field_types
+from ess.spec.field_types import Choice, FileKind, Group, List, Scalar
 
 from .definition import template_data, template_of
 from .reduction import Batch
@@ -288,31 +289,26 @@ def _takes(
     field of a group, whose file is written in its JSON form. The type is read
     as the fields of a form read it (:mod:`ess.apps.fields`).
     """
-    tp, none, metadata = field_types.unwrapped(annotation, metadata)
+    field = field_types.shape(annotation, metadata)
     ways: list[str] = []
     groups: _Groups = []
-    if get_origin(tp) is list:
-        (element,) = get_args(tp)
-        each, groups = _takes(element, (), bound, top=top)
-        ways.append(f'a list, each {each}')
-    else:
-        inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-        union = field_types.alternatives(inline, *inline_metadata)
-        marker = field_types.file_marker(inline, *inline_metadata)
-        if union is not None:
-            tag, alternatives = union
+    match field.inline:
+        case List(element):
+            each, groups = _takes(element, (), bound, top=top)
+            ways.append(f'a list, each {each}')
+        case Choice(tag, alternatives):
             ways.append(f'a group of one of the kinds below, chosen by its field {tag}')
             groups = [((tag, value), g) for value, g in alternatives.items()]
-        elif marker is not None:
+        case FileKind(marker):
             ways.append(_file(marker, top=top))
-        elif field_types.is_group(inline):
+        case Group(group):
             ways.append('a group of the fields below')
-            groups = [(None, inline)]
-        elif inline is not None:
-            ways.append(_scalar(inline))
-        if referenced:
-            ways.append(_output(Union[referenced], bound))  # noqa: UP007
-    if none:
+            groups = [(None, group)]
+        case Scalar(tp):
+            ways.append(_scalar(tp))
+    if referenced := field.referenced:
+        ways.append(_output(Union[referenced], bound))  # noqa: UP007
+    if field.none:
         ways.append('null for none')
     return ', or '.join(ways), groups
 

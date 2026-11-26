@@ -50,13 +50,14 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from numbers import Integral, Real
-from typing import Any, Literal, Union, get_args, get_origin
+from typing import Any, Literal, Union, get_args
 
 from pydantic import AwareDatetime, BaseModel
 from pydantic.fields import FieldInfo
 from pydantic_core import to_json, to_jsonable_python
 
 from ess.spec import File, FileRef, OutputRef, field_types
+from ess.spec.field_types import Choice, FieldShape, FileKind, Group, List, Scalar
 from ess.spec.refs import Loc, as_ref
 
 from .errors import FieldError, SubmitError
@@ -160,8 +161,7 @@ def _make_field(name: str, info: FieldInfo, listing: Listing) -> Field:
     """The field ``name`` with ``info``, of a group or of the params."""
     return _make(
         field_types.title(name, info),
-        info.annotation,
-        field_types.field_metadata(info),
+        field_types.shape(info.annotation, field_types.field_metadata(info)),
         UNSET if info.is_required() else info.get_default(call_default_factory=True),
         listing,
         info.description,
@@ -170,18 +170,16 @@ def _make_field(name: str, info: FieldInfo, listing: Listing) -> Field:
 
 def _make(
     label: str,
-    annotation: Any,
-    metadata: tuple[Any, ...],
+    field: FieldShape,
     default: Any,
     listing: Listing,
     description: str | None = None,
 ) -> Field:
     """
-    The field of a value of type ``annotation`` with ``metadata`` (see
-    :func:`ess.spec.field_types.field_metadata`), at any depth.
+    The field of a value of the shape ``field``, at any depth.
 
-    The type is read with :func:`ess.spec.field_types.split`, as the sources of its
-    request type are (:func:`ess.spec.request_types.sources`). A scalar is an input
+    The shape is read as the sources of the request type are
+    (:func:`ess.spec.request_types.sources`). A scalar is an input
     of its type, and a file field a picker of the files to offer. Anything with
     more than one way to give the value is a :class:`ChoiceField`: the alternatives
     of a union of groups, a group (one way, ``Given``, whose selector is hidden), a
@@ -189,37 +187,36 @@ def _make(
     (``Given``, ``A file``), ``From a record``, and ``None``. A list of scalars is
     :class:`ScalarsField`, and any other list :class:`RowsField`.
     """
-    tp, none, metadata = field_types.unwrapped(annotation, metadata)
-    if get_origin(tp) is list:
-        (element,) = get_args(tp)
-        if field_types.is_scalar(item := field_types.plain(element)):
+    inline, referenced = field.inline, field.referenced
+    match inline:
+        case List(element) if field_types.is_scalar(item := field_types.plain(element)):
             return ScalarsField(label, item, default, description)
-        return RowsField(element, default, listing)
-    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-    union = field_types.alternatives(inline, *inline_metadata)
-    marker = field_types.file_marker(inline, *inline_metadata)
-    if not (none or referenced or union):
-        if marker is not None:
-            return FileField(marker, listing, label)
-        if not field_types.is_group(inline):
-            return ScalarField(label, inline, default, description)
+        case List(element):
+            return RowsField(element, default, listing)
+    if not (field.none or referenced):
+        match inline:
+            case FileKind(marker):
+                return FileField(marker, listing, label)
+            case Scalar(tp):
+                return ScalarField(label, tp, default, description)
     ways: dict[str, Field] = {}
-    if union is not None:
-        tag, groups = union
-        for value, group in groups.items():
-            way = field_types.title(value, group.model_fields[tag])
-            ways[way] = GroupField(group, {tag: value}, listing)
-    elif marker is not None:
-        ways[ChoiceField.FILE] = FileField(marker, listing)
-    elif field_types.is_group(inline):
-        ways[ChoiceField.GIVEN] = GroupField(inline, {}, listing)
-    elif inline is not None:
-        ways[ChoiceField.GIVEN] = ScalarField(label, inline, UNSET, description)
+    match inline:
+        case Choice(tag, groups):
+            for value, group in groups.items():
+                way = field_types.title(value, group.model_fields[tag])
+                ways[way] = GroupField(group, {tag: value}, listing)
+        case FileKind(marker):
+            ways[ChoiceField.FILE] = FileField(marker, listing)
+        case Group(group):
+            ways[ChoiceField.GIVEN] = GroupField(group, {}, listing)
+        case Scalar(tp):
+            ways[ChoiceField.GIVEN] = ScalarField(label, tp, UNSET, description)
     if referenced:
         ways[ChoiceField.RECORD] = RecordField(Union[referenced], listing)  # noqa: UP007
-    if none:
+    if field.none:
         ways[ChoiceField.NONE] = NothingField()
-    return ChoiceField(ways, None if union is None else union[0], default)
+    tag = inline.tag if isinstance(inline, Choice) else None
+    return ChoiceField(ways, tag, default)
 
 
 class FileField(Input):
@@ -621,20 +618,24 @@ class RowsField(Field):
         # What the editor held as it showed the selection, which differs from
         # the row if the editor cannot show it whole.
         self._shown: tuple[Any, Missing] = (UNSET, [])
-        tp, _, metadata = field_types.unwrapped(element)
-        inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-        self._marker = field_types.file_marker(inline, *inline_metadata)
+        row = field_types.shape(element)
+        self._marker: File | None = None
         # The tag field of a union, and the title of each alternative by tag.
         self._tag: str | None = None
         self._titles: dict[str, str] = {}
-        groups = [] if inline is None or self._marker is not None else [inline]
-        if (union := field_types.alternatives(inline, *inline_metadata)) is not None:
-            self._tag, alternatives = union
-            self._titles = {
-                value: field_types.title(value, group.model_fields[self._tag])
-                for value, group in alternatives.items()
-            }
-            groups = list(alternatives.values())
+        groups: list[type[BaseModel]] = []
+        match row.inline:
+            case FileKind(marker):
+                self._marker = marker
+            case Group(group):
+                groups = [group]
+            case Choice(tag, alternatives):
+                self._tag = tag
+                self._titles = {
+                    value: field_types.title(value, group.model_fields[tag])
+                    for value, group in alternatives.items()
+                }
+                groups = list(alternatives.values())
         # The title of each field, of every alternative, and its marker if a
         # file field.
         self._fields: dict[str, tuple[str, File | None]] = {}
@@ -649,9 +650,9 @@ class RowsField(Field):
         self._refs: dict[str, type[FileRef | OutputRef]] = {}
         if self._marker is not None:
             self._refs['File'] = FileRef
-        if referenced:
+        if row.referenced:
             self._refs['Record'] = OutputRef
-        self.editor = _make('', element, (), UNSET, listing)
+        self.editor = _make('', row, UNSET, listing)
         self.editor.subscribe(self._editor_changed)
         self._loading = False
         self.set(UNSET)
