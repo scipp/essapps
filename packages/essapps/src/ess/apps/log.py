@@ -125,7 +125,7 @@ class Opened(BaseModel, frozen=True, extra='forbid'):
     ``template`` holds the values as the client gave them, with file names
     resolved. The client gets this template back, as it does a stage's.
     ``params`` holds the fixed values with defaults filled in and inline values
-    in JSON's types, and each blank table without rows. The driver was made
+    in JSON's types, and each blank table without rows. The driver is made
     from the fixed values. With the rows pushed, ``params`` makes the plain
     request of a state.
     """
@@ -285,7 +285,7 @@ class Log:
         return _events(path, _complete_lines(path.read_bytes()))
 
     def close(self) -> None:
-        """Closes the file, if any. The log accepts no more events."""
+        """Closes the file, if any, which releases its lock."""
         if self._file is not None:
             self._file.close()
 
