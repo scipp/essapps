@@ -3,7 +3,7 @@
 """
 The specs of LoKI's reductions.
 
-A reduction is a chain of records, each of which a person may look at before the
+A reduction is a chain of records. A person may inspect each before submitting the
 next::
 
     detector = client.submit(CALIBRATED_DETECTOR, params={'run': file(run=60339)})
@@ -14,16 +14,18 @@ next::
     iofq = client.submit(IOFQ, params={'masks': masks.ref('masks'),
                                        'beam_centre': centre.ref('centre'), ...})
 
-The detector is loaded once. The specs that read it take it by reference and return
-only their small outputs, so that the request of such a record names the detector its
-outputs were computed from, and a plot finds the detector there. They take no file of
-the run, which could differ from the detector, so the detector holds all they need.
+The detector is loaded once. The specs that read it accept it by reference and
+return only small outputs. So the request of such a record refers to the detector
+its outputs come from, and a plot finds the detector there. These specs accept no
+run file, which could differ from the detector. The detector holds all they need.
 
-The specs are separate where a value can outlive one sample: the masks hold for an
-experiment, and one beam centre can serve the samples of a sample changer, though a
-more invasive change of sample needs its own. I(Q) takes the masks
-as computed, not their files, so that the can's branch of its graph does not
-depend on the sample, and a stage with the sample blank reduces the can once.
+A value that can serve several samples has a spec of its own. The masks hold for an
+experiment. One beam centre can serve the samples of a sample changer, while a more
+invasive change of sample needs its own.
+
+I(Q) accepts the masks as computed, not their files. So the can's branch of its
+graph does not depend on the sample, and a stage with the sample blank reduces the
+can once.
 """
 
 from pathlib import Path
@@ -46,7 +48,7 @@ from ess.spec import (
 from ess.spec.parameters import QEdges, WavelengthEdges
 
 DirectBeamFile = Annotated[Path, File(kind='calibration', role='direct_beam')]
-"""Types a file field that a direct-beam function fills."""
+"""The type of a file field for a direct-beam function."""
 
 
 class PixelMasks(BaseModel, arbitrary_types_allowed=True):
@@ -60,9 +62,9 @@ class DetectorImage(BaseModel, arbitrary_types_allowed=True):
     The counts per pixel of one run, with each pixel's ``position`` and
     ``detector_number``, and the ``sample_position`` and ``source_position`` of the run.
 
-    The positions are those of the file, not corrected by a beam centre. With the
-    sample at the origin, as in the files of the detector test at Larmor, a beam
-    centre found from this run marks its place on the image as it is.
+    The positions are those in the file, without beam-centre correction. With the
+    sample at the origin, as in the Larmor files, a beam centre found from this run
+    can be marked on the image directly.
     """
 
     counts: sc.DataArray
@@ -70,11 +72,11 @@ class DetectorImage(BaseModel, arbitrary_types_allowed=True):
 
 class BeamCentre(BaseModel):
     """
-    A point on the beam, relative to the sample, which gives the direction of the beam.
+    A point on the beam relative to the sample. Only its direction matters.
 
-    ``z`` is the distance from the sample of the plane in which ``x`` and ``y`` were
-    determined, since the same direction is a smaller offset on a bank closer to the
-    sample. Only the direction counts, so ``x=0, y=0, z=1`` applies no correction.
+    ``z`` is the distance from the sample to the plane in which ``x`` and ``y`` were
+    determined. The same direction is a smaller offset on a bank closer to the
+    sample. ``x=0, y=0, z=1`` applies no correction.
     """
 
     x: float = Field(description='Horizontal offset from the sample, in m.')
@@ -97,9 +99,8 @@ class Corrections(BaseModel):
 
 class IofQ(BaseModel, arbitrary_types_allowed=True):
     """
-    I(Q) of a sample, minus that of its can, with the title and the run number of the
-    sample's file, or ``None`` where the file has none. An NXcanSAS file holds both,
-    and a record's outputs are all that writing one has.
+    I(Q) of a sample minus that of its can, with the title and run number of the
+    sample's file. An NXcanSAS file holds both, and its writer has only the outputs.
     """
 
     intensity: sc.DataArray

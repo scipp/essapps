@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What a file of LoKI says of itself, for the table of a workspace in a folder
-(see :func:`ess.apps.folder.scan_folder`). It needs the extra ``[loki-app]``.
+Reads the metadata of LoKI's files for the files table of a workspace folder
+(:func:`ess.apps.folder.scan_folder`). It needs the extra ``[loki-app]``.
 
-No file says what a run is for, so ``role`` is left for a person to fill in, and
-with it the ``role`` of a calibration file, such as ``direct_beam``.
+No file states what it is for. A person fills in the ``role`` of each run and
+calibration file, such as ``direct_beam``.
 """
 
 import re
@@ -30,16 +30,16 @@ def _text(entry: h5py.Group, name: str) -> str | None:
 
 def read_metadata(path: Path) -> dict[str, Any] | None:
     """
-    The metadata of a file, or ``None`` if it is not one of LoKI's::
+    Returns the metadata of a LoKI file, or ``None`` if it is not one::
 
-        *.xml                {'kind': 'mask'}
-        HDF5 with an NXentry {'kind': 'raw', 'run': ..., 'pid': ..., 'sample': ...}
-        HDF5 written by scipp {'kind': 'calibration'}
+        *.xml                  {'kind': 'mask'}
+        HDF5 with an NXentry   {'kind': 'raw', 'run', 'pid', 'sample', 'title'}
+        HDF5 written by scipp  {'kind': 'calibration'}
 
-    The run of a raw file is its ``entry_identifier``, and its ``pid`` the
-    catalogue identifier formed from its ``entry_identifier_uuid`` (see
-    :func:`ess.apps.files.catalogue_identifier`). The files of the detector test
-    at Larmor have neither, and are named by their run, ``60339-....nxs``.
+    ``run`` is the ``entry_identifier``, or the number the file name starts
+    with, as in the Larmor files ``60339-....nxs``. ``pid`` is formed from the
+    ``entry_identifier_uuid`` (:func:`ess.apps.files.catalogue_identifier`). A
+    raw file lacking a field lacks its key.
     """
     if path.suffix == '.xml':
         return {'kind': 'mask'}

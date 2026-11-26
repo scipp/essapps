@@ -3,15 +3,17 @@
 """
 The bindings of LoKI's specs over esssans, for the LoKI detector test at Larmor.
 
-The detector, the masks, and the beam centre are functions, since the masks and the
-beam centre read the detector, and esssans' beam-centre finder takes a pipeline. Those
-that read the detector give esssans what the detector holds in place of the file.
-I(Q) is a pipeline, so that it serves stages. Its masks are a value given to the
-pipeline, which replaces the provider of esssans that reads them from a file and the
-sample run.
+The detector, the masks, and the beam centre are function bindings. The masks and
+the beam centre read the detector, and esssans' beam-centre finder accepts a whole
+workflow. The functions that read the detector set what it holds in esssans'
+workflow, in place of the file.
 
-The bank histogram is no reduction: it reads the events of a raw file of ESS
-directly, so that it serves files that esssans does not read yet.
+I(Q) is a pipeline binding, so that it can run in stages. Its masks are a value set
+in the pipeline. This replaces esssans' provider that reads them from mask files and
+the sample run.
+
+The bank histogram reads the events of a raw ESS file directly, without esssans,
+so that it works on files that esssans cannot read yet.
 """
 
 from collections.abc import Mapping
@@ -91,14 +93,10 @@ _ANGLE_RANGES = 'angle ranges'
 
 @cache
 def _base_workflow() -> sciline.Pipeline:
-    """The workflow of esssans, built once per process since that takes about 0.7 s.
-
-    Requests must not change it, but change a copy, see :func:`_workflow`.
-    """
-    # sciline inserts each generic key as a node of a networkx graph, about 1000
-    # here, and rebuilds the graph at each assignment. Sharing one workflow is only
-    # worth it while that holds: measure the constructor when sciline handles
-    # generics another way, and build a workflow per request if it is cheap.
+    """The workflow of esssans, built once per process. Requests change a copy."""
+    # Building it is slow: sciline inserts each generic key, about 1000 here, as a
+    # node of a networkx graph, and rebuilds the graph at each assignment. If that
+    # becomes cheap, build a workflow per request instead.
     return LokiAtLarmorWorkflow()
 
 
@@ -135,7 +133,7 @@ def load_detector(params: CalibratedDetectorParams) -> CalibratedDetectorOutputs
 def compute_masks(params: MasksParams) -> MasksOutputs:
     masks: dict[str, sc.Variable] = {}
     if params.mask_files:
-        # esssans names a mask of detector IDs by its file name, and refuses two
+        # esssans names a mask of detector IDs by its file name. It raises for two
         # files of the same name, since one mask would replace the other.
         workflow = _workflow()
         workflow[EmptyDetector[SampleRun]] = params.detector.counts
@@ -152,7 +150,8 @@ def find_beam_centre(params: BeamCentreParams) -> BeamCentreOutputs:
     workflow = _workflow()
     workflow[Position[snx.NXsample, SampleRun]] = counts.coords['sample_position']
     workflow[NeutronSourcePosition[SampleRun]] = counts.coords['source_position']
-    # The finder sums the dimensions that the positions lack, and else expects events.
+    # The finder sums the dimensions that the positions lack. Otherwise it expects
+    # events.
     workflow[CorrectedDetector[SampleRun, Numerator]] = sc.concat([counts], 'summed')
     centre = sans.beam_center_from_center_of_mass(workflow).to(unit='m')
     return BeamCentreOutputs(
@@ -250,16 +249,21 @@ def _iofq_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
 
 def histogram_bank(params: BankHistogramParams) -> BankHistogramOutputs:
     """
-    The events of ``loki_detector_<bank>`` counted by ``event_time_offset``,
-    in ``bins`` equal bins from the earliest to the latest event, with the
-    variance of each count equal to the count. Raises ``ValueError`` for a
-    file without the bank and for a bank without events.
+    Returns the events of ``loki_detector_<bank>`` histogrammed by
+    ``event_time_offset``.
 
-    The file is opened as esssans opens it (``open_nexus_file``), without
-    locking where the file system is read-only, as that of raw files at ESS is.
+    ``bins`` bins of equal width span the earliest to the latest event. The
+    variance of each count equals the count.
+
+    Raises
+    ------
+    ValueError
+        If the file has no such bank, or the bank has no events.
     """
     name = 'event_time_offset'
     path = f'entry/instrument/loki_detector_{params.bank}/detector_events/{name}'
+    # As esssans does: open_nexus_file skips locking on a read-only file system,
+    # such as that of raw files at ESS.
     with open_nexus_file(params.run) as f:
         if path not in f:
             raise ValueError(f'{params.run.name} has no {path}')
