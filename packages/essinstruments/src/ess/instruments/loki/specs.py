@@ -132,6 +132,30 @@ CALIBRATED_DETECTOR = WorkflowSpec(
 )
 
 
+class BankHistogramParams(BaseModel):
+    run: RunFile = Field(description='The run whose events to count.')
+    bank: int = Field(
+        default=0, ge=0, le=8, description='The detector bank, loki_detector_<bank>.'
+    )
+    bins: int = Field(default=200, gt=0, description='The number of bins.')
+
+
+class BankHistogramOutputs(BaseModel, arbitrary_types_allowed=True):
+    histogram: sc.DataArray
+
+
+BANK_HISTOGRAM = WorkflowSpec(
+    name='loki-bank-histogram',
+    version=1,
+    title='Bank histogram',
+    description='The events of one detector bank of a run, counted by their time '
+    'of arrival in the pulse (event_time_offset). A stand-in that reads a raw '
+    'file of ESS directly, with no reduction and no geometry.',
+    params=BankHistogramParams,
+    outputs=BankHistogramOutputs,
+)
+
+
 class MasksParams(BaseModel):
     detector: Referenced[DetectorImage] = Field(
         description='The detector whose pixels the masks hold.'

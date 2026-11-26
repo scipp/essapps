@@ -732,10 +732,11 @@ def texts(states: dict[str, RowState]) -> dict[str, str]:
     return {key: s.text for key, s in states.items()}
 
 
+@pytest.mark.parametrize('method', ['metadata', 'path'])
 def test_a_file_the_source_cannot_read_is_a_problem_of_its_rows_until_it_can(
-    measured: Batch, fake: FakeFiles
+    measured: Batch, fake: FakeFiles, method: str
 ) -> None:
-    with unreachable(fake, 'metadata', [FileRef(file='uuid:run-1')]):
+    with unreachable(fake, method, [FileRef(file='uuid:run-1')]):
         before = measured.state()
     after = measured.state()
 

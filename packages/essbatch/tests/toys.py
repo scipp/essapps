@@ -166,9 +166,10 @@ def unreachable(
     fake: FakeFiles, method: str, refs: Collection[FileRef] = ()
 ) -> Iterator[None]:
     """
-    While open, ``method`` of ``fake``, ``'resolve'`` or ``'metadata'``, raises
-    ``OSError`` for the files named in ``refs``, or, if none are given, at every
-    call, also of ``'list'``: as a file source does whose mount is gone.
+    While open, ``method`` of ``fake``, ``'resolve'``, ``'metadata'`` or
+    ``'path'``, raises ``OSError`` for the files named in ``refs``, or, if none
+    are given, at every call, also of ``'list'``: as a file source does whose
+    mount is gone.
     """
     given = getattr(fake, method)
 

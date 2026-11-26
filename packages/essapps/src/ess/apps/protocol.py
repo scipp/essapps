@@ -520,9 +520,9 @@ class FileSource(Protocol):
     A role is optional, and what the workspace does not check (:meth:`Selector.of`).
 
     A source that cannot answer, such as when a mount is gone or a catalogue timed
-    out, raises ``OSError``. If :meth:`resolve` or :meth:`metadata` raises it for a
-    file that a request names, the workspace refuses the file as it refuses an
-    unknown one: only the requests that name the file are refused.
+    out, raises ``OSError``. If :meth:`resolve`, :meth:`metadata` or :meth:`path`
+    raises it for a file that a request names, the workspace refuses the file as
+    it refuses an unknown one: only the requests that name the file are refused.
     """
 
     def resolve(self, name: FileRef) -> FileRef:
@@ -545,7 +545,8 @@ class FileSource(Protocol):
         such as one a record holds of a file moved or given a ``pid`` since.
 
         The files are on a network mount, and the workspace calls ``path`` for
-        each file of a request when the request is submitted, so that the
+        each file of a request when the request is submitted, and of a template
+        when it is resolved, such as for each row of a batch shown, so that the
         validators of a group that holds a file see its path. So ``path``
         neither stages nor downloads the file, and does not check that it can
         be read: a file that cannot be read fails the workflow that reads it,

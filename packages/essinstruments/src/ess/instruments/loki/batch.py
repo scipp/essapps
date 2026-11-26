@@ -10,6 +10,9 @@ sample, and pairs the run with the transmission run of the same sample::
     {'file': 'run-1.nxs', 'run': 1, 'role': 'sample', 'sample': 'water'}
     {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
 
+The batches of the bank histogram, a stand-in for runs that esssans does not
+read yet, have a row per raw run, with no role (:func:`per_run`).
+
 :data:`SOURCES` gives an :class:`~ess.batch.Intake`, and :data:`STAGED`
 a :class:`~ess.batch.BatchManager`, the batches of I(Q). A batch without
 a manager keeps nothing::
@@ -22,11 +25,12 @@ ess.instruments.loki.batch:SOURCES``, and a source by its name, such as
 """
 
 import sys
+from collections import Counter
 from collections.abc import Sequence
 
 import pandas as pd
 from ess.batch import FileInfo, RowSource
-from ess.batch.table import KEY, cell_of
+from ess.batch.table import KEY, NAME, cell_of
 
 from .specs import IOFQ
 
@@ -68,6 +72,36 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     return frame.astype({'run': 'Int64', 'name': 'string'})
 
 
+def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:
+    """
+    A row for each raw run, in the order measured, keyed by its run, or, for a
+    run that two files give, such as a run ingested twice, by the identity of
+    the file, so that each has a row. The cell ``run`` names the file. The
+    note ``name``, which names the row on the page and in the plot, is the
+    ``title`` of the file, and the note ``sample`` its sample, as the file
+    source gives them. A run needs no role, so this serves runs that no person
+    has marked yet.
+    """
+    runs = Counter(str(f.metadata['run']) for f in files if 'run' in f.metadata)
+
+    def key(f: FileInfo) -> str:
+        run = str(f.metadata.get('run'))
+        return run if runs[run] == 1 else f.ref.file
+
+    rows = [
+        {
+            KEY: key(f),
+            NAME: f.metadata.get('title'),
+            'sample': f.metadata.get('sample'),
+            'run': cell_of(f.ref),
+        }
+        for f in sorted(files, key=_measured)
+    ]
+    columns = [KEY, NAME, 'sample', 'run']
+    frame = pd.DataFrame.from_records(rows, columns=columns).set_index(KEY)
+    return frame.astype({NAME: 'string', 'sample': 'string'})
+
+
 def _run_number(f: FileInfo) -> int | None:
     """The run number of a file, ``None`` if its run is not a number."""
     run = str(f.metadata.get('run', ''))
@@ -90,7 +124,14 @@ SAMPLE_RUNS = RowSource(
     'A sample run without a sample name has no transmission run.',
 )
 """A row per sample run, paired by :func:`pair_by_sample`."""
-SOURCES = {'sample-runs': SAMPLE_RUNS}
+RAW_RUNS = RowSource(
+    per_run,
+    fills=('run',),
+    description='A row per raw run, keyed by its run number, with no pairing '
+    'and no role needed; for the bank histogram.',
+)
+"""A row per raw run, made by :func:`per_run`."""
+SOURCES = {'sample-runs': SAMPLE_RUNS, 'raw-runs': RAW_RUNS}
 """The sources of LoKI's batches, by name."""
 STAGED = frozenset({IOFQ.name})
 """A batch of I(Q) runs through one stage, so that the can is reduced once."""
