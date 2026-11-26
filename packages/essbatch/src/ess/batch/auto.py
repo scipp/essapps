@@ -98,6 +98,9 @@ class Step:
 
     Parameters
     ----------
+    added:
+        The keys of the rows that the step added, in the order of the batch
+        table.
     considered:
         The keys considered after the step: those given to it, those of the
         rows it added, and those of the source that the batch table has.
@@ -114,6 +117,7 @@ class Step:
         The records of the rows reduced, by key.
     """
 
+    added: tuple[str, ...]
     considered: frozenset[str]
     refused: Mapping[str, str]
     waiting: tuple[str, ...]
@@ -158,9 +162,10 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     try:
         state = batch.state(candidates)
     except SubmitError as error:
-        return Step(now, dict.fromkeys(candidates, str(error)), tuple(waiting), {})
+        refused = dict.fromkeys(candidates, str(error))
+        return Step(tuple(new.index), now, refused, tuple(waiting), {})
     records, refused = _reduce(batch, not_reduced(state))
-    return Step(now, refused, tuple(waiting), records)
+    return Step(tuple(new.index), now, refused, tuple(waiting), records)
 
 
 def _reduce(batch: Batch, keys: list[str]) -> tuple[dict[str, Record], dict[str, str]]:

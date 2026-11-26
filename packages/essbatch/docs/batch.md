@@ -616,7 +616,7 @@ sequenceDiagram
         batch->>definitions: write rows.json
     end
     step->>batch: reduce(rows ready and without a result)
-    step-->>intake: Step: considered, refused, waiting, records
+    step-->>intake: Step: added, considered, refused, waiting, records
     intake->>definitions: write source.json: considered, if it changed
     intake-->>timer: Step
 ```

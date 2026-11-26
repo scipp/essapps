@@ -844,7 +844,6 @@ def follow(
             sys.stderr.write('stopping after the reductions that run\n')
             break
         done += 1
-        before = set(batch.frame().index)
         error = None  # why the step raised, for the line
         told = ''  # what stderr says of it
         try:
@@ -862,7 +861,7 @@ def follow(
             reducing: list[str] = []
             refused, waiting = shown
         else:
-            added = [k for k in batch.frame().index if k not in before]
+            added = list(stepped.added)
             reducing = list(stepped.records)
             refused, waiting = dict(stepped.refused), list(stepped.waiting)
             running |= stepped.records
