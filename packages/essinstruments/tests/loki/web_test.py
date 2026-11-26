@@ -76,4 +76,4 @@ def test_the_output_tab_offers_nxcansas_first(tmp_path: Path) -> None:
         ('nxcansas', ['iofq']),
         ('scipp-hdf5', None),
     ]
-    assert output['form']['format'] == 'nxcansas'
+    assert output['options']['format'] == 'nxcansas'

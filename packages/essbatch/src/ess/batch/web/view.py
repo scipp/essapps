@@ -26,7 +26,7 @@ from ess.apps.listing import Listing
 from ess.apps.records import Status
 from ess.spec import WorkflowSpec, field_types
 
-from ..definition import Form
+from ..definition import OutputOptions
 from ..state import RowState, left_to_reduce, ready
 from ..table import NAME, as_request, row_names
 from . import forms
@@ -304,13 +304,14 @@ def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
 
 
 def output(
-    form: Form,
+    options: OutputOptions,
     writers: Sequence[Writer],
     spec: WorkflowSpec[Any, Any],
     catalogue: bool,
 ) -> OutputShown:
     """
-    The tab "Output": the ``form`` kept, the ``writers`` that it may pick,
+    The tab "Output": the output ``options`` kept, the ``writers`` that they
+    may pick,
     the outputs of ``spec``, and whether a catalogue takes the results.
     """
     formats = [
@@ -324,14 +325,14 @@ def output(
     ]
     problem = (
         ''
-        if any(f.name == form.format for f in formats)
-        else f'This application has no writer of the format {form.format} '
+        if any(f.name == options.format for f in formats)
+        else f'This application has no writer of the format {options.format} '
         'that the form names: pick a format and apply.'
     )
-    lacking = ', no '.join(form.lacking)
+    lacking = ', no '.join(options.lacking)
     outputs = spec.outputs.model_fields
     return OutputShown(
-        form=form,
+        options=options,
         formats=formats,
         outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
         catalogue=catalogue,

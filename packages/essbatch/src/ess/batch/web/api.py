@@ -298,7 +298,7 @@ def create_app(pages: Pages) -> FastAPI:
     ) -> State:
         """
         Keep the form of the tab "Output": the fields of
-        :class:`~ess.batch.definition.Form`, which the page checks, so
+        :class:`~ess.batch.definition.OutputOptions`, which the page checks, so
         that a refusal is said as each other is.
         """
         return page.set_output_form(body)

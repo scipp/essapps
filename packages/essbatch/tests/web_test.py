@@ -2881,7 +2881,7 @@ def test_without_a_catalogue_the_output_tab_has_the_form_but_no_publishing(
     )
     assert output['outputs'] == [{'name': 'total', 'title': 'total'}]
     assert applied['notice'] == 'Applied the form.'
-    assert state(http)['output']['form']['owner'] == 'Anna'
+    assert state(http)['output']['options']['owner'] == 'Anna'
     assert http.post('/api/publish', json={'keys': ['1']}).status_code == 422
 
 
@@ -2899,21 +2899,21 @@ def test_the_formats_are_those_given_and_scipp_hdf5_the_default_first(
         }
         for w in (TEXT, SCIPP_HDF5)
     ]
-    assert output['form']['format'] == 'text'
+    assert output['options']['format'] == 'text'
 
 
 def test_a_kept_format_the_page_lacks_is_a_problem_until_one_it_has_is_applied(
     intake: Intake, label: str, sample: Measure, client: Client
 ) -> None:
     writing = Writing(intake.manager, {STAGED.name: [TEXT]})
-    writing.set_form(label, writing.form(label))
+    writing.set_options(label, writing.options(label))
     http = with_rows(Pages(intake), label, sample, client)
     kept = state(http)['output']
     refused = http.post('/api/results.zip', json={'keys': ['1']})
 
     http.post('/api/output/form', json=FORM)
 
-    assert kept['form']['format'] == 'text'
+    assert kept['options']['format'] == 'text'
     assert 'no writer of the format text' in kept['problem']
     assert refused.status_code == 422
     assert state(http)['output']['problem'] == ''
@@ -2972,7 +2972,11 @@ def test_a_form_refused_says_why(
     [
         (FORM, ['3'], 'Not published: no result to publish, done and not outdated: 3'),
         (FORM, [], 'Select the rows to publish'),
-        (FORM | {'owner': ''}, ['1'], 'Not published: the form names no owner'),
+        (
+            FORM | {'owner': ''},
+            ['1'],
+            'Not published: the output options name no owner',
+        ),
     ],
 )
 def test_a_refused_publication_says_why_and_publishes_nothing(

@@ -18,7 +18,7 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, model_validator
 
-from ..definition import Form
+from ..definition import OutputOptions
 
 
 class Alternative(BaseModel):
@@ -229,16 +229,15 @@ class Format(BaseModel):
 
 class OutputShown(BaseModel):
     """
-    The tab "Output": the ``form`` of the batch, the ``formats`` it may pick,
-    the default first, the ``outputs`` of its spec that the form may name,
-    whether a ``catalogue`` is given, to publish to, and the ``problem`` of
-    the form in words: why nothing is written by it, such as a kept format
-    that is not among ``formats``; empty if none. ``unpublishable`` says
-    what the form lacks to publish (:attr:`~ess.batch.definition.Form.lacking`);
-    empty if nothing.
+    The tab "Output": the output ``options`` of the batch, the ``formats`` they may
+    pick, the default first, the ``outputs`` of its spec that they may name, whether a
+    ``catalogue`` is given, to publish to, and the ``problem`` of the options in words:
+    why nothing is written by it, such as a kept format that is not among ``formats``;
+    empty if none. ``unpublishable`` says what the options lack to publish
+    (:attr:`~ess.batch.definition.OutputOptions.lacking`); empty if nothing.
     """
 
-    form: Form
+    options: OutputOptions
     formats: list[Format]
     outputs: list[Output]
     catalogue: bool

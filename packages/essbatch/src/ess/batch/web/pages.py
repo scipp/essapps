@@ -128,7 +128,7 @@ class Pages:
         The catalogue that the tab "Output" publishes results to
         (:class:`~..publish.Publisher`); without it, the tab has no button
         "Publish", and the grid no column "Published". With it, the owner
-        and contact of a form not set are the principal investigator of the
+        and contact of output options not set are the principal investigator of the
         proposal, as the catalogue says, asked once here.
 
     Attributes

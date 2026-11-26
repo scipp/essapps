@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Results of a batch into the catalogue: :class:`Publisher` publishes the result
-of each row as one derived dataset (:func:`ess.apps.scicat.publish`), with the
-files that :class:`~.writing.Writing` writes by the form of the batch. It needs
-the extra ``scicat``.
+Results of a batch into the catalogue: :class:`Publisher` publishes the result of each
+row as one derived dataset (:func:`ess.apps.scicat.publish`), with the files that
+:class:`~.writing.Writing` writes by the output options of the batch. It needs the extra
+``scicat``.
 
 A batch keeps one entry of the definitions for this, ``publish``, which only
 the publisher writes (:class:`~.definition.Publishing`): each upload::
@@ -57,25 +57,25 @@ class Publisher:
 
     def publish(self, label: str, keys: Sequence[str]) -> dict[str, str]:
         """
-        Publish the result of the row of each of ``keys`` as the form of
-        ``label`` says, and return the catalogue identifier of each, by key.
+        Publish the result of the row of each of ``keys`` as the output options
+        of ``label`` say, and return the catalogue identifier of each, by key.
 
-        Raises ``ValueError``, before any upload, if the form names no owner
-        or no contact email, or a format that this process lacks, or a row is
+        Raises ``ValueError``, before any upload, if the output options name no
+        owner or no contact email, or a format that this process lacks, or a row is
         not in the batch, has no result to publish, or one published already.
         If an upload fails, raises :class:`UploadFailed` that names the rows
         published before it, which are kept.
         """
-        write, metadata = self.writing.by_form(label)
-        form = self.writing.form(label)
+        write, metadata = self.writing.by_options(label)
+        options = self.writing.options(label)
         records = self._results(label, keys)
-        if missing := form.lacking:
-            raise ValueError(f'the form names no {", no ".join(missing)}')
+        if missing := options.lacking:
+            raise ValueError(f'the output options name no {", no ".join(missing)}')
         pids: dict[str, str] = {}
         for key, record in records.items():
             try:
                 pids[key] = self._publish(
-                    label, key, record, write, metadata[key], form.format
+                    label, key, record, write, metadata[key], options.format
                 )
             except DefinitionWriteError:  # noqa: PERF203
                 raise

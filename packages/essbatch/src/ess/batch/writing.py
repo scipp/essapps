@@ -1,29 +1,31 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-How the results of a batch are written: :class:`Writing` keeps the form of
-each batch (:class:`~.definition.Form`), and writes the result of a row by it
+How the results of a batch are written: :class:`Writing` keeps the output
+options of each batch (:class:`~.definition.OutputOptions`), and writes the
+result of a row by them
 with :func:`ess.apps.writers.write`. The download of the page, ``export -l``
 and publishing (:mod:`.publish`) all write so, so that they give the same
 files.
 
-The form picks a writer by the name of its format, among those the application gives for
-the spec of the batch and :data:`~ess.apps.writers.SCIPP_HDF5`, which every
-spec has, and names what a person says of the results
-(:class:`~ess.apps.writers.DatasetMetadata`). A batch keeps its form in the entry
-``form`` of the definitions, which only :class:`Writing` writes::
+The output options pick a writer by the name of its format, among those the
+application gives for the spec of the batch and
+:data:`~ess.apps.writers.SCIPP_HDF5`, which every spec has, and name what a
+person says of the results (:class:`~ess.apps.writers.DatasetMetadata`). A
+batch keeps its output options in the entry ``output_options`` of the
+definitions, which only :class:`Writing` writes::
 
     {'format': 'nxcansas', 'outputs': ['iofq'], 'name': '{title} {name}',
      'description': '', 'keywords': [], 'owner': 'Ada Lovelace',
      'contact_email': 'ada@example.org'}
 
-A form names its format by the writer's name, not its title, so a title may
-change, but a name changed is one that a kept form lacks. A kept form whose
-format this process lacks, such as a command run without the writers, is
-refused when writing, never written in another format.
+Output options name their format by the writer's name, not its title, so a title may
+change, but a name changed is one that kept output options lack. Kept output options
+whose format this process lacks, such as a command run without the writers, are refused
+when writing, never written in another format.
 
-The command line gives the form as a YAML file of its fields, which
-:meth:`Writing.form_text` writes and :func:`load_form` reads.
+The command line gives the output options as a YAML file of their fields,
+which :meth:`Writing.options_text` writes and :func:`load_options` reads.
 """
 
 from __future__ import annotations
@@ -39,7 +41,7 @@ from ess.apps.errors import error_text
 from ess.apps.records import Record
 from ess.apps.writers import SCIPP_HDF5, DatasetMetadata, Person, Writer
 
-from .definition import FORM, Form
+from .definition import OUTPUT_OPTIONS, OutputOptions
 from .export import RowWriter
 from .manager import BatchManager
 from .table import row_names
@@ -47,7 +49,7 @@ from .table import row_names
 
 class Writing:
     """
-    Writes the results of the batches of ``manager`` by the form of each.
+    Writes the results of the batches of ``manager`` by the output options of each.
 
     Every refusal of what is asked raises ``ValueError``, and a label that no
     batch has ``KeyError``, as the manager does.
@@ -57,13 +59,13 @@ class Writing:
     manager:
         The batches.
     writers:
-        The writers of each spec, by its name, the first one the format of a
-        form not set. :data:`~ess.apps.writers.SCIPP_HDF5` follows them, and
+        The writers of each spec, by its name, the first one the format of
+        output options not set. :data:`~ess.apps.writers.SCIPP_HDF5` follows them, and
         is the only writer of a spec not named. ``ValueError`` if the
         workspace binds no spec of a name, a writer reads an output that its
         spec lacks, or two writers of a spec have one format.
     contact:
-        The owner and contact of a form not set, such as the principal
+        The owner and contact of output options not set, such as the principal
         investigator of the proposal (:func:`ess.apps.scicat.principal_investigator`);
         none if not given.
     """
@@ -90,22 +92,23 @@ class Writing:
         self._contact = contact
 
     def writers(self, label: str) -> list[Writer]:
-        """The writers that the form of ``label`` may pick, the default first."""
+        """The writers that the output options of ``label`` may pick, default first."""
         spec = self.manager.batch(label).spec
         return [*self._writers.get(spec.name, ()), SCIPP_HDF5]
 
-    def form(self, label: str) -> Form:
+    def options(self, label: str) -> OutputOptions:
         """
-        The form of ``label``. Until set, its format is the first of
-        :meth:`writers`, it names every output of the spec, its description
-        is the batch's, and its owner and contact are the ``contact`` given.
+        The output options of ``label``. Until set, their format is the first
+        of :meth:`writers`, they name every output of the spec, their
+        description is the batch's, and their owner and contact are the
+        ``contact`` given.
         """
         spec = self.manager.batch(label).spec
-        kept = FORM.load(self.manager.definitions, label)
+        kept = OUTPUT_OPTIONS.load(self.manager.definitions, label)
         if kept is not None:
             return kept
         contact = self._contact
-        return Form(
+        return OutputOptions(
             format=self.writers(label)[0].name,
             outputs=tuple(spec.outputs.model_fields),
             description=self.manager.headers()[label].description,
@@ -113,49 +116,49 @@ class Writing:
             contact_email='' if contact is None else contact.email,
         )
 
-    def set_form(self, label: str, form: Form) -> None:
+    def set_options(self, label: str, options: OutputOptions) -> None:
         """
-        Keep ``form`` for ``label``. Raises ``ValueError`` for a format that
+        Keep ``options`` for ``label``. Raises ``ValueError`` for a format that
         :meth:`writers` lacks, an output that the spec of the batch lacks, or
         no output for a writer that writes the outputs chosen.
         """
-        writer = self._writer(label, form.format)
+        writer = self._writer(label, options.format)
         spec = self.manager.batch(label).spec
-        if unknown := sorted(set(form.outputs) - spec.outputs.model_fields.keys()):
+        if unknown := sorted(set(options.outputs) - spec.outputs.model_fields.keys()):
             raise ValueError(f'{spec.name} has no output {", ".join(unknown)}')
-        if writer.outputs is None and not form.outputs:
+        if writer.outputs is None and not options.outputs:
             raise ValueError(f'{writer.title} writes the outputs chosen: choose one')
-        FORM.save(self.manager.definitions, label, form)
+        OUTPUT_OPTIONS.save(self.manager.definitions, label, options)
 
-    def by_form(self, label: str) -> tuple[RowWriter, dict[str, DatasetMetadata]]:
+    def by_options(self, label: str) -> tuple[RowWriter, dict[str, DatasetMetadata]]:
         """
         What writes the result of a row of ``label`` into a folder, as the
-        form says (:func:`ess.apps.writers.write`), and what the form says of
-        the result of each row, by key, which the publisher also gives the
-        catalogue. Raises ``ValueError`` if this process lacks the format of
-        the form.
+        output options say (:func:`ess.apps.writers.write`), and what they
+        say of the result of each row, by key, which the publisher also gives
+        the catalogue. Raises ``ValueError`` if this process lacks the format
+        of the output options.
         """
-        form = self.form(label)
-        writer = self._writer(label, form.format)
-        metadata = self._metadata(label, form)
+        options = self.options(label)
+        writer = self._writer(label, options.format)
+        metadata = self._metadata(label, options)
         client = self.manager.client
 
         def write(key: str, record: Record, directory: Path) -> None:
             writers.write(
-                client, record, writer, metadata[key], directory, form.outputs
+                client, record, writer, metadata[key], directory, options.outputs
             )
 
         return write, metadata
 
-    def form_text(self, label: str) -> str:
+    def options_text(self, label: str) -> str:
         """
-        The form of ``label`` as YAML (:meth:`form`), with a comment on what
-        its format, its outputs and its name may hold; :func:`load_form` reads
-        it back.
+        The output options of ``label`` as YAML (:meth:`options`), with a
+        comment on what their format, outputs and name may hold;
+        :func:`load_options` reads it back.
         """
         formats = ', '.join(w.name for w in self.writers(label))
         outputs = ', '.join(self.manager.batch(label).spec.outputs.model_fields)
-        fields = self.form(label).model_dump(mode='json')
+        fields = self.options(label).model_dump(mode='json')
         return (
             f'# How the results of {label} are written, and what is said of them.\n'
             f'# format: one of {formats}\n'
@@ -165,17 +168,19 @@ class Writing:
             + yaml.safe_dump(fields, sort_keys=False, allow_unicode=True)
         )
 
-    def _metadata(self, label: str, form: Form) -> dict[str, DatasetMetadata]:
-        """What ``form`` says of the result of each row of ``label``, by key."""
+    def _metadata(
+        self, label: str, options: OutputOptions
+    ) -> dict[str, DatasetMetadata]:
+        """What ``options`` say of the result of each row of ``label``, by key."""
         batch = self.manager.batch(label)
         title = self.manager.headers()[label].title
         return {
             key: DatasetMetadata(
-                name=form.name.format(title=title, name=name, key=key),
-                owner=form.owner,
-                contact_email=form.contact_email,
-                description=form.description,
-                keywords=form.keywords,
+                name=options.name.format(title=title, name=name, key=key),
+                owner=options.owner,
+                contact_email=options.contact_email,
+                description=options.description,
+                keywords=options.keywords,
             )
             for key, name in row_names(batch.frame(), batch.parameter_columns).items()
         }
@@ -190,12 +195,12 @@ class Writing:
         raise ValueError(f'{label} has no writer of the format {format}, only {known}')
 
 
-def load_form(path: Path) -> Form:
+def load_options(path: Path) -> OutputOptions:
     """
-    The form in a YAML file, as :meth:`Writing.form_text` writes it.
-    Raises ``ValueError`` if the file is not a form.
+    The output options in a YAML file, as :meth:`Writing.options_text` writes
+    them. Raises ``ValueError`` if the file holds no output options.
     """
     try:
-        return Form.model_validate(yaml.safe_load(path.read_text()))
+        return OutputOptions.model_validate(yaml.safe_load(path.read_text()))
     except (yaml.YAMLError, ValidationError) as error:
         raise ValueError(f'{path}: {error_text(error)}') from None

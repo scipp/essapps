@@ -213,13 +213,13 @@ Its workflow, columns and label are shown as text.
 Its title and description are a form, which **Save** sends to `POST api/batch` (`BatchManager.change`).
 What the manager refuses, such as an empty title, shows at the form, and nothing changes.
 
-**Remove this batch**, after a confirmation, removes the header and every other file of the batch: its settings, its batch table, its `source.json`, its `form.json` and its `publish.json` (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace, and its datasets in the catalogue.
+**Remove this batch**, after a confirmation, removes the header and every other file of the batch: its settings, its batch table, its `source.json`, its `output_options.json` and its `publish.json` (`POST api/batch/remove`, `BatchManager.remove`); its results stay in the workspace, and its datasets in the catalogue.
 If the batch follows, none follows from then on.
 The page then shows `/` in place of the batch in the history of the browser: the batch that `/` redirects to, the one that follows or the only one left, else the page without a batch.
 
 ## Output
 
-The tab **Output** holds the form of the batch, kept per batch by `ess.batch.writing.Writing`, which **Apply** sends to `POST api/output/form` (`Writing.set_form`).
+The tab **Output** shows the output options of the batch in a form; `ess.batch.writing.Writing` keeps them per batch, and **Apply** sends them to `POST api/output/form` (`Writing.set_options`).
 It says how the result of each row is written, and what is said of it:
 
 | Field | Meaning |
@@ -230,19 +230,19 @@ It says how the result of each row is written, and what is said of it:
 | Description, keywords, owner, contact email | what is said of each result (`ess.apps.writers.DatasetMetadata`) |
 
 Until a person applies the form, its format is the first of the formats, it names every output, its description is the batch's, and its owner and contact email are none, or, for an application given a catalogue, the principal investigator of the proposal, as the catalogue says (`ess.apps.scicat.principal_investigator`), asked once at the start: the ESS ingestor makes the same person owner and contact of each raw dataset.
-A kept form whose format the application lacks, such as one kept by `essbatch form` with other writers, writes nothing: the format shows none picked, the bar says why (`OutputShown.problem`), and the downloads and **Publish** wait until a person picks a format and applies it.
+Kept output options whose format the application lacks, such as those kept by `essbatch output-options` with other writers, write nothing: the format shows none picked, the bar says why (`OutputShown.problem`), and the downloads and **Publish** wait until a person picks a format and applies it.
 
 The form holds a change until **Apply**, under the bar of the Settings tab ("Changed, not applied yet"), and **Discard** shows the form in force again.
 Unlike the draft of the settings, which the `Page` holds, the browser holds this one: it is lost at a reload or a change of batch, and a form in force that changed elsewhere refills the inputs only while they hold no change.
 
-**Download selected** and **Download all**, in the Files menu, give a zip with a folder per row that has a result, named by its key, written by the form in force (`POST api/results.zip`, `Writing.by_form`): the files of the format and the record of the result, `_record.json`; beside them `results.csv`, the rows with their status and record.
+**Download selected** and **Download all**, in the Files menu, give a zip with a folder per row that has a result, named by its key, written by the form in force (`POST api/results.zip`, `Writing.by_options`): the files of the format and the record of the result, `_record.json`; beside them `results.csv`, the rows with their status and record.
 Both are refused while the form holds a change, so that the zip is what the form shows, as **Download settings** is while the settings form holds one.
 
 An application given a catalogue (`Pages(..., catalogue=Catalogue(...))`, `ess.apps.scicat`) has, under the form, the button **Publish**, and the grid a column **Published**; without one, neither shows, and `POST api/publish` is refused.
 The result of a row is published as one derived dataset of SciCat (`ess.batch.publish.Publisher`, `ess.apps.scicat.publish`), with the files that the download writes.
 The rest is read from the result: the files it read with a catalogue identifier are its inputs, the proposal is the workspace's, and the software is that of the server now.
 **Publish N selected** publishes the selected rows that read `done` or `settings changed` and are not published, with the form in force (`POST api/publish`, `Publisher.publish`); the column **Published** then shows the identifier of each dataset.
-The batch layer decides which results may be published (`ess.batch.publishable`, `Form.lacking`), and the server sends it, as `Row.publishable` and `OutputShown.unpublishable`; the button only mirrors it, and waits, with a hint, while the form holds a change, names no owner or contact email, or a publication runs.
+The batch layer decides which results may be published (`ess.batch.publishable`, `OutputOptions.lacking`), and the server sends it, as `Row.publishable` and `OutputShown.unpublishable`; the button only mirrors it, and waits, with a hint, while the form holds a change, names no owner or contact email, or a publication runs.
 A result is published once; a row reduced again may be published again, as a new dataset.
 What the publisher refuses, such as a row whose result is outdated, publishes nothing; an upload that fails keeps those before it, which its message names.
 Which SciCat, and whether files are copied on a shared file system or sent over SFTP, is the `scitacean.Client` and its file transfer that the application gives (`ess.apps.scicat.Catalogue`); the transfer must have no `source_folder` of its own, so that each dataset has the folder of its record.

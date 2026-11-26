@@ -94,15 +94,16 @@ description with the manager (:meth:`Page.change`). Removing a batch is
 :meth:`Pages.remove <.pages.Pages.remove>`; a request to a page of a batch
 removed answers :class:`~.errors.NotFound`.
 
-The tab "Output" shows the form of the batch (:class:`~..writing.Writing`):
-the format its results are written in, and what is said of them. The browser
-holds a change of it until Apply (:meth:`Page.set_output_form`), and refuses
-a download meanwhile, so that the zip of :meth:`Page.results_file` is what the
-form shows. A kept form whose format the application lacks, such as one kept
-by the command line with other writers, writes nothing: the tab says why
+The tab "Output" shows the output options of the batch
+(:class:`~..writing.Writing`) in a form: the format its results are written
+in, and what is said of them. The browser holds a change of it until Apply
+(:meth:`Page.set_output_form`), and refuses a download meanwhile, so that the
+zip of :meth:`Page.results_file` is what the form shows. Kept output options
+whose format the application lacks, such as those kept by the command line
+with other writers, write nothing: the tab says why
 (:attr:`~.models.OutputShown.problem`) until a person applies a format that
 the application has. An application given a catalogue publishes by the same
-form (:meth:`Page.publish`).
+output options (:meth:`Page.publish`).
 
 A batch follows from the time it is made, if a person chooses Follow in
 "New batch" (:meth:`Pages.create <.pages.Pages.create>`). Its page then has
@@ -145,7 +146,7 @@ from ess.apps.fields import UNSET, Fields
 from ess.apps.records import Record, Status
 
 from .. import definition, frames
-from ..definition import Form
+from ..definition import OutputOptions
 from ..export import export_table
 from ..reduction import Batch
 from ..state import RowState, publishable, to_reduce
@@ -465,7 +466,7 @@ class Page:
             follow=self.pages.last_step.shown(self.label),
             files_problem=self.pages.runs.listing.failure,
             output=view.output(
-                self.pages.writing.form(self.label),
+                self.pages.writing.options(self.label),
                 self.pages.writing.writers(self.label),
                 batch.spec,
                 self.pages.publisher is not None,
@@ -824,16 +825,18 @@ class Page:
     def set_output_form(self, fields: Mapping[str, Any]) -> str:
         """
         Keep the form of the tab "Output", given as its fields
-        (:meth:`~..writing.Writing.set_form`).
+        (:meth:`~..writing.Writing.set_options`).
         """
         with reject_on_error('Not applied'):
-            self.pages.writing.set_form(self.label, Form.model_validate(fields))
+            self.pages.writing.set_options(
+                self.label, OutputOptions.model_validate(fields)
+            )
         return 'Applied the form.'
 
     @_action
     def publish(self, keys: Sequence[str]) -> str:
         """
-        Publish the result of each row of ``keys``, as the form says
+        Publish the result of each row of ``keys``, as the output options say
         (:meth:`~..publish.Publisher.publish`). A refusal publishes nothing;
         an upload that fails keeps those before it, which its message names
         and the rows then show.
@@ -982,7 +985,7 @@ class Page:
         """
         A zip of the results of the done rows among ``keys``, or of all,
         written as the form of the tab "Output" says
-        (:meth:`~..writing.Writing.by_form`), with the rows as
+        (:meth:`~..writing.Writing.by_options`), with the rows as
         ``results.csv``.
         """
         batch = self.batch
@@ -996,7 +999,7 @@ class Page:
         with named_file('results') as folder:
             table = frames.with_results(batch, states, done)
             with reject_on_error('Not downloaded'):
-                write, _ = self.pages.writing.by_form(self.label)
+                write, _ = self.pages.writing.by_options(self.label)
                 export_table(batch.client, table, folder, write)
             write_table(table, folder / 'results.csv')
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:

@@ -59,7 +59,7 @@ from .reduction import Batch
 from .source import Range, RowSource
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template, settings_text, template_to_fill
-from .writing import Writing, load_form
+from .writing import Writing, load_options
 
 if TYPE_CHECKING:
     from ess.apps.scicat import Catalogue
@@ -102,9 +102,11 @@ A first session, in this order; each command has its own --help:
     $B show -l water              # the batch table of water, with each row's status
     $B reduce -l water --remaining       # reduce the rows that are not done
     $B template -l water -o now.yaml     # the settings of water, as a template
-    $B form -l water -o form.yaml # how the results of water are written: the
+    $B output-options -l water -o options.yaml
+                                  # how the results of water are written: the
                                   # format, and what is said of them
-    $B form -l water form.yaml    # keep the form edited
+    $B output-options -l water options.yaml
+                                  # keep the output options edited
     $B export -l water results    # write the results of the rows of water
     $B -c package.module:CATALOGUE publish -l water KEY...
                                   # publish the results of KEY... to SciCat
@@ -307,8 +309,8 @@ def _the_catalogue(given: _Context) -> Catalogue | None:
 def _writing(given: _Context, catalogue: Catalogue | None) -> Writing:
     """
     The writing of the folder, with the writers of ``-W``; the owner and
-    contact of a form not set are the principal investigator of the
-    proposal, as ``catalogue`` says, if given.
+    contact of output options not set are the principal investigator of
+    the proposal, as ``catalogue`` says, if given.
     """
     contact = None
     if catalogue is not None:
@@ -635,12 +637,12 @@ def _reduced(result: pd.DataFrame) -> int:
 def _export(given: _Context) -> pd.DataFrame:
     """
     Write the results of the rows of a table as scipp HDF5, or of a batch as
-    it stands by its form; the table.
+    it stands by its output options; the table.
     """
     args = given.args
     if args.label is not None:
         table = _show(given)
-        write, _ = Writing(given.manager, given.writers).by_form(args.label)
+        write, _ = Writing(given.manager, given.writers).by_options(args.label)
     else:
         table = read_text(args.table)
         if KEY not in table.columns:
@@ -653,14 +655,14 @@ def _export(given: _Context) -> pd.DataFrame:
     return table
 
 
-def _form(given: _Context) -> str:
-    """Keep the form of a file, if given; the form of a batch, as YAML."""
+def _output_options(given: _Context) -> str:
+    """Keep the output options of a file, if given; a batch's, as YAML."""
     args = given.args
     writing = _writing(given, _the_catalogue(given))
     label = _known(writing.manager, args.label)
     if args.file is not None:
-        writing.set_form(label, load_form(args.file))
-    return writing.form_text(label)
+        writing.set_options(label, load_options(args.file))
+    return writing.options_text(label)
 
 
 def _publish(given: _Context) -> pd.DataFrame:
@@ -1079,14 +1081,14 @@ def _take_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
-def _form_arguments(command: argparse.ArgumentParser) -> None:
+def _output_options_arguments(command: argparse.ArgumentParser) -> None:
     _label(command, required=True, help='the label of the batch')
     command.add_argument(
         'file',
         metavar='FILE',
         type=_existing,
         nargs='?',
-        help='a form, YAML, as the command writes it, to keep for the batch',
+        help='output options, YAML, as the command writes them, to keep for the batch',
     )
 
 
@@ -1257,24 +1259,24 @@ _COMMANDS = {
         check=_reduce_check,
         status=_reduced,
     ),
-    'form': _Command(
-        _form,
-        description='Keep the form FILE for the batch of LABEL, if given; then '
-        'write the form of the batch as YAML, to edit and give back: the format '
-        'that export -l, publish and the page write the results as, the outputs '
-        'that a format which writes those chosen writes, and the name, '
-        'description, keywords, owner and contact email of the results. Until a '
-        'form is kept, the format is the first that -W gives for the spec, else '
-        'scipp HDF5, and with -c the owner and contact are the principal '
-        'investigator of the proposal, as the catalogue says.',
-        arguments=_form_arguments,
+    'output-options': _Command(
+        _output_options,
+        description='Keep the output options FILE for the batch of LABEL, if '
+        'given; then write the output options of the batch as YAML, to edit and give '
+        'back: the format that export -l, publish and the page write the results as, '
+        'the outputs that a format which writes those chosen writes, and the name, '
+        'description, keywords, owner and contact email of the results. Until output '
+        'options are kept, the format is the first that -W gives for the spec, else '
+        'scipp HDF5, and with -c the owner and contact are the principal investigator '
+        'of the proposal, as the catalogue says.',
+        arguments=_output_options_arguments,
         output='text',
     ),
     'export': _Command(
         _export,
         description='Write the result of each done row of the table file '
-        'TABLE, each output as scipp HDF5, or of the batch of LABEL as it '
-        'stands, as its form says, to a folder of its key in DIRECTORY, which it '
+        'TABLE, each output as scipp HDF5, or of the batch of LABEL as it stands, as '
+        'its output options say, to a folder of its key in DIRECTORY, which it '
         'replaces whole, with the record as _record.json; and write the rows.',
         arguments=_export_arguments,
         check=_one_of('table', 'label'),
@@ -1283,7 +1285,7 @@ _COMMANDS = {
         _publish,
         description='Publish the result of the row of each KEY of the batch of '
         'LABEL to the catalogue as one derived dataset, with the files that '
-        'its form says, and write those rows as show does, '
+        'its output options say, and write those rows as show does, '
         'with the catalogue identifier in the column published. A result is '
         'published once; '
         'a new result of the row is a new dataset. If an upload fails, the '
@@ -1374,15 +1376,15 @@ def _parser() -> argparse.ArgumentParser:
         '--catalogue',
         metavar='MODULE:NAME',
         help='a function from the proposal to the catalogue to publish to '
-        '(ess.apps.scicat.Catalogue), for publish; form takes the owner and '
-        'contact of a form not set from it',
+        '(ess.apps.scicat.Catalogue), for publish; output-options takes the '
+        'owner and contact of output options not set from it',
     )
     parser.add_argument(
         '-W',
         '--writers',
         metavar='MODULE:NAME',
         help='the writers of the specs: a mapping of spec name to a list of '
-        'writers (ess.apps.writers.Writer), for form, export -l and publish',
+        'writers (ess.apps.writers.Writer), for output-options, export -l and publish',
     )
     parser.add_argument(
         '--json',

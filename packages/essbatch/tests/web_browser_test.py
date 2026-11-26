@@ -1972,7 +1972,7 @@ def test_a_kept_format_the_page_lacks_says_why_until_a_format_is_applied(
     browser: Any, intake: Intake, url: str, batch: Batch, client: Client
 ) -> None:
     writing = Writing(intake.manager, {STAGED.name: [TEXT]})
-    writing.set_form(batch.label, writing.form(batch.label))
+    writing.set_options(batch.label, writing.options(batch.label))
     client.wait(list(batch.reduce(['1', '2']).values()))
     with output_tab(browser, Pages(intake), batch.label) as page:
         said = page.inner_text('#output-draft .settings-bar-state')

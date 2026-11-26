@@ -7,17 +7,17 @@ batch made again, after a restart or in another process, has it.
 The definition is these entries, each with one writer. The settings and the
 rows of a batch are written by its ``Batch``, which the manager makes:
 
-    corrections   metadata of a file set by hand, by file     CorrectedFiles
-    header        title, description                          BatchManager
-    settings      the template: spec, settings, fills         Batch.settings
-    rows          the batch table                             Batch.put
-    source        the row source a batch was made from, the  Intake
-                  keys of it that the batch has considered,
-                  and whether the batch follows
-    form          the format of the files that its results    Writing
-                  are written as, and what a person says of
-                  them
-    publish       the records published to the catalogue      Publisher
+    corrections     metadata of a file set by hand, by file    CorrectedFiles
+    header          title, description                         BatchManager
+    settings        the template: spec, settings, fills        Batch.settings
+    rows            the batch table                            Batch.put
+    source          the row source a batch was made from, the  Intake
+                    keys of it that the batch has considered,
+                    and whether the batch follows
+    output_options  the format of the files that its results   Writing
+                    are written as, and what a person says of
+                    them
+    publish         the records published to the catalogue     Publisher
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
@@ -31,7 +31,7 @@ under a key::
     ('labels', label, 'settings')
     ('labels', label, 'rows')
     ('labels', label, 'source')
-    ('labels', label, 'form')
+    ('labels', label, 'output_options')
     ('labels', label, 'publish')
 
 and its writer saves it whole at each change. It can forget an entry
@@ -43,15 +43,15 @@ The plain data of each entry, as its :class:`Entry` below writes and reads it
 (:data:`CORRECTIONS` with :func:`corrections_data` and
 :func:`corrections_of`)::
 
-    corrections   {'pid:20.500.12269/abc': {'role': 'sample'}}
-    header        {'title': 'Sample runs', 'description': ''}
-    settings      {'spec': ..., 'params': {...}, 'blanks': ['sample']}: a template
-    rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
-    source        {'source': 'sample-runs', 'considered': ['60337', '60338'],
-                   'follows': True}
-    form          {'format': 'scipp-hdf5', 'outputs': ['iofq'],
-                   'name': '{title} {name}', ...}
-    publish       {'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
+    corrections     {'pid:20.500.12269/abc': {'role': 'sample'}}
+    header          {'title': 'Sample runs', 'description': ''}
+    settings        {'spec': ..., 'params': {...}, 'blanks': ['sample']}
+    rows            {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
+    source          {'source': 'sample-runs', 'considered': ['60337', '60338'],
+                     'follows': True}
+    output_options  {'format': 'scipp-hdf5', 'outputs': ['iofq'],
+                     'name': '{title} {name}', ...}
+    publish         {'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
 
 The settings are a template in the format of the file that a person saves
 from a page: its params are the settings of the batch, also those at the
@@ -132,7 +132,7 @@ _NAME_MAX = 255
 # Moves with every change of what the kept files mean, such as where the fills
 # of a batch are kept, so that a folder of another format is refused, not read
 # wrong. No folder is migrated.
-FORMAT = 1
+FORMAT = 2
 """The format of the files of :class:`FolderDefinitions`, in ``format.json``."""
 
 _FORMAT_KEY: Key = ('format',)
@@ -317,7 +317,7 @@ class FromSource:
     follows: bool
 
 
-class Form(BaseModel, frozen=True):
+class OutputOptions(BaseModel, frozen=True):
     """
     How the results of a batch are written, once for all its rows, and what a
     person says of them (see :mod:`.writing`).
@@ -459,10 +459,10 @@ SETTINGS = Entry('settings', template_data, template_of)
 ROWS = Entry('rows', data_of, frame_of)
 """Read as the rows are kept; :meth:`.manager.BatchManager.batch` types them."""
 SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(FromSource)))
-FORM = _adapted('form', Form)
+OUTPUT_OPTIONS = _adapted('output_options', OutputOptions)
 PUBLISH = _adapted('publish', Publishing)
 
-LABEL_ENTRIES = (HEADER, SOURCE, ROWS, SETTINGS, FORM, PUBLISH)
+LABEL_ENTRIES = (HEADER, SOURCE, ROWS, SETTINGS, OUTPUT_OPTIONS, PUBLISH)
 """Every entry of a label: the header first, then the others."""
 
 

@@ -1116,13 +1116,13 @@ function renderOutput(state) {
     renderOutputDraft();
     return;
   }
-  const held = form.shown != null && outputChanged(JSON.parse(form.shown).form);
+  const held = form.shown != null && outputChanged(JSON.parse(form.shown).options);
   form.shown = shown;
   if (!held) fillOutput(state.output);
   else renderOutputDraft();
 }
 
-function fillOutput({form: given, formats, outputs}) {
+function fillOutput({options: given, formats, outputs}) {
   $('output-format').replaceChildren(...formats.map((f) => h('option', {value: f.name}, f.title)));
   $('output-outputs').replaceChildren(
     ...outputs.map((o) => h('label', {}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`)),
@@ -1167,9 +1167,9 @@ function normal(form) {
   ]);
 }
 
-// Whether the inputs hold a change of `form`, by default the form in force.
+// Whether the inputs hold a change of `form`, by default the output options in force.
 // A format that the select lacks reads as none picked, as the select shows it.
-function outputChanged(form = view.state?.output.form) {
+function outputChanged(form = view.state?.output.options) {
   if (!form) return false;
   const known = view.state.output.formats.some((f) => f.name === form.format);
   return normal(outputForm()) !== normal(known ? form : {...form, format: ''});
