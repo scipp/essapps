@@ -974,7 +974,7 @@ function stopFollowing() {
 // with earlier settings, which a person may reduce again. Apply and Discard
 // are never disabled: a click on them may send the value typed first.
 function renderSettings(state) {
-  const {action, counts, settings_changed: changed, settings_problem: problem} = state;
+  const {action, counts, settings_unapplied: changed, settings_problem: problem} = state;
   $('earlier').hidden = counts.earlier === 0;
   $('earlier-state').textContent = `${count(counts.earlier)} reduced with earlier settings.`;
   $('reduce-earlier').disabled = Boolean(action.blocked);
@@ -1055,7 +1055,7 @@ async function removeBatch() {
 
 // Whether to replace the changes of the settings form that are not applied.
 function replaceChanges() {
-  return !view.state.settings_changed || confirm('The settings form holds changes that are not applied. Replace them?');
+  return !view.state.settings_unapplied || confirm('The settings form holds changes that are not applied. Replace them?');
 }
 
 function selectedRows() {

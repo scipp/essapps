@@ -457,7 +457,7 @@ class Page:
             action=view.action(states, unapplied or problem, unapplied),
             settings=forms.tree(self.draft.fields, marks, columns),
             settings_problem=problem,
-            settings_changed=unapplied is not None,
+            settings_unapplied=unapplied is not None,
             may_be_columns=[
                 n for n in forms.edited(self.draft.fields) if n not in columns
             ],

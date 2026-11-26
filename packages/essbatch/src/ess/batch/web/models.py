@@ -257,7 +257,7 @@ class State(BaseModel):
     as :class:`Batches` has them. ``notes`` are the note columns of the batch
     table, but ``name``, and ``columns`` the parameter columns; both change
     when the batch table does. ``settings`` is the form
-    of the settings. ``settings_changed`` says whether a person changed it and
+    of the settings. ``settings_unapplied`` says whether a person changed it and
     has not applied the change; the rows read as with the batch's settings.
     ``settings_problem`` names the batch's settings that the form cannot show,
     what the form misses, and why the batch's settings are refused where the
@@ -286,7 +286,7 @@ class State(BaseModel):
     action: Action
     settings: list[Node]
     settings_problem: str | None
-    settings_changed: bool
+    settings_unapplied: bool
     may_be_columns: list[str]
     refused: list[Refused]
     follow: Following

@@ -527,7 +527,7 @@ def test_the_settings_of_a_row_put_in_the_form_are_those_it_took_at_a_column(
     # Row 1 gave its own value, so the setting stays; row 2 took the setting.
     (field,) = [n for n in put['settings'] if n['path'] == ['thickness']]
     assert field['value'] == shown
-    assert put['settings_changed'] is (key == '2')
+    assert put['settings_unapplied'] is (key == '2')
 
 
 def test_a_column_that_the_source_fills_has_no_setting_on_the_page(
@@ -714,7 +714,7 @@ def test_an_edit_of_the_settings_changes_the_form_only(
     edited = draft(http, 3)
 
     assert form_bins(edited) == 3
-    assert edited['settings_changed'] is True
+    assert edited['settings_unapplied'] is True
     assert batch.settings == {}
     assert statuses(http) == {'1': 'done', '2': 'done', '3': 'incomplete'}
 
@@ -725,7 +725,7 @@ def test_apply_writes_the_form_to_the_batch(http: TestClient, batch: Batch) -> N
     applied = http.post('/api/settings/apply').json()
 
     assert batch.settings['binning'] == {'bins': 3}
-    assert applied['settings_changed'] is False
+    assert applied['settings_unapplied'] is False
     assert applied['notice'] == 'Applied the settings.'
 
 
@@ -738,7 +738,7 @@ def test_discard_shows_the_batch_s_settings_again(
     discarded = http.post('/api/settings/discard').json()
 
     assert form_bins(discarded) == 3
-    assert discarded['settings_changed'] is False
+    assert discarded['settings_unapplied'] is False
     assert batch.settings['binning'] == {'bins': 3}
 
 
@@ -755,7 +755,7 @@ def test_apply_is_refused_while_the_form_misses_something(
 
     assert applied.json() == {'message': 'Not applied: Offset: choose a result.'}
     shown = state(http)
-    assert shown['settings_changed'] is True
+    assert shown['settings_unapplied'] is True
     assert shown['settings_problem'] == 'Offset: choose a result'
     assert shown['action']['label'] == 'Fill in or discard the settings'
     assert shown['action']['blocked'] == 'Fill in or discard the settings'
@@ -885,7 +885,7 @@ def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_apply(
         still = definitions.load(SETTINGS.key(label), lambda d: d['params'])
         after = page.post('/api/settings/apply').json()
 
-    assert shown['settings_changed'] is False
+    assert shown['settings_unapplied'] is False
     assert shown['settings_problem'].startswith(
         'Settings that this form cannot show: wavelength = 5.0: 5.0 is not a group'
     )
@@ -970,7 +970,7 @@ def test_settings_not_kept_stay_in_the_form_to_apply_again(
 
     kept.post('/api/settings/apply')
 
-    assert (form_bins(shown), shown['settings_changed']) == (7, True)
+    assert (form_bins(shown), shown['settings_unapplied']) == (7, True)
     assert flaky.kept[SETTINGS.key('kept')]['params']['binning'] == {'bins': 7}
 
 
@@ -1045,7 +1045,7 @@ def test_a_settings_file_loaded_fills_the_form_until_apply(
     assert loaded['notice'] == (
         'The form shows the settings of mine.yaml. Apply to use them.'
     )
-    assert (form_bins(loaded), loaded['settings_changed']) == (2, True)
+    assert (form_bins(loaded), loaded['settings_unapplied']) == (2, True)
     assert batch.settings['binning'] == {'bins': 2}
 
 
@@ -1241,7 +1241,7 @@ def test_the_settings_of_a_row_fill_the_form_until_apply(
     assert used['notice'] == (
         'The form shows the settings water was reduced with. Apply to use them.'
     )
-    assert (form_bins(used), used['settings_changed']) == (2, True)
+    assert (form_bins(used), used['settings_unapplied']) == (2, True)
     assert used['rows'][0]['status'] == 'earlier'
     assert batch.settings['binning'] == {'bins': 2}
     assert applied['rows'][0]['status'] == 'done'
