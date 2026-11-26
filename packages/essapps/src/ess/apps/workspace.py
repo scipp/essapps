@@ -308,10 +308,17 @@ def _info(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
-def _output_reads(params: Mapping[str, Any]) -> list[tuple[str, str]]:
-    """The outputs of records that ``params`` reference, by record ID and name."""
+class _OutputKey(NamedTuple):
+    """An output of a record that is read."""
+
+    record: str
+    output: str
+
+
+def _output_reads(params: Mapping[str, Any]) -> list[_OutputKey]:
+    """The outputs of records that ``params`` reference."""
     return [
-        (ref.record, ref.output)
+        _OutputKey(ref.record, ref.output)
         for _, ref in iter_refs(params)
         if isinstance(ref, OutputRef)
     ]
@@ -409,7 +416,7 @@ class _DriverInput(NamedTuple):
     """
 
     values: dict[str, Any]
-    reads: list[tuple[str, str]]
+    reads: list[_OutputKey]
 
 
 class _Accumulator:
@@ -508,15 +515,21 @@ def _state_key(accumulator_id: str, upto: int) -> str:
     return f'{accumulator_id}[:{upto}]'
 
 
-_Read = tuple[str, str] | tuple[_Accumulator, int]
+class _StateKey(NamedTuple):
+    """A state of an accumulator that is read, by its number of pushes."""
+
+    acc: _Accumulator
+    pushes: int
+
+
+_Read = _OutputKey | _StateKey
 """
-A value that is read: an output by record ID and name, or an accumulator's
-state by its number of pushes. The readers of an output are the pending
-records, steps, and stages that have yet to read it. The readers of a state
-are the reads of the accumulator's outputs in progress, a freeze being
-checked, from its call until its record is logged and holds the state itself,
-and the record of the freeze, until it has finished and its workflow, if it
-ran, has returned.
+A value that is read: an output of a record, or a state of an accumulator. The
+readers of an output are the pending records, steps, and stages that have yet to
+read it. The readers of a state are the reads of the accumulator's outputs in
+progress, a freeze being checked, from its call until its record is logged and
+holds the state itself, and the record of the freeze, until it has finished and
+its workflow, if it ran, has returned.
 """
 
 
@@ -536,7 +549,7 @@ class _Plan:
     reads: list[_Read]
     waits: set[str]
     compute: Callable[[], dict[str, Any]]
-    state: tuple[_Accumulator, int] | None = None
+    state: _StateKey | None = None
 
 
 class Workspace(WorkspaceProtocol):
@@ -611,8 +624,7 @@ class Workspace(WorkspaceProtocol):
         self._accumulators: dict[str, _Accumulator] = {}  # open, by ID
         # by record ID and name
         self._outputs: dict[tuple[str, str], Any] = {}
-        # a value, as (record ID, name) or (accumulator, number of pushes), to
-        # the number of its readers (see _Read)
+        # a value to the number of its readers (see _Read)
         self._readers: Counter[_Read] = Counter()
         self._plans: dict[str, _Plan] = {}  # of the records not yet finished
         # a record or a state (see _state_key) to the records that wait for it
@@ -952,7 +964,7 @@ class Workspace(WorkspaceProtocol):
         """
         try:
             stage = self._check_stage(entry, request)
-            stage_reads: Collection[tuple[str, str]] = ()
+            stage_reads: Collection[_OutputKey] = ()
             if stage is not None:
                 read, stage_reads = stage.read_part(request).params, stage.reads
                 reads = [r for r in reads if r[0][0] in read]
@@ -961,7 +973,7 @@ class Workspace(WorkspaceProtocol):
             raise _refused(index, error) from None
 
     def _check_reads(
-        self, reads: OutputReads, stage_reads: Collection[tuple[str, str]] = ()
+        self, reads: OutputReads, stage_reads: Collection[_OutputKey] = ()
     ) -> None:
         """
         Check the outputs of records that a request, a template, or a push
@@ -975,7 +987,7 @@ class Workspace(WorkspaceProtocol):
             check_fit(self._bound[source].spec, ref, tp, loc)
 
     def _source_spec(
-        self, ref: OutputRef, loc: Loc, stage_reads: Collection[tuple[str, str]]
+        self, ref: OutputRef, loc: Loc, stage_reads: Collection[_OutputKey]
     ) -> SpecId:
         """
         The spec of a record a request may read; lock held. The record's
@@ -1016,7 +1028,7 @@ class Workspace(WorkspaceProtocol):
         return record.spec
 
     def _refusal(
-        self, key: tuple[str, str], stage_reads: Collection[tuple[str, str]] = ()
+        self, key: tuple[str, str], stage_reads: Collection[_OutputKey] = ()
     ) -> str | None:
         """
         Why a request may not reference an output of a record now, or ``None``;
@@ -1057,7 +1069,7 @@ class Workspace(WorkspaceProtocol):
         """
         refs = request.upstream()
         return _Plan(
-            reads=[(ref.record, ref.output) for ref in refs],
+            reads=[_OutputKey(ref.record, ref.output) for ref in refs],
             waits={ref.record for ref in refs} - self._views.finished.keys(),
             compute=compute,
         )
@@ -1232,19 +1244,19 @@ class Workspace(WorkspaceProtocol):
             try:
                 while self._unread_values:
                     match self._unread_values.popleft():
-                        case (_Accumulator() as acc, upto) if acc.stopped:
+                        case _StateKey(acc, upto) if acc.stopped:
                             # readers of later states hold no outputs
                             if upto == acc.added:
                                 acc.end()
-                        case (_Accumulator() as acc, upto) if (
+                        case _StateKey(acc, upto) if (
                             acc.frozen and not acc.steps and upto == acc.added
                         ):
                             acc.drop()  # no push comes to drop them
-                        case (_Accumulator() as acc, _) if acc.released:
+                        case _StateKey(acc) if acc.released:
                             self._unneeded(acc)
-                        case (_Accumulator() as acc, _):
+                        case _StateKey(acc):
                             self._advance(acc)
-                        case (str() as record_id, _):
+                        case _OutputKey(record_id):
                             self._drop(record_id)
             finally:
                 self._letting_go = False
@@ -1264,7 +1276,7 @@ class Workspace(WorkspaceProtocol):
         if record_id in self._in_memory:
             return
         names = self._views.records.outputs(record_id)
-        kept = [n for n in names if self._readers[(record_id, n)]]
+        kept = [n for n in names if self._readers[_OutputKey(record_id, n)]]
         if record_id not in self._views.finished:
             if not kept and record_id not in self._views.persisted:
                 self._finish(record_id, Status.CANCELLED, 'nothing keeps its outputs')
@@ -1811,7 +1823,7 @@ class Workspace(WorkspaceProtocol):
                 )
             acc.freezing = True
             upto = len(self._views.pushes.get(accumulator_id, ()))
-            self._readers[(acc, upto)] += 1
+            self._readers[_StateKey(acc, upto)] += 1
         try:
             if (refused := self._check_state(acc, upto)) is not None:
                 raise SubmitError.at((), refused)
@@ -1839,7 +1851,7 @@ class Workspace(WorkspaceProtocol):
         finally:
             with self._changed:
                 acc.freezing = False
-                self._let_go([(acc, upto)])
+                self._let_go([_StateKey(acc, upto)])
 
     def _state_plan(self, acc: _Accumulator, upto: int) -> _Plan:
         """
@@ -1847,7 +1859,7 @@ class Workspace(WorkspaceProtocol):
         pushes; lock held. It reads only the state, which it waits for; the
         pushes have read the outputs its rows reference.
         """
-        state = (acc, upto)
+        state = _StateKey(acc, upto)
         return _Plan(
             reads=[state],
             waits={_state_key(acc.id, upto)} if acc.added != upto else set(),
@@ -1883,7 +1895,7 @@ class Workspace(WorkspaceProtocol):
         if not acc.steps:
             self._accumulating.discard(acc)
             return
-        if acc.added is not None and self._readers[(acc, acc.added)]:
+        if acc.added is not None and self._readers[_StateKey(acc, acc.added)]:
             return
         for record_id, _ in acc.steps[0].reads:
             status = self._views.status(record_id)
@@ -1946,7 +1958,7 @@ class Workspace(WorkspaceProtocol):
         for upto in range(len(self._views.pushes.get(acc.id, ())) + 1):
             for record_id in self._dependents.pop(_state_key(acc.id, upto), ()):
                 self._finish(record_id, Status.FAILED, acc.stopped)
-        if not self._readers[(acc, acc.added)]:
+        if not self._readers[_StateKey(acc, acc.added)]:
             acc.end()
         self._changed.notify_all()
 
@@ -2051,14 +2063,14 @@ class Workspace(WorkspaceProtocol):
         """
         with self._changed:
             acc, upto = self._logged_state(accumulator_id)
-            self._readers[(acc, upto)] += 1
+            self._readers[_StateKey(acc, upto)] += 1
         try:  # a validator may raise anything
             if (refused := self._check_state(acc, upto)) is not None:
                 raise NotReadable(refused)
             yield acc, upto
         finally:
             with self._changed:
-                self._let_go([(acc, upto)])
+                self._let_go([_StateKey(acc, upto)])
 
     def plain_request(self, accumulator_id: str) -> Request:
         with self._changed:
