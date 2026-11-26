@@ -14,9 +14,10 @@ references, and ``docs/developer/accumulators.md`` for stages and accumulators.
 
 Lifetimes
 ---------
-A record stays in the proposal's history. The history is dropped as a whole
-once the proposal has been idle, with no call and no pending record, for days
-to weeks.
+A record stays in the proposal's history. A deployment may drop a history that
+no person holds, such as that of automatic reduction, once its proposal has
+been idle for days to weeks
+(``docs/developer/adr/0004-history-is-append-only-lists.md``).
 
 An output value may be large. It is available only while one of these holds it:
 
@@ -33,8 +34,8 @@ come back. An output is written to the store only if a submission or a freeze
 persists it, since the framework cannot tell which outputs are worth writing.
 
 A request may reference, and a client may read, only outputs that are held, and
-files. A client may also read the states of its open accumulators. Every client
-of the workspace reads the same values. A request may reference an output of a
+files. A client may also read the states of open accumulators. Every client of
+the workspace reads the same values. A request may reference an output of a
 pending record. :meth:`~WorkspaceProtocol.submit` rejects the reference once
 that record has failed or been cancelled.
 
@@ -257,7 +258,7 @@ class WorkspaceProtocol(Protocol):
         """
         The plain request of the accumulator's logged state.
 
-        Returns at once. Raises ``NotReadable`` if the state may not be read.
+        Raises ``NotReadable`` if the state may not be read.
         """
         ...
 
@@ -326,9 +327,7 @@ class WorkspaceProtocol(Protocol):
 
     def bound(self, ids: Sequence[str]) -> list[bool]:
         """
-        Whether each record is of the bound spec.
-
-        Waits for nothing and reads no value.
+        Whether each record is of the bound spec. Reads no value.
         """
         ...
 
@@ -338,7 +337,7 @@ class WorkspaceProtocol(Protocol):
 
         These are the outputs that :meth:`outputs` returns once the record has
         completed. A request may reference them, except the outputs of a record
-        of an unbound spec. Waits for nothing and reads no value.
+        of an unbound spec. Reads no value.
         """
         ...
 
@@ -379,9 +378,6 @@ class WorkspaceProtocol(Protocol):
         holds it.
 
         ``docs/developer/accumulators.md`` defines states and the logged state.
-        A freeze is of the logged state once no other freeze of the accumulator
-        is being checked. A push that waited for that check may be logged
-        first.
 
         The accumulator stops if the binding fails to make the driver, if
         adding a push fails, or if a record that its template or a push
@@ -421,7 +417,9 @@ class WorkspaceProtocol(Protocol):
         """
         The record of the accumulator's logged state.
 
-        The record's outputs are the driver's, not a copy. The workspace holds
+        The state is the logged state once no other freeze of the accumulator
+        is being checked. A push that waited for that check may be logged
+        first. The record's outputs are the driver's, not a copy. The workspace holds
         them, or with ``persist`` the store does. ``submitter`` and ``persist``
         are as for :meth:`submit`.
 
@@ -488,9 +486,9 @@ class FileSource(Protocol):
 
     A source that cannot answer, such as when a mount is gone or a catalogue
     timed out, raises ``OSError``. If :meth:`resolve`, :meth:`metadata` or
-    :meth:`path` raises it for a file that a request names, the workspace
-    rejects the file as an unknown one. Only the requests that name the file are
-    rejected.
+    :meth:`path` raises it for a file that a request names,
+    :meth:`WorkspaceProtocol.submit` raises ``SubmitError`` for that request,
+    with the reason ``file ... cannot be read``.
     """
 
     def resolve(self, name: FileRef) -> FileRef:
@@ -513,11 +511,11 @@ class FileSource(Protocol):
         Raises ``KeyError`` for an identity the source does not know, such as
         one that a record holds of a file moved or given a ``pid`` since.
 
-        The workspace calls ``path`` for each file of a request when the request
-        is submitted, and for each file of a template when it resolves it, so
-        that the validators of a group that holds a file see its path. So
-        ``path`` neither stages nor downloads the file, and does not check that
-        it can be read. A file that cannot be read fails the workflow that reads
+        The workspace calls ``path`` when it checks a request or a template,
+        for each file of a parameter that holds no reference, so that the
+        validators of a group that holds a file see its path. So ``path``
+        neither stages nor downloads the file, and does not check that it can
+        be read. A file that cannot be read fails the workflow that reads
         it, so that it fails only its own record.
         """
         ...
@@ -568,7 +566,7 @@ class Store(Protocol):
             a group (a pydantic model)           a DataGroup of its fields
             dict[str, X]                         a DataGroup of its items
             list[X]                              a DataGroup by index, '0', '1', ...
-            None, as a field or an item          left out
+            None, as a field or a dict value     left out
             a member of an enum                  its value
             a number, text, or a bool alone      DataGroup({'value': ...})
 
