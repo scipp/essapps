@@ -42,7 +42,7 @@ from ess.apps.writers import SCIPP_HDF5, DatasetMetadata, Person, Writer
 from .definition import FORM, Form
 from .export import RowWriter
 from .manager import BatchManager
-from .table import names
+from .table import row_names
 
 
 class Writing:
@@ -177,7 +177,7 @@ class Writing:
                 description=form.description,
                 keywords=form.keywords,
             )
-            for key, name in names(batch.frame(), batch.parameter_columns).items()
+            for key, name in row_names(batch.frame(), batch.parameter_columns).items()
         }
 
     def _writer(self, label: str, format: str) -> Writer:

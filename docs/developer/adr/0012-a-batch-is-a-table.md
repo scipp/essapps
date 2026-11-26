@@ -152,7 +152,7 @@ On the page, "New batch" takes a spec, and either a source with a range of its r
 ```python
 newest = records.sort_values('created').drop_duplicates('member', keep='last').set_index('member')
 state = rows.join(newest)                               # a left join on the key
-changed = {key: differs(request(key), newest.params[key]) for key in rows.index}
+changed = {key: changed_names(request(key), newest.params[key]) for key in rows.index}
 overrides = {key: set(row.dropna().index) for key, row in rows[columns].iterrows()}  # the cells with a value
 settings_changed = [key for key in rows.index if changed[key] and not changed[key] & overrides[key]]
 outdated = [key for key in rows.index if changed[key] & overrides[key]]

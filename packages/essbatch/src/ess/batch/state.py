@@ -10,7 +10,7 @@ the records and gives them to these functions.
 A row's *result* is the newest record under the batch's label with the row's
 key as its member, of any spec (:func:`results`). The row's request now differs
 from its result's at the parameters that :attr:`RowState.changed` names, found
-with :func:`differs` on both as a record holds them. A result is *outdated*
+with :func:`changed_names` on both as a record holds them. A result is *outdated*
 (:attr:`RowState.outdated`) if it is of another spec than the one bound
 (:attr:`RowState.spec_changed`), or if the request changed at any parameter
 (:func:`row_states`).
@@ -162,7 +162,7 @@ def references(cells: Iterable[Mapping[str, Any]]) -> set[str]:
     }
 
 
-def differs(
+def changed_names(
     now: Mapping[str, Any], was: Mapping[str, Any], names: Iterable[str]
 ) -> list[str]:
     """

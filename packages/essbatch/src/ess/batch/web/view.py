@@ -28,7 +28,7 @@ from ess.spec import WorkflowSpec, field_types
 
 from ..definition import Form
 from ..state import RowState, left_to_reduce, ready
-from ..table import NAME, as_request, names
+from ..table import NAME, as_request, row_names
 from . import forms
 from .errors import Rejected, request_error_text, titled_field_error
 from .models import (
@@ -76,7 +76,7 @@ def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
     named as :func:`names` names it, with the text of each note, the columns
     but ``fills``, and its mark.
     """
-    named = names(given, ())
+    named = row_names(given, ())
     marks = {'waits', 'taken'}
     shown = [c for c in given.columns if c not in {NAME, *fills, *marks}]
 

@@ -253,7 +253,7 @@ def _described(
     """
     given = 'required' if info.is_required() else f'default {_flow(_default(info))}'
     metadata = field_types.field_metadata(info)
-    takes, groups = _takes(info.annotation, metadata, bound, top=depth == 0)
+    takes, groups = _describe_type(info.annotation, metadata, bound, top=depth == 0)
     text = f'{name} ({given}): {takes}.'
     if info.description:
         text += f' {info.description}'
@@ -276,7 +276,7 @@ it among the alternatives of a union, ``None`` for a single group.
 """
 
 
-def _takes(
+def _describe_type(
     annotation: Any,
     metadata: tuple[Any, ...],
     bound: Sequence[WorkflowSpec[Any, Any]],
@@ -295,7 +295,7 @@ def _takes(
     groups: _Groups = []
     match field.inline:
         case List(element):
-            each, groups = _takes(element, (), bound, top=top)
+            each, groups = _describe_type(element, (), bound, top=top)
             ways.append(f'a list, each {each}')
         case Choice(tag, alternatives):
             ways.append(f'a group of one of the kinds below, chosen by its field {tag}')

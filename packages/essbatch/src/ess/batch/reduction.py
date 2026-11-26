@@ -56,7 +56,7 @@ worked out on both as a record holds them, resolving as little as it can::
     # file named by run; a row without one: all its cells
     client.resolve({key: Template(spec, params=cells, blanks=the_others)})
     # one call for all rows; a refusal is a problem of its row
-    changed = differs({**settings, **cells}, record.request.params, names)
+    changed = changed_names({**settings, **cells}, record.request.params, names)
 
 A parameter resolves the same whatever the other parameters are, so a cell is
 resolved on its own, and a value resolved once is kept by its column and value
@@ -92,7 +92,7 @@ from ess.spec.refs import iter_refs
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
-from .table import as_request, cell_of, data_of, names, typed
+from .table import as_request, cell_of, data_of, row_names, typed
 
 _NONE = object()
 
@@ -617,12 +617,12 @@ class Batch:
         The settings that the result of row ``key`` was reduced with: at a
         column where the row gives its own value, the batch's setting, and
         where its cell is empty, the value that the row took. Raises
-        ``ValueError`` naming the row (:func:`~.table.names`) if it has no
+        ``ValueError`` naming the row (:func:`~.table.row_names`) if it has no
         result, or one of another spec, whose settings this one does not take;
         ``KeyError`` if the table has no row ``key``.
         """
         row = self.shown([key])[0][key]
-        name = names(self._rows, self.parameter_columns)[key]
+        name = row_names(self._rows, self.parameter_columns)[key]
         if row.record is None:
             raise ValueError(f'{name} has no result')
         if row.spec_changed:
@@ -700,7 +700,7 @@ class Batch:
                 was = record.request.params
                 asked[key] = {
                     c: given[c]
-                    for c in state.differs(given, was, self.parameter_columns)
+                    for c in state.changed_names(given, was, self.parameter_columns)
                 }
         cells_now, refused = self._resolve_cells(asked)
         changed = {}
@@ -709,7 +709,7 @@ class Batch:
                 now = {**resolved.params, **cells_now[key]}
                 names = [*self.settings_fields, *cells_now[key]]
                 changed[key] = frozenset(
-                    state.differs(now, record.request.params, names)
+                    state.changed_names(now, record.request.params, names)
                 )
         return changed, refused
 

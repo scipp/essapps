@@ -124,7 +124,7 @@ NAME = 'name'
 is named; a row without one is named by its key."""
 
 
-def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
+def row_names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
     """
     The name of each row of ``frame``, a table whose parameter columns are
     ``columns``, by key: its note :data:`NAME`, else its key.

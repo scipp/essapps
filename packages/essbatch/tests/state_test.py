@@ -15,7 +15,7 @@ from ess.batch import (
     to_reduce,
     with_changed_settings,
 )
-from ess.batch.state import Which, differs, results, row_states
+from ess.batch.state import Which, changed_names, results, row_states
 from pydantic import BaseModel
 
 from ess.apps import Record, Request, SpecId, Status
@@ -333,16 +333,18 @@ def test_the_result_of_a_row_is_its_newest_record_of_any_spec() -> None:
 def test_a_value_differs_if_either_side_lacks_it() -> None:
     was = {'sample': 'x', 'thickness': 1.0, 'shared': 0}
 
-    assert differs({'sample': 'x', 'thickness': 1.0}, was, Model.model_fields) == [
-        'shared'
-    ]
-    assert differs({'sample': 'y', 'shared': 0}, was, ['sample', 'shared']) == [
+    assert changed_names(
+        {'sample': 'x', 'thickness': 1.0}, was, Model.model_fields
+    ) == ['shared']
+    assert changed_names({'sample': 'y', 'shared': 0}, was, ['sample', 'shared']) == [
         'sample'
     ]
 
 
 def test_a_list_in_another_order_differs() -> None:
-    assert differs({'runs': ['b', 'a']}, {'runs': ['a', 'b']}, ['runs']) == ['runs']
+    assert changed_names({'runs': ['b', 'a']}, {'runs': ['a', 'b']}, ['runs']) == [
+        'runs'
+    ]
 
 
 def not_compared() -> dict[str, RowState]:

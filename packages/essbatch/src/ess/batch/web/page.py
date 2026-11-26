@@ -149,7 +149,7 @@ from ..definition import Form
 from ..export import export_table
 from ..reduction import Batch
 from ..state import RowState, publishable, to_reduce
-from ..table import KEY, NAME, cell_of, names, read_table, write_table
+from ..table import KEY, NAME, cell_of, read_table, row_names, write_table
 from ..templates import checked_settings, load_template, settings_text
 from . import forms, plots, view
 from .draft import Draft
@@ -393,7 +393,7 @@ class Page:
         failures = self._failures(states)
         frame = batch.frame()
         requested = batch.cells()
-        named = names(frame, columns)
+        named = row_names(frame, columns)
         notes = [n for n in frame.columns if n not in columns and n != NAME]
         titles = self._titles
         published = definition.published(
@@ -697,7 +697,7 @@ class Page:
         except SubmitError as error:
             self._refusals = [e for e in error.errors if self._placed(e, frame.index)]
             unplaced = [e for e in error.errors if e not in self._refusals]
-            named = names(frame, self.batch.parameter_columns)
+            named = row_names(frame, self.batch.parameter_columns)
             raise _NotReduced(
                 [view.refusal(e, named, self._titles).text for e in unplaced],
                 len(self._refusals),
@@ -785,7 +785,7 @@ class Page:
         (:meth:`~ess.batch.Batch.settings_of`).
         """
         frame = self._frame([key])
-        name = names(frame, self.batch.parameter_columns)[key]
+        name = row_names(frame, self.batch.parameter_columns)[key]
         try:
             settings = self.batch.settings_of(key)
         except ValueError as error:
@@ -898,7 +898,7 @@ class Page:
         if not chosen or draw is None:
             return Plot(figure=None, note=note)
         colors = plots.colors([order[s.key] for s in chosen])
-        named = names(frame, self.batch.parameter_columns)
+        named = row_names(frame, self.batch.parameter_columns)
         shown = [
             Shown(s.key, named[s.key], s.record, s.status == 'outdated', c)
             for s, c in zip(chosen, colors, strict=True)
