@@ -34,11 +34,11 @@ every column::
 A row's state is read from the records, not from what this object submitted,
 so every ``Batch`` on the label, and this one after a restart, sees the same,
 but for how it resolved a file name, which it keeps until its next ``put``.
-What a ``Batch`` keeps of them can be rebuilt from the records at any time:
-the newest record of each member under the label, the IDs of the records under
-the label it has read, and which of them are not of the bound spec
-(:meth:`~ess.apps.Client.bound`), all read from ``client.changes``, so that the
-state of chosen rows does not read every record under the label.
+What a ``Batch`` keeps of them (:class:`LabelRecords`) can be rebuilt from the
+records at any time: the newest record of each member under the label, the IDs
+of the records under the label it has read, and which of them are not of the
+bound spec (:meth:`~ess.apps.Client.bound`), all read from ``client.changes``,
+so that the state of chosen rows does not read every record under the label.
 
 The settings are the batch's own (:attr:`Batch.settings`), so each state is
 read with them, and each reduction submits them. A state that resolves
@@ -129,6 +129,66 @@ def _running(row: RowState) -> list[FieldError]:
     if row.status is Status.PENDING:
         return [FieldError(row.key, (), 'still running')]
     return []
+
+
+class LabelRecords:
+    """
+    The records under ``label``, read from the proposal's changes: the result
+    of each member (:attr:`found`), and the IDs of those that are not of the
+    bound spec (:attr:`unbound`). Up to date after :meth:`poll`.
+    """
+
+    def __init__(self, client: Client, label: str) -> None:
+        self.client = client
+        self.label = label
+        self.found: dict[str, Record] = {}
+        self.unbound: set[str] = set()
+        self._cursor: int | None = None
+        self._seen: set[str] = set()
+
+    def poll(self) -> bool:
+        """
+        Bring the result of each member under the label up to date, from the
+        proposal's changes; the first call reads every record under the label.
+        Whether any record of the proposal changed since the last call; not
+        at the first.
+        """
+        if self._cursor is None:
+            self._cursor = self.client.changes().cursor
+            records = self.client.records(label=self.label)
+            moved = False
+        else:
+            changes = self.client.changes(after=self._cursor)
+            self._cursor = changes.cursor
+            # Any record, since a cell may reference a record under another label.
+            moved = bool(changes.records)
+            # A record is in the changes when submitted and when it finishes,
+            # so one seen before is not newer than the result held.
+            new = [i for i in changes.records if i not in self._seen]
+            records = [r for r in self.known(new) if r.label == self.label]
+        self._seen.update(r.id for r in records)
+        self.found |= state.results(records)
+        bound = self.client.bound(records) if records else []
+        self.unbound.update(r.id for r, b in zip(records, bound, strict=True) if not b)
+        return moved
+
+    def known(self, ids: list[str]) -> list[Record]:
+        """
+        The records of ``ids`` that the client knows, of any label. If one is
+        unknown, the others are read one by one, so that it touches only the
+        rows that reference it, whose submission it refuses.
+        """
+        try:
+            return self.client.records(ids=ids) if ids else []
+        except KeyError:
+            if len(ids) == 1:
+                return []
+            return [r for i in ids for r in self.known([i])]
+
+    def status(self, records: list[Record]) -> dict[str, Status]:
+        """The status of each of ``records``, by record ID."""
+        statuses = self.client.status(records)
+        return {r.id: s for r, s in zip(records, statuses, strict=True)}
 
 
 class Batch:
@@ -228,11 +288,7 @@ class Batch:
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
-        # The records under the label, read from the proposal's changes.
-        self._cursor: int | None = None
-        self._seen: set[str] = set()
-        self._found: dict[str, Record] = {}
-        self._unbound: set[str] = set()
+        self._records = LabelRecords(client, label)
         # A cell's value as a record holds it, by its column and value as given;
         # also a setting's, for :meth:`files`.
         # A state of 1000 toy rows without results takes 21 ms with it, and
@@ -570,7 +626,8 @@ class Batch:
         """The cells of ``keys``, or of all, and the result of each that has one."""
         self._poll()
         cells = self.cells(keys)
-        return cells, {k: self._found[k] for k in cells if k in self._found}
+        found = self._records.found
+        return cells, {k: found[k] for k in cells if k in found}
 
     def _states(
         self,
@@ -579,8 +636,8 @@ class Batch:
         changed: Mapping[str, frozenset[str]] | None,
         refused: Mapping[str, tuple[FieldError, ...]],
     ) -> dict[str, RowState]:
-        upstream = self._known(sorted(state.references(cells.values())))
-        status = self._status([*found.values(), *upstream])
+        upstream = self._records.known(sorted(state.references(cells.values())))
+        status = self._records.status([*found.values(), *upstream])
         given = self._rows.loc[list(cells), list(self.parameter_columns)].notna()
         own = {
             key: frozenset(c for c, filled in row.items() if filled)
@@ -598,49 +655,16 @@ class Batch:
         )
 
     def _poll(self) -> None:
-        """
-        Bring the result of each member under the label up to date, from the
-        proposal's changes; the first call reads every record under the label.
-        """
-        if self._cursor is None:
-            self._cursor = self.client.changes().cursor
-            records = self.client.records(label=self.label)
-        else:
-            changes = self.client.changes(after=self._cursor)
-            self._cursor = changes.cursor
-            # Any record, since a cell may reference a record under another label.
-            self._version += bool(changes.records)
-            # A record is in the changes when submitted and when it finishes,
-            # so one seen before is not newer than the result held.
-            new = [i for i in changes.records if i not in self._seen]
-            records = [r for r in self._known(new) if r.label == self.label]
-        self._seen.update(r.id for r in records)
-        self._found |= state.results(records)
-        bound = self.client.bound(records) if records else []
-        self._unbound.update(r.id for r, b in zip(records, bound, strict=True) if not b)
-
-    def _known(self, ids: list[str]) -> list[Record]:
-        """
-        The records of ``ids`` that the client knows. If one is unknown, the
-        others are read one by one, so that it touches only the rows that
-        reference it, whose submission it refuses.
-        """
-        try:
-            return self.client.records(ids=ids) if ids else []
-        except KeyError:
-            if len(ids) == 1:
-                return []
-            return [r for i in ids for r in self._known([i])]
-
-    def _status(self, records: list[Record]) -> dict[str, Status]:
-        statuses = self.client.status(records)
-        return {r.id: s for r, s in zip(records, statuses, strict=True)}
+        """Bring the records up to date; a change of any record moves the version."""
+        self._version += self._records.poll()
 
     def _spec_changed(self, found: Mapping[str, Record]) -> set[str]:
         """The keys whose result is of another spec than the bound one."""
         spec = SpecId.of(self.spec)
         return {
-            key for key, r in found.items() if r.spec != spec or r.id in self._unbound
+            key
+            for key, r in found.items()
+            if r.spec != spec or r.id in self._records.unbound
         }
 
     def _compare(
@@ -785,8 +809,9 @@ class Batch:
         whether or not it is a row now.
         """
         self._poll()
-        chosen = [r for k, r in self._found.items() if keys is None or k in keys]
-        status = self._status(chosen)
+        found = self._records.found
+        chosen = [r for k, r in found.items() if keys is None or k in keys]
+        status = self._records.status(chosen)
         self.client.cancel([r for r in chosen if status[r.id] is Status.PENDING])
 
     def close(self) -> None:
