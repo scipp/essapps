@@ -549,7 +549,7 @@ def test_two_loops_on_one_label_submit_a_file_once(
     assert second.step() == {}
 
 
-# The example of ADR 0013: a batch made from a source with the rows from run 3
+# A batch made from a source with the rows from run 3
 # on, which follows.
 
 
