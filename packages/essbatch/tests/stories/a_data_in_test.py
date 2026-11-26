@@ -11,7 +11,9 @@ from ess.apps import Client, SubmitError, file
 from . import toys
 
 
-@pytest.mark.xfail(reason='file(path=...) with a folder is not implemented')
+@pytest.mark.xfail(
+    reason='no file source lists a local folder and also resolves a catalogue PID'
+)
 def test_a1_browse_a_local_folder_next_to_a_catalogue_reference(
     client: Client, measure: toys.Measure
 ) -> None:

@@ -13,9 +13,7 @@ from ess.apps import Client, SubmitError, Template
 from . import toys
 
 
-@pytest.mark.xfail(
-    reason='client.publish, scicat, and Provenance.software are not implemented'
-)
+@pytest.mark.xfail(reason='Client.publish and Provenance.software do not exist')
 def test_f1_publish_then_trace_six_months_later(
     client: Client, measure: toys.Measure
 ) -> None:
