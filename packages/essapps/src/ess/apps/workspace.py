@@ -1046,14 +1046,14 @@ class Workspace(WorkspaceProtocol):
         request = self._views.records[record_id].request
         return self._plan(request, lambda: self._compute(request))
 
-    def _plan(self, read: Request, compute: Callable[[], dict[str, Any]]) -> _Plan:
+    def _plan(self, request: Request, compute: Callable[[], dict[str, Any]]) -> _Plan:
         """
-        The plan of a record that reads the outputs ``read`` references, and
+        The plan of a record that reads the outputs ``request`` references, and
         waits for their records to finish; lock held. An output is written
         before its record finishes, so waiting for the record also waits for
         the write.
         """
-        refs = read.upstream()
+        refs = request.upstream()
         return _Plan(
             reads=[(ref.record, ref.output) for ref in refs],
             waits={ref.record for ref in refs} - self._views.finished.keys(),
@@ -1361,7 +1361,7 @@ class Workspace(WorkspaceProtocol):
     def _satisfied(self, record_id: str, key: str) -> None:
         """Start the record once ``key`` was the last thing it waited for; lock held."""
         waits = self._plans[record_id].waits
-        waits.discard(key)
+        waits.remove(key)  # raises for a record that no longer waits for it
         if not waits:
             self._executor.submit(self._run, record_id)
 
