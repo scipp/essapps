@@ -1,21 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What the client raises, beyond Python's own errors for a wrong call.
+The errors that the client raises, beyond Python's own errors for a wrong call.
 
-- :class:`SubmitError`: a request, a template, a push, a freeze, or a
-  persist that is refused; it lists each reason as a :class:`FieldError`.
-- :class:`NotReadable`: a record, an output, or an accumulator that exists
-  but cannot be read, such as a record released. One that is unknown raises
-  ``KeyError``; both are a ``LookupError``.
+- :class:`SubmitError`: a request, a template, a push, a freeze, or ``persist``
+  is rejected. It lists each problem as a :class:`FieldError`.
+- :class:`NotReadable`: a record, an output, or an accumulator exists but cannot
+  be read, such as a released record. An unknown one raises ``KeyError``. Both
+  are a ``LookupError``.
 - :class:`RecordFailed`: a read of a record that failed or was cancelled.
 - :class:`Stopped`: any call of a workspace that stopped or is closed.
 
-:func:`error_text` says what code of an application raised, as a person reads it,
-and :func:`field_error_text` a reason at a field.
-
-Each holds only strings, integers, and tuples of these, so that a wire
-format can carry it as it is::
+Each error holds only strings, integers, and tuples of these, so that a wire
+format can carry it unchanged::
 
     try:
         client.submit(batch)
@@ -41,13 +38,14 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class FieldError:
     """
-    One reason a request is refused, as pydantic's ``ValidationError.errors()``
-    gives it: ``loc``, the position of the field at fault (see
-    :data:`ess.spec.refs.Loc`), and ``msg``, why.
+    One problem with a request, as an item of pydantic's
+    ``ValidationError.errors()``.
 
-    ``loc`` is empty for a reason that names no field, such as an unknown
-    spec. ``request_key`` is the request's key, or its index, among the requests of
-    one call, or ``None`` for a call with one request. It prints as::
+    ``loc`` is the position of the field at fault (see :data:`ess.spec.refs.Loc`).
+    It is empty for a problem at no field, such as an unknown spec. ``msg``
+    describes the problem. ``request_key`` is the request's key or index among
+    the requests of one call, or ``None`` for a call with one request. A
+    ``FieldError`` prints as::
 
         typo: reduction.bins: Input should be greater than 0
     """
@@ -68,8 +66,10 @@ class FieldError:
 
 class SubmitError(ValueError):
     """
-    A request that cannot run, refused before any record exists; ``errors``
-    lists why, each a :class:`FieldError`, and the message joins them.
+    A request that cannot run, rejected before any record exists.
+
+    ``errors`` lists each problem as a :class:`FieldError`, and the message
+    joins them.
     """
 
     def __init__(self, errors: Iterable[FieldError]) -> None:
@@ -92,19 +92,19 @@ class SubmitError(ValueError):
 
 class NotReadable(LookupError):
     """
-    A record, an output, or an accumulator that exists, but that cannot be
-    read: an output that the workspace does not hold in memory and that is not
-    persisted; an output that the store no longer holds or that the workflow did
-    not return; an accumulator released, that stopped, or that is read through
-    the record of its freeze; a state whose plain request would be refused or
-    whose driver fails to give outputs. One that does not exist raises ``KeyError``.
+    A record, an output, or an accumulator that exists but cannot be read.
+
+    :meth:`~ess.apps.protocol.WorkspaceProtocol.outputs` and
+    :meth:`~ess.apps.protocol.WorkspaceProtocol.accumulator_outputs` list the
+    cases. One that does not exist raises ``KeyError``.
     """
 
 
 class RecordFailed(Exception):
     """
-    A read of a record that failed or was cancelled. ``reason`` says why, or
-    is ``None`` for a record a client cancelled.
+    A read of a record that failed or was cancelled.
+
+    ``reason`` is why, or ``None`` for a record that a client cancelled.
     """
 
     def __init__(self, record: str, status: Status, reason: str | None) -> None:
@@ -120,19 +120,22 @@ class RecordFailed(Exception):
 
 class Stopped(RuntimeError):
     """
-    The workspace takes no more calls: it stopped, since an append to its
-    log failed, or it is closed.
+    The workspace accepts no more calls: it is closed, or it stopped because an
+    append to its log failed.
     """
 
 
 def error_text(error: Exception) -> str:
     """
-    What code of an application raised, such as a row source, the file
-    source or a drawing, as a person reads it: a pydantic ``ValidationError``,
-    such as of metadata that the code validates, as each reason at its field
-    (:func:`field_error_text`), such as ``run must be a valid integer``; another
-    refusal (``ValueError``, ``OSError``) as its text; a defect with the name
-    of its type, such as ``RuntimeError: boom`` or ``KeyError: 'run'``.
+    The text for a person of an error that the code of an application raised.
+
+    Such code is a row source, the file source, or a drawing::
+
+        ValidationError        'run must be a valid integer', by field_error_text
+        ValueError('bad')      'bad'
+        OSError('gone')        'gone'
+        RuntimeError('boom')   'RuntimeError: boom'
+        KeyError('run')        "KeyError: 'run'"
     """
     name = type(error).__name__
     if isinstance(error, ValidationError):
@@ -149,10 +152,11 @@ def error_text(error: Exception) -> str:
 
 def field_error_text(field: str, message: str) -> str:
     """
-    A reason at ``field``, as a sentence: ``run is missing`` for a value
-    missing, ``run must be ...`` for pydantic's ``Input should be ...``,
-    else ``run: <message>``, without the ``Value error, `` that pydantic puts
-    before the message of a validator.
+    A problem at ``field`` as a sentence::
+
+        field_error_text('run', 'Field required')         # 'run is missing'
+        field_error_text('run', 'Input should be > 0')    # 'run must be > 0'
+        field_error_text('run', 'Value error, too big')   # 'run: too big'
     """
     message = message.removeprefix('Value error, ')
     if message in ('empty', 'missing', 'Field required'):
