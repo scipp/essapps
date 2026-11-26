@@ -55,11 +55,11 @@ def held(
 ) -> tuple[dict[str, Any], list[FieldError]]:
     """
     What ``fields``, a form of settings, hold, and what is missing
-    (:meth:`~ess.apps.Fields.held`), but a field of ``parameter_columns``
+    (:meth:`~ess.apps.Fields.params_and_missing`), but a field of ``parameter_columns``
     left unset as a whole is not missing: it is left out, as the setting of a
     column that has none.
     """
-    given, missing = fields.held()
+    given, missing = fields.params_and_missing()
     return given, [
         e for e in missing if not (len(e.loc) == 1 and e.loc[0] in parameter_columns)
     ]

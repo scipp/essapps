@@ -4,7 +4,7 @@
 The form of the settings of a batch, a draft until Apply: :class:`Draft`.
 
 The draft stays on the server: what a form holds drops a field that is
-partly filled (:meth:`~ess.apps.Fields.held`), so it cannot be sent to the
+partly filled (:meth:`~ess.apps.Fields.params_and_missing`), so it cannot be sent to the
 browser and back. A :class:`~.page.Page` holds one, writes it to the batch
 at Apply, and builds another when the parameter columns of the batch change.
 """

@@ -189,7 +189,7 @@ def test_a_file_set_stays_picked_once_shown_in_a_browser(
     form.set({'run': first}, Listing(client))
     form.set({'run': second}, Listing(client))
 
-    assert form.held()[0]['run'] == second
+    assert form.params_and_missing()[0]['run'] == second
 
 
 def test_the_way_chosen_is_the_way_shown(client: Client, subtract: Form) -> None:

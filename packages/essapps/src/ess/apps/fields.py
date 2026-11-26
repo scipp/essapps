@@ -864,12 +864,12 @@ class Fields:
         do not call it, whatever they change.
         """
         self._on_change = on_change
-        self._last = self.held()
+        self._last = self.params_and_missing()
 
     def _changed(self) -> None:
         if self._on_change is None or self._loading:
             return
-        if (held := self.held()) != self._last:
+        if (held := self.params_and_missing()) != self._last:
             self._last = held
             self._on_change()
 
@@ -881,7 +881,7 @@ class Fields:
         finally:
             self._loading = False
             if self._on_change is not None:
-                self._last = self.held()
+                self._last = self.params_and_missing()
 
     @property
     def params(self) -> dict[str, Any]:
@@ -895,12 +895,12 @@ class Fields:
             sample: add a row, or remove for none
             sample[1]: the editor holds changes: add or update a row, or discard them
         """
-        given, missing = self.held()
+        given, missing = self.params_and_missing()
         if missing:
             raise SubmitError(missing)
         return given
 
-    def held(self) -> tuple[dict[str, Any], list[FieldError]]:
+    def params_and_missing(self) -> tuple[dict[str, Any], list[FieldError]]:
         """
         What the fields hold: the params given in full, leaving out each with
         anything missing, and what is missing, as :attr:`params` names it.

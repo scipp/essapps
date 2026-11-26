@@ -414,7 +414,7 @@ def test_set_fitting_shows_what_fits_and_names_each_other_with_its_value(
         'gone = 1: not a setting here',
         "detector = \"side\": 'side': not one of ['Front', 'Rear bank']",
     ]
-    assert form.held()[0]['sample'] == {'thickness': 2.0}
+    assert form.params_and_missing()[0]['sample'] == {'thickness': 2.0}
 
 
 def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(
@@ -1224,8 +1224,10 @@ def test_a_form_can_be_limited_to_some_parameters(
     row = Fields(reduce_spec.params, Listing(client), fields=fields)
     rest = Fields(reduce_spec.params, Listing(client), fields=settings)
 
-    assert set(row.held()[0]) | {e.loc[0] for e in row.held()[1]} == {'sample'}
-    assert 'sample' not in rest.held()[0]
+    assert set(row.params_and_missing()[0]) | {
+        e.loc[0] for e in row.params_and_missing()[1]
+    } == {'sample'}
+    assert 'sample' not in rest.params_and_missing()[0]
 
 
 def test_a_form_refuses_a_field_the_model_lacks(
@@ -1250,7 +1252,7 @@ def test_held_leaves_out_what_has_something_missing(
 ) -> None:
     form = form_of(reduce_spec, client)
 
-    given, missing = form.held()
+    given, missing = form.params_and_missing()
 
     assert 'run' not in given
     assert ('run',) in [e.loc for e in missing]
