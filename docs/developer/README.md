@@ -253,11 +253,15 @@ A step every few seconds adds the new rows of the batch's row source, and reduce
 ```python
 provenance = client.provenance(result)
 provenance.request, provenance.records(), provenance.files()
+client.software(result)        # ('esssans==26.11.0', 'scipp==25.11.0', ...), or None
 ```
 
 Provenance lists the record's request, every record that supplied a value by reference, directly or through other records, and the files they used.
 It stops at files.
+A finished record names the installed distributions of the process that ran it, as `client.software` returns them.
+A record that did not run, such as a cancelled one, names none.
 `ess.apps.scicat` publishes an output to SciCat as a derived dataset, whose inputs are the files of its provenance.
+Its used software is that of the record and of the records of its provenance, with `unknown` for a record that names none.
 
 ## Left to the system
 

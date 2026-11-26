@@ -33,7 +33,7 @@ If a story asks for it, borrow `--list-changes params` ([cli.py](https://github.
 **What a record of a run holds, and at what grain.**
 For each output, Snakemake stores the rule, input paths, parameter values, the code, checksums of small inputs, a hash of the software environment, and a list of package names and versions ([MetadataRecord](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L32-L49), [filled](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L428-L450)).
 The code is the text of the shell command or of the rule's Python block, so a cosmetic edit changes it ([`_code`](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L636-L643)).
-For us: provenance lists software versions ([README, Provenance](../README.md#provenance)), not yet implemented, and what a finish records is open.
+For us: the finish of a record names the software versions that ran it ([README, Provenance](../README.md#provenance)).
 Package names and versions, as Snakemake's list holds, is a grain that cosmetic edits do not change.
 The metadata format is at version 7, and each rerun check skips records written before the version that first stored its field reliably ([persistence](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L588-L622)).
 That is one way to read old formats. A log here reads only files of its own format ([ADR 0004](../adr/0004-history-is-append-only-lists.md#decision)).
