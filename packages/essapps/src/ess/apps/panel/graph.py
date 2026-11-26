@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The provenance of a record as a graph: the record, the records it read, and their files.
+The provenance of a record as a graph: the record, the records it read directly
+or through others, and their files.
 
 An arrow points from a file or record to each record whose request refers to it.
-Its label is the position of the parameter, such as ``sample`` or ``runs[2]``.
+Its label holds each position in the request that refers to it, such as
+``sample`` or ``runs[0], runs[2]``.
 
 Files are in the first column. Each record is one column right of the rightmost
 node it reads, so every arrow points right.
