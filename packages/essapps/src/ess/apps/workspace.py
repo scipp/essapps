@@ -188,8 +188,8 @@ class _Failure(Exception):
 
 def _reason(error: Exception) -> str:
     """
-    The failure text of an error: the message of an error written for the
-    user, else type and message, such as ``KeyError: 'counts'``.
+    The failure text of an error: its message if it was written for a person,
+    else its type and message, such as ``KeyError: 'counts'``.
     """
     if isinstance(error, _Failure | ParamsError | SubmitError | NotReadable):
         return str(error)
@@ -230,7 +230,7 @@ def _element(value: Any, ref: OutputRef) -> Any:
 
 
 def _info(value: Any) -> Any:
-    """A copy of ``value`` with each array of at least one dimension as its info."""
+    """``value`` as plain data, each array of at least one dimension as its info."""
     if isinstance(value, BaseModel):
         return {n: _info(v) for n, v in value}
     if isinstance(value, Mapping):
@@ -308,7 +308,7 @@ class _Stage:
         self.binding = binding
         self.template = template
         self.blanks = frozenset(template.blanks)
-        # read by the stage until it has staged, stopped, or is released
+        # the stage reads these until it has staged, stopped, or is released
         self.reads = _output_reads(template.params)
         self.call: StageCall | None = None
         self.stopped: str | None = None  # why staging failed
@@ -325,7 +325,9 @@ class _Stage:
 class _DriverInput(NamedTuple):
     """
     A step of an accumulator: the template's fixed values for the opening, or
-    the rows of each table for a push, and the outputs they reference.
+    the rows of each table for a push, and the outputs they reference. The
+    values are as the log holds them, so that the driver and the record of a
+    freeze agree.
     """
 
     values: dict[str, Any]
@@ -402,7 +404,7 @@ _Read = _OutputKey | _StateKey
 class _Plan:
     """How a record that has not finished runs."""
 
-    reads: list[_Read]  # emptied when the record starts, which holds them then
+    reads: list[_Read]  # held by the plan until the record starts, then by _run
     depends_on: set[str]  # records, and states (see _freeze_wait_key)
     compute: Callable[[], dict[str, Any]]  # runs on a worker
     state: _StateKey | None = None  # the state the record of a freeze reads
@@ -432,8 +434,8 @@ class Workspace(WorkspaceProtocol):
     Raises
     ------
     ValueError
-        If the log holds an event of another proposal, which closes the log,
-        or if two bindings have the same spec.
+        If two bindings have the same spec, or the log holds an event of
+        another proposal. In the second case the log is closed.
     TypeError
         If ``bind`` is not a list of bindings.
     """
@@ -487,9 +489,9 @@ class Workspace(WorkspaceProtocol):
         self._in_memory: set[str] = set()
         self._stages: dict[str, _Stage] = {}  # open, by ID
         self._accumulators: dict[str, _Accumulator] = {}  # open, by ID
-        # by record ID and name
+        # output values held in memory, by record ID and name
         self._outputs: dict[tuple[str, str], Any] = {}
-        # a value to the number of its readers (see _Read)
+        # a value to the number of its readers
         self._readers: Counter[_Read] = Counter()
         self._plans: dict[str, _Plan] = {}  # of the records not yet finished
         # a record or a state (see _freeze_wait_key) to the records that wait for it
@@ -569,7 +571,10 @@ class Workspace(WorkspaceProtocol):
             self._schedule_locked(record_id, self._request_plan_locked(record_id))
 
     def _restart_problem(self, record_id: str, runs: Collection[str]) -> str | None:
-        """Why a pending record cannot run at a restart, given those that ``runs``."""
+        """
+        Why a record pending at a restart cannot run, or ``None``. ``runs``
+        holds the pending records that run.
+        """
         views = self._views
         if record_id in views.states:
             return 'the driver it reads is gone'
@@ -754,7 +759,7 @@ class Workspace(WorkspaceProtocol):
     def _prepare(self, index: int, request: Request) -> tuple[Request, OutputReads]:
         """
         The request as its record holds it, and the outputs it references,
-        checked but for what needs history. A refusal names it by ``index``.
+        checked except for what needs history. A refusal names it by ``index``.
         """
         try:
             return self._known(request.spec).checks.request(request, self._proposal)
@@ -871,7 +876,8 @@ class Workspace(WorkspaceProtocol):
                 return
             self._append_locked(Started(record=record_id))
             plan = self._plans[record_id]
-            # held here until the workflow returns, also if the record is cancelled
+            # held here, even if the record is cancelled meanwhile, since the
+            # workflow reads them
             reads, plan.reads = plan.reads, []
         try:
             outputs = plan.compute()
@@ -974,7 +980,7 @@ class Workspace(WorkspaceProtocol):
         return _element(value, ref)
 
     def _let_go_locked(self, keys: Iterable[_Read]) -> None:
-        """Count one reader less of each value, and act on those left without."""
+        """Count one reader less of each value, and act on each left without."""
         for key in keys:
             self._readers[key] -= 1
             if not self._readers[key]:
@@ -1111,7 +1117,7 @@ class Workspace(WorkspaceProtocol):
         if not depends_on:
             self._executor.submit(self._run, record_id)
 
-    # What the workspace keeps
+    # Releasing
 
     def release(self, ids: Sequence[str]) -> None:
         with self._changed:
@@ -1238,7 +1244,7 @@ class Workspace(WorkspaceProtocol):
         *,
         select: Selection | None,
     ) -> dict[str, Any]:
-        """The values of outputs, not copied; ``select`` is only checked here."""
+        """The values of outputs, not copied; the caller applies ``select``."""
         with self._changed:
             self._check_running()
             record = self._record_locked(record_id)
@@ -1519,7 +1525,7 @@ class Workspace(WorkspaceProtocol):
         )
 
     def _queue_locked(self, acc: _Accumulator, values: dict[str, Any]) -> None:
-        """Queue a step of the accumulator, which reads its outputs until done."""
+        """Queue a step, a reader of the outputs it references until it is done."""
         reads = _output_reads(values)
         self._readers.update(reads)
         acc.steps.append(_DriverInput(values, reads))
@@ -1613,7 +1619,7 @@ class Workspace(WorkspaceProtocol):
     def _state_problem(self, acc: _Accumulator, upto: int) -> str | None:
         """
         Why the plain request of the state after ``upto`` pushes would be
-        refused, or ``None``. Checks outside the workspace's lock.
+        refused, or ``None``.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:
@@ -1628,7 +1634,7 @@ class Workspace(WorkspaceProtocol):
 
     def _accumulator_locked(self, accumulator_id: str) -> _Accumulator:
         """
-        The open accumulator, if it takes readers. Raises ``KeyError`` for one
+        The open accumulator, unless it stopped. Raises ``KeyError`` for one
         never opened, and ``NotReadable`` for one not open or stopped.
         """
         acc = self._accumulators.get(accumulator_id)
@@ -1673,7 +1679,6 @@ class Workspace(WorkspaceProtocol):
         The accumulator and its logged state, held as a reader for the block.
         Raises ``NotReadable`` if the state's plain request would be refused.
         """
-
         with self._changed:
             acc, upto = self._logged_state_locked(accumulator_id)
             self._readers[_StateKey(acc, upto)] += 1
@@ -1750,12 +1755,11 @@ def local(
         the code runs in this process, a binding may be of code defined in a
         notebook, such as ``function_binding(IOFQ, iofq)``.
     store:
-        Where persisted outputs are written. Without one, ``persist`` raises
-        ``SubmitError``.
+        Where persisted outputs are written. Without one, a call with
+        ``persist`` raises ``SubmitError``.
     workers:
         See :class:`Workspace`.
     """
-
     workspace = Workspace(
         proposal=proposal, files=files, bind=bind, workers=workers, store=store
     )
