@@ -40,8 +40,8 @@ def with_latest(client: Client, value: Any) -> Any:
         # {'masks': OutputRef(record='r17', output='masks')}
 
     An optional ``member`` selects among the members of the label. The newest
-    record is
-    the one now, so a request made of the result holds that record's ID.
+    record is the one now, so a request made of the result holds that record's
+    ID.
 
     Raises ``ValueError`` if no record has the label, or the record lacks the
     output.

@@ -3,7 +3,7 @@
 """
 One step of Follow on a batch.
 
-The caller keeps ``seen_keys`` from one step to the next
+The caller holds ``seen_keys`` from one step to the next
 (:class:`~.intake.Intake` in ``source.json``).
 
 How a step works: ``packages/essbatch/docs/batch.md``, "Follow".
@@ -28,7 +28,7 @@ from .state import not_reduced
 
 class SourceError(ValueError):
     """
-    The source of a step cannot list its rows, or the batch refuses the rows
+    The source of a step cannot list its rows, or the batch rejects the rows
     that it made: a defect of the code of the application.
     """
 
@@ -67,10 +67,10 @@ class Step:
         The keys seen after the step: those given to it, those of the
         rows it added, and those of the source that the batch table has.
     submit_errors:
-        Why the submission refused each row, by key: the rows submitted that
+        Why the submission rejected each row, by key: the rows submitted that
         a ``SubmitError`` names, or every row submitted if the reason names
-        none. If the settings are refused, every row without a result that is
-        ready as given, also a row whose cell would be refused, since no cell
+        none. If the settings are rejected, every row without a result that is
+        ready as given, also a row whose cell would be rejected, since no cell
         is resolved then.
     incomplete:
         The keys of the new rows that are not complete yet.
@@ -89,7 +89,7 @@ def step(batch: Batch, source: RowSource, seen_keys: Collection[str]) -> Step:
     """
     Add the rows of ``source`` that are new and complete to ``batch``, then
     reduce the rows of :func:`~.state.not_reduced`. A row whose request is
-    refused does not hold back the others: :attr:`Step.submit_errors` says why.
+    rejected does not hold back the others: :attr:`Step.submit_errors` states why.
 
     Parameters
     ----------
@@ -104,7 +104,7 @@ def step(batch: Batch, source: RowSource, seen_keys: Collection[str]) -> Step:
     Raises
     ------
     SourceError
-        If the source raises ``ValueError``, or the batch refuses the rows it
+        If the source raises ``ValueError``, or the batch rejects the rows it
         made; nothing is added.
     """
     table = batch.table()
@@ -129,8 +129,8 @@ def step(batch: Batch, source: RowSource, seen_keys: Collection[str]) -> Step:
 
 def _reduce(batch: Batch, keys: list[str]) -> tuple[dict[str, Record], dict[str, str]]:
     """
-    Submit ``keys``, less those a refusal names, or none if a refusal names
-    none; the records by key, and why each row was refused.
+    Submit ``keys``, less those a rejection names, or none if a rejection names
+    none; the records by key, and why each row was rejected.
     """
     refused: dict[str, str] = {}
     while keys:

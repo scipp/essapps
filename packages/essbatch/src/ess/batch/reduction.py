@@ -305,7 +305,7 @@ class Batch:
 
         An assignment reduces no row. The workspace checks the settings when
         :meth:`state` resolves them. A setting at a column is checked as a
-        cell of each row that takes it.
+        cell of each row that uses it.
 
         An assignment raises ``ValueError``, and changes nothing, for a value
         at :attr:`source_columns`: use :meth:`settable` for settings from
@@ -333,7 +333,7 @@ class Batch:
         Add a column ``name`` with an empty cell in every row: one
         :meth:`set_table`.
 
-        The setting stays, so every row takes it until its cell is set. Raises
+        The setting stays, so every row uses it until its cell is set. Raises
         ``ValueError`` if ``name`` is a column or not a parameter, and as
         :meth:`set_table` raises.
         """
@@ -343,10 +343,10 @@ class Batch:
 
     def make_setting(self, name: str, key: str | None = None) -> None:
         """
-        Drop the column ``name``, and make the value that the row ``key`` takes
+        Drop the column ``name``, and make the value that the row ``key`` uses
         there the setting.
 
-        Without ``key``, every row must take the same value (:meth:`values`).
+        Without ``key``, every row must use the same value (:meth:`values`).
         If the cell of the row is empty, the settings do not change. The
         settings are written before the batch table. If the definitions reject
         the batch table, the batch still has the column and the changed setting, as
@@ -354,7 +354,7 @@ class Batch:
 
         Raises ``ValueError`` if ``name`` is not a column or is one of
         :attr:`source_columns`, if the table has no row ``key``, or if ``key``
-        is not given and the rows take different values. Raises
+        is not given and the rows use different values. Raises
         :class:`~.definition.DefinitionWriteError` if the definitions reject a
         write.
         """
@@ -381,8 +381,8 @@ class Batch:
 
     def values(self, name: str) -> dict[str, Any]:
         """
-        The distinct values that the rows take at the column ``name``, each by
-        the key of the first row that takes it.
+        The distinct values that the rows use at the column ``name``, each by
+        the key of the first row that uses it.
 
         A value is a cell. For an empty cell it is the cell of what
         :meth:`empty` returns, or ``None`` if that has no value. Raises
