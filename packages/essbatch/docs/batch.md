@@ -68,23 +68,18 @@ Nothing in the batch layer imports the page or the command.
 
 | Term | Definition |
 |---|---|
-| workspace | a `Client` (specs bound, files, records) and the definitions; one folder |
-| batch | one spec reduced for many samples: a header (title, description), a spec, settings and a batch table. The spec and the settings together have the form of a template (`ess.apps.Template`): they are kept as one (`settings.json`), and the command takes them as one file. So ADR 0012 and the command's help say "a template and a table" |
+| workspace | a [workspace](../../../docs/developer/README.md) with the definitions of its batches (below), in one folder |
+| batch | one spec reduced for many samples: a header (title, description), a template (`ess.apps.Template`: the spec and the settings, kept as `settings.json`) and a batch table |
 | label | the name of a batch, unique in a workspace: its folder in the definitions, the label of its records, its address on the page and for the command; `batch.label` |
-| `Batch` | the object that holds the settings and the batch table of one label, and changes and reduces them |
-| `Intake` | the object that holds the manager and the row sources, by name, and brings rows of a source into a batch; it keeps which batch follows |
 | setting | the value of a parameter for the batch: one item of `batch.settings`, by the name of the parameter |
 | batch table | the rows of a batch, one per reduction: one `pandas.DataFrame` (below) |
-| value of a parameter for a row | what the row is reduced with at that parameter (rule 2) |
-| request of a row | the spec with the value of each parameter for the row |
 | result of a row | the newest record under the label with the row's key as member |
-| state of a row | its result, the status of the result, its problems, and where its request differs from that of its result |
-| outdated | a result whose request differs from the row's request now, or that is of another spec |
-| earlier | a completed result whose request differs from the row's only at settings: at parameters that have no column, or where the row's cell is empty |
 | row source | code of the application that makes rows from the files (a `RowSource`) |
-| filled, waits | a row of the source is filled once it has a value in each of `RowSource.fills`; until then it waits |
-| considered | the keys of the source that a batch made from it has taken or left out |
-| Follow | a step every few seconds on one batch: add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result; from the making of the batch or `intake.follow(label)`, until it is stopped |
+| filled, waits | a row of a source is filled once it has a value in each parameter that the source fills (`RowSource.fills`, kept as `batch.fills`); until then it waits |
+| considered | the keys of its source that a batch has taken, left out when it was made, or had in its batch table at a step (`source.json`) |
+| Follow, the batch that follows | Follow is a step every few seconds on the batch that follows (`intake.following`): add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result |
+
+The value and the request of a row are defined in [The request of a row](#the-request-of-a-row); its state, `outdated` and `earlier` in [The state of a row](#the-state-of-a-row-and-the-rules-over-it).
 
 `manager.create` and `intake.create` return the `Batch`, and `manager.batch(label)` gives it again.
 Every other method that names a batch takes its label.
@@ -116,31 +111,14 @@ Other tables are always named with what they are of:
 | the rows of a source | a frame of the form of a batch table, which the source makes from the files and a batch takes rows from; it knows no spec, so each of its columns is a note column until a batch takes the row |
 | a table file | a batch table as `.csv`, `.tsv` or `.xlsx`, to edit elsewhere and load again |
 
-### Rules that always hold
+### Invariants
 
-1. **Only `put` changes a batch table.** A person on the page, the command, `take` and a step each build a frame and call `batch.put(frame)`; so do `batch.make_column` and `batch.make_setting`, which the page's "Make this a column" and "Make this a setting" call. A `put` of an equal frame writes nothing. Which parameters have a column is said by the frame alone: `put` a frame with a column `thickness`, and each row may give its own thickness.
-2. **A row is reduced with its cell, else with the setting, else with the default.** For each parameter `p` of the spec:
+1. Only `put` changes a batch table. `Batch.put` is the only method that sets the table of a `Batch` after it is made.
+2. A `Batch` never calls a row source. `reduction.py` does not import `source.py`; `test_reduce_on_a_batch_of_the_manager_reduces_its_rows_without_its_source`.
+3. The batch layer refuses what is asked with `ValueError`, a label that no batch has with `KeyError`, and a write that the definitions refuse with `NotKept`. `test_a_label_that_is_no_batch_is_refused` in `manager_test.py` and `intake_test.py`.
 
-   ```python
-   def value(batch, key, p):                 # the value of parameter p for the row `key`
-       table = batch.frame()
-       if p in table.columns and not empty(table.loc[key, p]):
-           return table.loc[key, p]          # the row gives its own
-       if p in batch.fills:
-           return MISSING                    # the row waits for its file
-       if p in batch.settings:
-           return batch.settings[p]          # the setting
-       return default(p)                     # of the spec; None if p takes None; else MISSING
-   ```
-
-   In the batch table above with `batch.settings == {'thickness': 1.5, ...}`, row 60339 is reduced with thickness 1.5 and row 60340 with 2.0. A row with a `MISSING` value is incomplete and is not reduced.
-
-   `batch.fills` names the parameter columns that the source of the batch fills, here `sample` and `sample_transmission`; it is empty for a batch made without a source. A row taken by hand before its transmission run is listed has an empty cell there. Without the second branch it would be reduced with the transmission run of another sample, from the settings.
-3. **The state is computed, never kept.** It is read from the records each time. Each rule (`ready`, `not_reduced`, `left_to_reduce`, `earlier_settings`, `to_reduce`, `publishable`) is a function from the states to keys.
-4. **A step never changes a row that the batch table has.** It adds rows, and reduces rows that have no result.
-5. **A batch is shown without its source and without the files.** A file that is not found is a problem of its row.
-6. **The rules are in the batch layer.** A refusal of what is asked is a `ValueError`, a label that no batch has a `KeyError`, and a write or delete that the definitions cannot do, such as a file the system refuses to write, a `NotKept`. The page and the command show them and copy no rule of the batch layer. The page refuses only a request that no call of the batch layer can express, such as Follow without a row source. The batch layer has no lock and no timer.
-7. **At most one batch follows.** It starts with `intake.create(..., follow=True)` or `intake.follow(label)`, and ends with `intake.stop()`, the removal of the batch, or another batch that starts to follow.
+The invariants of Follow are in [Follow](#follow).
+The page adds no rule of its own: see "The batch layer decides" in [the web README](../src/ess/batch/web/README.md).
 
 ### What is kept on disk
 
@@ -367,8 +345,25 @@ flowchart TD
     setting -- no --> default["the default, or None if it takes None; else none"]
 ```
 
-A parameter without a value is the problem `empty` of the row: it is incomplete.
+As a function:
+
+```python
+def value(batch, key, p):                 # the value of parameter p for the row `key`
+    table = batch.frame()
+    if p in table.columns and not empty(table.loc[key, p]):
+        return table.loc[key, p]          # the row gives its own
+    if p in batch.fills:
+        return MISSING                    # the row waits for its file
+    if p in batch.settings:
+        return batch.settings[p]          # the setting
+    return default(p)                     # of the spec; None if p takes None; else MISSING
+```
+
+The request of a row is the spec with `value(batch, key, p)` for each parameter `p`.
+In the batch table of [Terms](#terms) with `batch.settings == {'thickness': 1.5, ...}`, row 60339 is reduced with thickness 1.5 and row 60340 with 2.0.
+A parameter without a value (`MISSING`) is the problem `empty` of the row: it is incomplete, and is not reduced.
 "The source fills it" is asked of `batch.fills`, kept with the batch (below); each of them is a parameter column.
+A row taken by hand before its transmission run is listed has an empty cell there. Without the second branch, it would be reduced with the transmission run of another sample, from the settings.
 In code:
 
 ```python
@@ -427,7 +422,7 @@ The settings form of the page has no field for such a column.
 
 ## The state of a row and the rules over it
 
-`batch.state(keys=None, *, compare=True)` gives a `RowState` per row:
+`batch.state(keys=None, *, compare=True)` gives a `RowState` per row, read from the records at each call; no state is kept in the definitions:
 
 | Field | Meaning |
 |---|---|
@@ -478,7 +473,7 @@ A problem goes when a cell is filled or changed, or a setting is applied.
 A row with a problem reads `incomplete` whatever its word but `running`, also when it has a result, as a `done` row whose source-filled cell is emptied; the arrow from the box stands for these.
 A cell emptied counts as a setting: the row reads `earlier` if the setting or default that it then takes differs from what the cell held.
 
-The rules, in `ess.batch`:
+The rules, in `ess.batch`, are functions from the states to keys:
 
 | Rule | Keys |
 |---|---|
@@ -557,8 +552,7 @@ If the process stops while a batch that follows is made, the batch may be there 
 
 ## Follow
 
-At most one batch follows: the last one made with `follow=True` or given to `intake.follow(label)`, until it is stopped.
-The life of a batch made from a source; a batch made without Follow and a batch that stopped are in the same state:
+The life of a batch made from a source:
 
 ```mermaid
 stateDiagram-v2
@@ -578,8 +572,9 @@ intake.following            # its label, or None
 intake.stop()               # none follows
 intake.follow(label)        # this batch follows; the batch that followed stops
 done = intake.step()        # a Step, or None if none follows
+done.refused                # why rows were refused, by key; they do not hold back the others
 intake.offered(label)       # the rows of the source that the batch table lacks, with a boolean column `waits`
-intake.take(label, keys)    # put these rows as the source gives them now, then consider them
+intake.take(label, keys)    # put these rows as the source gives them now, also considered ones; then consider them
 ```
 
 A step (`auto.step(batch, source, considered)`), as code:
@@ -622,14 +617,13 @@ sequenceDiagram
     intake-->>timer: Step
 ```
 
-- A row is new if its key is neither considered nor in the batch table. A key of the source that the batch table has is considered, so a row added by hand, or by a step cut off before `source.json` is written, stays away once removed.
-- A new row is added once each of the batch's `fills` has a value. Until then it waits. The step asks the batch, not the source, which parameters a row waits for, as the state of a row does.
-- A row that a person removes stays away: its key is considered. `take` brings it back.
-- A row with a result is never reduced by a step, also when it is outdated, failed or cancelled.
-- A row whose request is refused does not hold back the others; `done.refused` says why, and the next step tries again.
-- A batch of the manager persists what it submits.
-- A batch that follows again adds at its next step every row of its source that is filled and not considered: those that arrived while it did not follow, also those that another batch took meanwhile. A row left out when it was made, or removed by a person, stays out. `intake.follow` refuses a batch made without a source, or whose source is not registered.
-- `manager.remove(label)` of the batch that follows ends Follow, since `source.json` goes with the label: `intake.following` is then `None`, and `intake.step()` does nothing. A batch made again with the label does not follow unless made so.
+Invariants:
+
+1. At most one batch follows. `Intake._follow_instead`; `test_a_batch_made_to_follow_ends_follow_on_the_one_before_then_writes_its_own`.
+2. A step never changes a row that the batch table has, nor the template's blanks. `auto.added`; `test_a_step_changes_no_row_that_the_table_has`, `test_a_step_adds_the_rows_new_and_filled_with_the_columns_of_the_table`.
+3. A step never adds a row whose key is considered. `auto.added`; `test_a_step_adds_no_row_that_is_considered`.
+4. After a step, every key of the source that the batch table has is considered, whoever added the row. `auto.step`, and `Intake.step` if the step raises; `test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_removed`, `test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed`.
+5. A step never reduces a row that has a result, also an outdated, failed or cancelled one. `state.not_reduced`; `test_a_row_with_a_result_is_left_to_a_person`.
 
 A source whose row grows, such as the runs of a sample so far, gives the grown list a new key:
 
@@ -639,13 +633,12 @@ after run 4:  si@2,4    runs=[2, 4]
 after run 3:  si@2,3,4  runs=[2, 3, 4]   # listed after run 4: a new key too
 ```
 
-Each list is a new row, which a step adds and reduces; the earlier rows keep their results.
+Each list is a new row, which a step adds and reduces. The earlier rows keep their results.
 The key names the whole list, since a step adds a row only under a key that is not considered.
 
-`offered` and `take` raise `ValueError` "<label> was not made from a row source" for a batch without `source.json`.
-`step` takes no label: it steps the batch that follows, whose `source.json` says so.
 `auto.step(batch, source, considered)` runs the same step on a `Batch` made in code, with `considered` in memory: give the next step `done.considered`.
-Whoever runs the loop owns the timer that calls `intake.step()`: the page's server (`every` of `ess.batch.web.api`), or the command `essbatch follow` (`cli.follow`, see "Table files and the command").
+A batch of the manager persists what it submits. A `Batch` made in code for `auto.step` needs `persist=True`, since nothing releases its records.
+The batch layer has no timer: the page's server (`every` of `ess.batch.web.api`) and `essbatch follow` (`cli.follow`, see "Table files and the command") call `intake.step()`.
 
 ## Table files and the command
 
