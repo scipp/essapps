@@ -209,7 +209,7 @@ _SOURCES: Final = {
 
 def _source_union(taken: Mapping[str, Any], none: bool) -> Any:
     """
-    The type of a field that takes the sources ``taken`` (see :func:`sources`):
+    The type of a field that accepts the sources ``taken`` (see :func:`sources`):
     the source, if one, else their union tagged by :func:`source_of`; ``| None``
     if ``none``.
     """

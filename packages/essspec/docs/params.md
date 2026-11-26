@@ -266,7 +266,10 @@ beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = 
 
 An optional part whose fields need values is `X | None`, such as `range: WavelengthRange | None`.
 A `bool` field switches an optional part whose fields all have defaults.
-[ADR 0008](developer/adr/0008-a-choice-between-ways-is-a-union-of-groups.md) gives the reasons.
+In a table, a choice for one field of a row is a union at that field of the row's group, such as `transmission: TransmissionFraction | Referenced[ComputedTransmission]`.
+A choice for a whole row is a table whose rows are a union, `list[A | B]`.
+A choice for all rows is a parameter of its own.
+[ADR 0008](developer/adr/0008-a-choice-between-ways-is-a-union-of-groups.md) states the reasons.
 
 ## Defaults
 
@@ -310,7 +313,7 @@ IOFQ_MULTI = WorkflowSpec(name='sans-iofq-multi', version=1, title='I(Q) of summ
                           params=IofQMultiParams, outputs=IofQOutputs, tables=('sample', 'can'))
 ```
 
-A request gives every table, `[]` for one without rows.
+A request writes every table, `[]` for one without rows.
 So a table has no default, and no request leaves out a table by mistake.
 A table is validated a row at a time, since an accumulator receives a few rows at a time.
 So a table carries only length constraints, such as `Field(min_length=1)`, which the workspace checks on all rows.
@@ -318,7 +321,7 @@ The element type checks a row.
 The rows of a table are distinct, compared as the record stores them: a file by its identity, a reference by its record and output.
 Two references to equal data are two rows.
 A value that differs per run, such as a motor position, is in the run's file.
-A value that a request gives per run, such as a thickness, makes the runs separate requests.
+A value that a request writes per run, such as a thickness, makes the runs separate requests.
 With one row in each table, the multi-run spec returns what the single-run spec returns.
 `ess.spec.testing.check_one_row` checks this ([bindings.md](bindings.md#testing-the-symmetries)).
 
@@ -337,7 +340,7 @@ No output holds `Referenced[...]`, which marks a field of the params.
 
 ## When values are validated
 
-Each parameter is validated alone, since a template or a push gives only some values.
+Each parameter is validated alone, since a template or a push contains only some values.
 An error states the *position* of each problem: the parameter, then field names and list indices, such as `reduction.range.start` or `samples[1].transmission`.
 
 At submission, before anything runs, each value is validated by its type, with files resolved.
@@ -358,7 +361,7 @@ A group may have field validators and model validators of any mode.
 A value written inline must read back from its JSON form as the same value.
 So a value whose validator changes an already valid value, such as by converting millimetres to metres, is rejected at submission.
 
-Values that a check compares, such as the start and stop of a range, are fields of one group, which a request always gives whole.
+Values that a check compares, such as the start and stop of a range, are fields of one group, which a request always writes whole.
 A check across parameters, such as of a Q range that the wavelength band can reach, belongs to the workflow and fails when the request runs.
 A stage and a driver never receive a whole params instance.
 So the params model has no validators, serializers or computed fields, and no `__init__` of its own.

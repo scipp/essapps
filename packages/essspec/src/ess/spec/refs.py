@@ -100,7 +100,7 @@ _KINDS: dict[str, type[Ref]] = {'output': OutputRef, 'file': FileRef}
 def as_ref(value: Any) -> Ref | None:
     """
     The reference a plain value denotes, if it is one: a dict with the key
-    ``"@ref"``. Raises ``ValueError`` if that names no kind of reference, or
+    ``"@ref"``. Raises ``ValueError`` if its value is no kind of reference, or
     the other fields do not fit the kind.
     """
     if isinstance(value, Ref):
@@ -202,7 +202,7 @@ def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[Loc, Ref]]:
 def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:
     """
     The params of a request, by name, with each reference replaced by
-    ``fn(ref)``; the params are as :func:`iter_refs` takes them, and any other
+    ``fn(ref)``; the params are as :func:`iter_refs` accepts them, and any other
     value is kept. A malformed reference raises :class:`ParamsError` at its
     position.
     """

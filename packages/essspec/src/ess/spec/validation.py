@@ -159,7 +159,7 @@ def local_paths(values: Mapping[str, Any], local_path: LocalPath) -> dict[str, P
 
 def _stored_ref_problem(ref: Ref, written: bool, resolved: set[str]) -> str | None:
     """
-    Why the record cannot store ``ref``, or ``None``. ``written`` says whether
+    Why the record cannot store ``ref``, or ``None``. ``written`` states whether
     the request gave a reference at its position, and ``resolved`` holds the
     identity of each file that a file field resolved.
     """
@@ -191,7 +191,7 @@ def _validate_located(
     ``value``, plain data of the field ``name``, validated by ``one``, the
     request type of that field alone, with ``context``, and its JSON form
     (see :func:`_validate_round_trip`). A value without a JSON form
-    is validated as it is, since it may be one that the field does not take.
+    is validated as it is, since it may be one that the field does not accept.
     """
     loc = (name,)
     tp = field_types.field_type(one.model_fields[name])
@@ -316,7 +316,7 @@ def validated(
     context: dict[str, Any] | None = None,
 ) -> Any:
     """
-    Validate a parameter by the params model, as the binding takes it.
+    Validate a parameter by the params model, as the binding receives it.
 
     An error that a value is not a reference or not a file is dropped where
     another error, at the same position or inside, explains the value. Data

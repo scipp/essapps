@@ -45,12 +45,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     keys:
         A tuple of sciline keys for a parameter or an output, by name:
         ``(K,)``, a key for each member of a union, or ``()`` for a parameter
-        that sets none. Fields not named take the keys of their types.
+        that sets none. Fields not named have the keys of their types.
 
     Raises
     ------
     ValueError
-        If ``keys`` names no field of the spec or gives a wrong number of
+        If ``keys`` refers to no field of the spec or has a wrong number of
         keys, if a parameter whose class names no role lacks its ``keys``,
         if one typed ``X | None`` has keys other than ``()``, or if two
         fields share a key.
@@ -151,7 +151,7 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
         Raises
         ------
         ValueError
-            If ``fixed`` names no parameter of the spec, or if
+            If a name in ``fixed`` is not a parameter of the spec, or if
             ``make_pipeline`` holds a value at a key of a union whose members
             have keys of their own.
         """

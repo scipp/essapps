@@ -127,7 +127,7 @@ def fixed_values(
     neither ``fixed`` nor ``blanks``.
 
     Raises :class:`~ess.spec.refs.ParamsError`, with a reason for each name,
-    if a name is both fixed and blank, if either names no parameter of the
+    if a name is both fixed and blank, if a name of either is not a parameter of the
     spec, or if one without a default is in neither.
     """
     fields = spec.params.model_fields

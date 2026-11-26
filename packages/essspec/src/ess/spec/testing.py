@@ -30,7 +30,7 @@ from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
 
 Rows = Sequence[Any]
-"""A table's rows, as a push gives them."""
+"""A table's rows, as a push carries them."""
 
 
 def check_digests(specs: Iterable[WorkflowSpec[Any, Any]], path: Path) -> None:

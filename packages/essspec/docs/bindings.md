@@ -180,7 +180,7 @@ That always works, since a union is never a blank.
 A parameter typed `X | None` sets no key, and `make_pipeline` defines what `None` means.
 Setting `X` to `None` would replace a provider of `X`.
 Setting nothing would leave the meaning of `None` to whatever the pipeline holds or computes at `X`.
-So `keys=` gives such a parameter no key, `()`:
+So `keys=` maps such a parameter to no key, `()`:
 
 ```python
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
@@ -383,7 +383,7 @@ beam_centre: (
 )                                                 # keys: (GivenCentre, FindCentre, ComputedCentre)
 ```
 
-**One key for all members.** A union's own `keys=` may give its members one key, `(K, K)`: the value of either member is then set at `K`.
+**One key for all members.** A union's own `keys=` may map its members to one key, `(K, K)`: the value of either member is then set at `K`.
 The union still cannot be a blank, since `make_pipeline` may branch on its value.
 
 **A union in a list.** A union in a list, such as a table, sets no key of its own: the list's key holds it, and a provider distinguishes its rows.

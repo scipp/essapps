@@ -192,7 +192,7 @@ def file_marker(tp: Any, *metadata: Any) -> File | None:
     """
     The marker of a file field, if ``tp``, with ``metadata``, is ``Path``
     marked :class:`~ess.spec.parameters.File`; ``None`` otherwise. ``tp`` and
-    ``metadata`` are as :func:`split` gives the part that a request writes::
+    ``metadata`` are as :func:`split` returns the part that a request writes::
 
         file_marker(Path, File(kind='mask'))  # File(kind='mask')
         file_marker(Path)  # None
