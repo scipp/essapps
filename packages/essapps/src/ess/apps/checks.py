@@ -174,10 +174,10 @@ class Checks:
 
         Raises ``ValueError`` unless the file is known, readable by
         ``proposal``, and fits ``marker``. ``OSError`` from the file source,
-        such as when a mount is gone, rejects the file as unknown. Then the
-        value cannot be checked, and only the request that names the file is
-        rejected. Anything else the file source raises is a defect and
-        propagates.
+        such as when a mount is gone, rejects the file as one that cannot be
+        read. Then the value cannot be checked, and only the request that names
+        the file is rejected. Anything else the file source raises is a defect
+        and propagates.
         """
         ref = FileRef(file=name)
         try:
