@@ -220,7 +220,7 @@ class FileField(Input):
         return UNSET
 
     def set(self, value: Any) -> None:
-        # A reference, or its JSON form, as a request may give it.
+        # A reference, or its JSON form, as a request may write it.
         ref = None if value is UNSET else as_ref(value)
         picked = ref if isinstance(ref, FileRef) else UNSET
         options = dict(self._listed)
@@ -277,8 +277,8 @@ class ScalarField(Input):
             missing.append(FieldError(None, loc, 'give a value'))
             return UNSET
         if self.kind == 'time':
-            # The picker gives a time without a zone, to the second: the time
-            # set, unless the user changed it.
+            # The picker holds a time without a zone, to the second. Unless the
+            # user changed it, the time set is returned.
             value = value.replace(tzinfo=self._zone)
             if (set_ := self._time_set) is not None and value == set_.replace(
                 microsecond=0

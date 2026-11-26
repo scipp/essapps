@@ -24,7 +24,7 @@ class Listing:
     refer to now, each with a label, looked up once for a refresh of all views.
 
     Given the ``previous`` listing, it reads only the records that changed
-    since, and takes the rest from ``previous``, which stays unchanged.
+    since, and copies the rest from ``previous``, which stays unchanged.
     ``cursor`` is the position in :meth:`~ess.apps.Client.changes` that the
     listing is up to date with. ``records`` are oldest first. ``status`` holds
     the status of each record, and ``readable`` the names of its outputs that
@@ -227,7 +227,7 @@ def _file_label(ref: FileRef, metadata: Mapping[str, Any]) -> str:
     """
     ``run 101`` where the metadata has a run, else the file's identity.
 
-    The contract of a file source names no field except ``proposal``.
+    The contract of a file source defines no metadata field except ``proposal``.
     """
     run = metadata.get('run')
     return str(ref) if run is None else f'run {run}'

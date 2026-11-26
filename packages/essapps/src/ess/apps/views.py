@@ -5,7 +5,7 @@ What the workspace knows, built from its log.
 
 :meth:`Views.apply` is the only way the views change, and it depends on
 nothing but the events. So a workspace that applies its log again has the views
-of the workspace that wrote it. The workspace answers every query from the
+of the workspace that wrote it. The workspace looks up every query in the
 views, and reads the log only when it starts. So the views may change between
 versions, while the events must stay readable as long as a log exists.
 """
