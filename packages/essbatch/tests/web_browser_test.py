@@ -1912,7 +1912,9 @@ def test_clear_outputs_of_the_selected_rows_asks_first_and_shows_them_cleared(
     page.wait_for_selector('#toast:has-text("Cleared the outputs of 1 row.")')
     assert asked == [
         'Clear the outputs of the 1 row selected, to free disk space? The records '
-        'stay, and a reduction of the same rows computes the outputs again.'
+        'stay, and a reduction of the same rows computes the outputs again. Rows '
+        'of other batches that read these outputs must then be pointed to the new '
+        'results.'
     ]
 
 

@@ -1029,7 +1029,7 @@ async function removeBatch() {
   toast(done.notice);
 }
 
-const REDUCED_AGAIN = 'The records stay, and a reduction of the same rows computes the outputs again.';
+const REDUCED_AGAIN = 'The records stay, and a reduction of the same rows computes the outputs again. Rows of other batches that read these outputs must then be pointed to the new results.';
 
 // Clears the outputs of the rows `keys`, or of the whole batch if none.
 function clearOutputs(keys) {
