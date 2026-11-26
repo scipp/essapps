@@ -74,21 +74,21 @@ def test_rows_picked_without_a_source_are_refused_on_the_command_line(
     assert '--later pick rows of --source' in capsys.readouterr().err
 
 
-def test_take_puts_offered_rows_into_the_batch_and_reduces_nothing(
+def test_add_puts_available_rows_into_the_batch_and_reduces_nothing(
     command: list[str], folder: Path
 ) -> None:
     with intake_on(folder) as intake:
         label = later(intake)
-    offered, taken = folder / 'offered.csv', folder / 'taken.csv'
+    available, added = folder / 'available.csv', folder / 'added.csv'
     act = [*command, *SOURCES]
 
-    assert main([*act, 'offered', '-l', label, '-o', str(offered)]) == 0
-    assert main([*act, 'take', '-l', label, '1', '-o', str(taken)]) == 0
+    assert main([*act, 'available', '-l', label, '-o', str(available)]) == 0
+    assert main([*act, 'add', '-l', label, '1', '-o', str(added)]) == 0
 
-    assert read_text(offered)[['key', 'incomplete']].to_dict('records') == [
+    assert read_text(available)[['key', 'incomplete']].to_dict('records') == [
         {'key': '1', 'incomplete': 'False'}
     ]
-    assert read_text(taken)[['key', 'status']].to_dict('records') == [
+    assert read_text(added)[['key', 'status']].to_dict('records') == [
         {'key': '1', 'status': 'ready'}
     ]
     with intake_on(folder) as intake:

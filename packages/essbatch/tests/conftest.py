@@ -167,7 +167,7 @@ def label(intake: Intake) -> str:
     """
     A batch of ``intake.manager`` with the spec, columns and label of
     ``batch``, made from the source ``pairs`` before a file is measured: it
-    has no rows, and Follow or ``intake.take`` adds those measured since.
+    has no rows, and Follow or ``intake.add_rows`` adds those measured since.
     """
     return toys.from_pairs(intake, toys.STAGED.name, title='Scan', label='scan')
 

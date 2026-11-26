@@ -820,11 +820,11 @@ async function makeBatch(event) {
 // The dialog "Add rows from the runs": the rows of the source that the batch
 // table lacks, those incomplete marked. The rows picked are added as the source makes
 // them now.
-async function openTake() {
-  const listed = await request('rows/offered', {kind: 'offered'});
+async function openAddRows() {
+  const listed = await request('rows/available', {kind: 'available-rows'});
   if (!listed) return;
-  const dialog = $('take');
-  const add = dialog.querySelector('[value=take]');
+  const dialog = $('add-rows');
+  const add = dialog.querySelector('[value=add]');
   let keys = [];
   const picked = (chosen) => {
     keys = chosen;
@@ -832,13 +832,13 @@ async function openTake() {
     add.textContent = keys.length ? `Add ${count(keys.length)}` : 'Add';
   };
   picked([]);
-  $('take-rows').replaceChildren(
+  $('add-rows-list').replaceChildren(
     listed.rows.length
       ? sourceTable(listed, (row) => row.mark, picked)
       : h('div', {class: 'empty', text: 'Every row of the source is in the batch.'}),
   );
   dialog.returnValue = '';
-  dialog.onclose = () => dialog.returnValue === 'take' && act('rows/take', {keys});
+  dialog.onclose = () => dialog.returnValue === 'add' && act('rows/add', {keys});
   dialog.showModal();
 }
 
@@ -954,7 +954,7 @@ function renderSubmitErrors(errors) {
 // batch follows, "Stop following" and why the last step failed, if it did,
 // else how many rows are incomplete. A batch that does not follow has no Follow control.
 function renderFollow(follow) {
-  $('take-open').hidden = follow.source === null;
+  $('add-rows-open').hidden = follow.source === null;
   $('follow-status').hidden = $('stop-follow').hidden = !follow.on;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
@@ -1485,7 +1485,7 @@ function wire() {
   };
   newBatch.elements.last.onchange = () => markRange();
   newBatch.elements.follow.onchange = () => chooseFollow() && markRange();
-  $('take-open').onclick = openTake;
+  $('add-rows-open').onclick = openAddRows;
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;
@@ -1513,7 +1513,7 @@ function wire() {
   addForm.onsubmit = (event) => {
     event.preventDefault();
     const key = addForm.key.value.trim();
-    act('rows/add', {key}).then((done) => done && rows.reveal(key));
+    act('rows/add-empty', {key}).then((done) => done && rows.reveal(key));
     closeAdd();
   };
   addForm.querySelector('[data-cancel]').onclick = closeAdd;

@@ -240,11 +240,11 @@ def test_a_row_chosen_that_the_source_does_not_give_is_refused_and_nothing_is_ke
     'call',
     [
         lambda i: i.source('b'),
-        lambda i: i.offered('b'),
-        lambda i: i.take('b', []),
+        lambda i: i.available_rows('b'),
+        lambda i: i.add_rows('b', []),
         lambda i: i.follow('b'),
     ],
-    ids=['source', 'offered', 'take', 'follow'],
+    ids=['source', 'available_rows', 'add_rows', 'follow'],
 )
 def test_a_label_that_is_no_batch_is_refused(
     intake: Intake, call: Callable[[Intake], Any]
@@ -253,34 +253,34 @@ def test_a_label_that_is_no_batch_is_refused(
         call(intake)
 
 
-def test_the_rows_offered_are_those_of_the_source_that_the_table_lacks(
+def test_the_available_rows_are_those_of_the_source_that_the_table_lacks(
     made: Intake,
 ) -> None:
     batch = made.manager.batch('a')
     batch.put(batch.frame().drop('4'))
 
-    offered = made.offered('a')
+    available = made.available_rows('a')
 
-    assert offered['incomplete'].to_dict() == {
+    assert available['incomplete'].to_dict() == {
         '1': False,
         '2': False,
         '4': False,
         '5': True,
     }
-    assert list(offered.columns) == [*made.rows_of('pairs').columns, 'incomplete']
+    assert list(available.columns) == [*made.rows_of('pairs').columns, 'incomplete']
 
 
-def test_an_incomplete_row_of_the_source_is_offered_as_incomplete(
+def test_an_incomplete_row_of_the_source_is_available_as_incomplete(
     intake: Intake, sample: Measure
 ) -> None:
     sample(1, 'water')
     intake.create('plain', title='A', source='pairs', label='a')
     sample(2, 'oil', partner=False)
 
-    assert intake.offered('a')['incomplete'].to_dict() == {'2': True}
+    assert intake.available_rows('a')['incomplete'].to_dict() == {'2': True}
 
 
-def test_rows_taken_are_put_as_the_source_makes_them_and_seen(
+def test_rows_added_are_put_as_the_source_makes_them_and_seen(
     intake: Intake,
     fake: FakeFiles,
     sample: Measure,
@@ -290,7 +290,7 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_seen(
     batch = intake.create('plain', title='A', source='pairs', label='a', follow=True)
     sample(2, 'oil', partner=False)
 
-    intake.take('a', ['2'])
+    intake.add_rows('a', ['2'])
     taken = batch.frame().loc['2']
     batch.put(batch.frame().drop('2'))
     fake.measure(1002, 1.0, role='transmission', sample='oil')
@@ -302,16 +302,16 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_seen(
     assert SOURCE.load(definitions, 'a').seen_keys == {'1', '2'}
 
 
-def test_a_row_that_a_person_removed_is_taken_again(made: Intake) -> None:
+def test_a_row_that_a_person_removed_is_added_again(made: Intake) -> None:
     batch = made.manager.batch('a')
     batch.put(batch.frame().drop('4'))
 
-    made.take('a', ['4'])
+    made.add_rows('a', ['4'])
 
     assert list(batch.frame().index) == ['3', 'mine', '4']
 
 
-@pytest.mark.parametrize('added_by', ['step', 'take'])
+@pytest.mark.parametrize('added_by', ['step', 'add_rows'])
 def test_a_row_added_after_make_column_takes_the_setting(
     intake: Intake, client: Client, sample: Measure, added_by: str
 ) -> None:
@@ -327,7 +327,7 @@ def test_a_row_added_after_make_column_takes_the_setting(
     if added_by == 'step':
         client.wait(list(intake.step().records.values()))
     else:
-        intake.take('a', ['2'])
+        intake.add_rows('a', ['2'])
         client.wait(batch.reduce(['2']))
 
     assert pd.isna(batch.frame().loc['2', 'thickness'])
@@ -335,7 +335,7 @@ def test_a_row_added_after_make_column_takes_the_setting(
     assert batch.state()['1'].status == 'done'
 
 
-def test_an_incomplete_row_taken_or_stepped_stays_incomplete_whatever_the_settings_kept(
+def test_an_incomplete_row_added_or_stepped_stays_incomplete_whatever_the_settings_kept(
     intake: Intake,
     client: Client,
     sample: Measure,
@@ -349,7 +349,7 @@ def test_an_incomplete_row_taken_or_stepped_stays_incomplete_whatever_the_settin
     definitions.save(SETTINGS.key('a'), {**kept, 'params': stale})
     again = _again(client, definitions)  # as after a restart
 
-    again.take('a', ['2'])
+    again.add_rows('a', ['2'])
     done = again.step()
     state = again.manager.batch('a').state()['2']
 
@@ -368,7 +368,7 @@ def test_a_source_that_no_longer_gives_a_column_of_the_fills_kept_is_named(
     said = 'the source pairs: it no longer gives the column transmission'
 
     with pytest.raises(ValueError, match=said):
-        again.offered('a')
+        again.available_rows('a')
     with pytest.raises(ValueError, match=said):
         again.step()
 
@@ -398,13 +398,13 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
         (['3'], r"rows \['3'\] are in the batch already"),
     ],
 )
-def test_rows_that_cannot_be_taken_are_refused_and_nothing_changes(
+def test_rows_that_cannot_be_added_are_refused_and_nothing_changes(
     made: Intake, keys: list[str], said: str
 ) -> None:
     before = made.manager.batch('a').frame()
 
     with pytest.raises(ValueError, match=said):
-        made.take('a', keys)
+        made.add_rows('a', keys)
 
     pd.testing.assert_frame_equal(made.manager.batch('a').frame(), before)
 
@@ -415,9 +415,9 @@ def test_a_batch_made_without_a_source_offers_and_takes_no_rows_and_cannot_follo
     intake.manager.create('plain', title='A', label='a')
 
     with pytest.raises(ValueError, match='a was not made from a row source'):
-        intake.offered('a')
+        intake.available_rows('a')
     with pytest.raises(ValueError, match='a was not made from a row source'):
-        intake.take('a', ['1'])
+        intake.add_rows('a', ['1'])
     with pytest.raises(ValueError, match='a was not made from a row source'):
         intake.follow('a')
     assert intake.following is None
@@ -599,7 +599,7 @@ def test_a_stopped_batch_gets_no_rows_at_a_step(
     intake.step()
 
     assert list(batch.frame().index) == ['1']
-    assert intake.offered('a')['incomplete'].to_dict() == {'2': False}
+    assert intake.available_rows('a')['incomplete'].to_dict() == {'2': False}
 
 
 def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_complete_since(

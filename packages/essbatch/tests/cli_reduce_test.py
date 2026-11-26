@@ -335,7 +335,7 @@ def test_reduce_with_a_source_and_no_table_makes_a_batch_of_every_row_of_the_sou
 
     assert list(read_text(out)['key']) == ['1', '2', '3']
     with intake_on(folder) as intake:
-        assert intake.offered('x').empty
+        assert intake.available_rows('x').empty
 
 
 def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(

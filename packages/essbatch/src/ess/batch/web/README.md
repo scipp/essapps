@@ -40,8 +40,8 @@ Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selec
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole batch table, its columns too; the page then shows the cells and the settings form of the parameter columns loaded.
 It is refused while the settings form holds a change, which the new form would drop, as "Make this a column" and "Make this a setting" are.
-**+ Add rows from the runs**, on the page of a batch made from a row source, lists the rows of the source that the batch table lacks (`Intake.offered`): those left out when the batch was made, those removed, those incomplete, marked, and, in a batch that does not follow, those complete after it was made or after it stopped.
-The rows a person picks are added as the source makes them now (`Intake.take`), and Follow does not add them again once removed; so a removed row comes back this way.
+**+ Add rows from the runs**, on the page of a batch made from a row source, lists the rows of the source that the batch table lacks (`Intake.available_rows`): those left out when the batch was made, those removed, those incomplete, marked, and, in a batch that does not follow, those complete after it was made or after it stopped.
+The rows a person picks are added as the source makes them now (`Intake.add_rows`), and Follow does not add them again once removed; so a removed row comes back this way.
 
 "Make this a column", at a setting in the Settings tab, makes the parameter a column with an empty cell in each row (`Batch.make_column`); it is offered only for a parameter that has no column and whose cell the page edits.
 The setting stays: a row whose cell is empty takes it, also a row added later, by Follow or by a person, until its cell is set.
@@ -314,7 +314,7 @@ flowchart TD
     pages -->|"record_step, failure"| last_step
     page -->|"listing, list_again"| runs
     page -->|"token, shown, unsubmitted, clear_submit_errors"| last_step
-    page -->|"offered, take, stop()"| intake
+    page -->|"available_rows, add_rows, stop()"| intake
     page -->|"batch(label), change"| manager
     page -->|"put, reduce"| batch
     intake --> manager
@@ -387,7 +387,7 @@ Every request that depends on the actions before it waits in one queue (`queued`
 | a file asked for (the table file of the batch table, the settings, the results) | it holds an edit that the click sent at the blur of its input |
 | **Make** of a new batch | it starts with the settings that an **Apply** sent before put in force |
 
-The poll, the counts, and the other reads (`api/runs`, `api/sources`, `api/sources/rows`, `api/rows/offered`, `api/columns/values`, `api/plot`, `api/row`) go at once: they change nothing, and what they draw follows the next state; a dialog filled by one leaves the check to the server at its action, which waits in the queue.
+The poll, the counts, and the other reads (`api/runs`, `api/sources`, `api/sources/rows`, `api/rows/available`, `api/columns/values`, `api/plot`, `api/row`) go at once: they change nothing, and what they draw follows the next state; a dialog filled by one leaves the check to the server at its action, which waits in the queue.
 The keys of many rows (a plot, the results as a zip) go in the body of a POST, since a URL has a limit.
 The page asks for `api/...`, relative to its own URL, and `/` redirects by a relative URL, so a parent app can mount it under a prefix, and the answers are gzipped for a client that accepts it.
 Starlette does not run the lifespan of a mounted app, which owns the timer of Follow, so the parent runs it:

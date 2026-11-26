@@ -1289,15 +1289,15 @@ def test_settings_tried_on_one_row_reach_the_others_only_when_a_person_says_so(
 def test_a_row_added_on_the_page_is_empty_and_rows_removed_are_gone(
     http: TestClient, batch: Batch
 ) -> None:
-    added = http.post('/api/rows/add', json={'key': 'extra'}).json()
+    added = http.post('/api/rows/add-empty', json={'key': 'extra'}).json()
     assert (added['rows'][-1]['name'], added['rows'][-1]['status']) == (
         'extra',
         'incomplete',
     )
     # A key may be the name of another row; the batch refuses a key it has.
-    named = http.post('/api/rows/add', json={'key': 'water'}).json()
+    named = http.post('/api/rows/add-empty', json={'key': 'water'}).json()
     assert [r['key'] for r in named['rows']] == ['1', '2', '3', 'extra', 'water']
-    same = http.post('/api/rows/add', json={'key': 'water'})
+    same = http.post('/api/rows/add-empty', json={'key': 'water'})
     assert same.status_code == 422
     http.post('/api/rows/remove', json={'keys': ['water']})
 
@@ -1307,18 +1307,18 @@ def test_a_row_added_on_the_page_is_empty_and_rows_removed_are_gone(
     assert list(batch.frame().index) == ['1', '3']
 
 
-def offered(http: TestClient) -> dict[str, str]:
+def available(http: TestClient) -> dict[str, str]:
     """The rows that "Add rows from the runs" lists, by key: the mark of each."""
-    return {r['key']: r['mark'] for r in http.get('/api/rows/offered').json()['rows']}
+    return {r['key']: r['mark'] for r in http.get('/api/rows/available').json()['rows']}
 
 
-def test_the_rows_offered_are_those_of_the_source_the_table_lacks(
+def test_the_available_rows_are_those_of_the_source_the_table_lacks(
     http: TestClient, sample: Measure
 ) -> None:
     sample(4, 'ethanol')
     sample(5, 'acetone', partner=False)
 
-    listed = http.get('/api/rows/offered').json()
+    listed = http.get('/api/rows/available').json()
 
     assert [(r['key'], r['name'], r['mark']) for r in listed['rows']] == [
         ('4', 'ethanol', ''),
@@ -1326,39 +1326,39 @@ def test_the_rows_offered_are_those_of_the_source_the_table_lacks(
     ]
 
 
-def test_rows_taken_are_added_as_the_source_makes_them(
+def test_rows_are_added_as_the_source_makes_them(
     http: TestClient, sample: Measure
 ) -> None:
     sample(4, 'ethanol')
 
-    taken = http.post('/api/rows/take', json={'keys': ['4']}).json()
+    added = http.post('/api/rows/add', json={'keys': ['4']}).json()
 
-    assert taken['notice'] == 'Added 1 row.'
-    assert [r['key'] for r in taken['rows']] == ['1', '2', '3', '4']
-    assert taken['rows'][-1]['cells']['sample']['text'] == 'run 4'
-    assert offered(http) == {}
+    assert added['notice'] == 'Added 1 row.'
+    assert [r['key'] for r in added['rows']] == ['1', '2', '3', '4']
+    assert added['rows'][-1]['cells']['sample']['text'] == 'run 4'
+    assert available(http) == {}
 
 
-def test_a_row_taken_then_removed_is_offered_again_and_follow_does_not_add_it(
+def test_a_row_added_then_removed_is_available_again_and_follow_does_not_add_it(
     http: TestClient, pages: Pages, intake: Intake, sample: Measure
 ) -> None:
     label = toys.from_pairs(intake, STAGED.name, title='Later', follow=True)
     following = opened(pages, label)
     sample(4, 'ethanol')
-    following.post('/api/rows/take', json={'keys': ['4']})
+    following.post('/api/rows/add', json={'keys': ['4']})
     following.post('/api/rows/remove', json={'keys': ['4']})
     sample(5, 'acetone')
 
     pages.tick()
 
     assert list(rows(following)) == ['1', '2', '5']
-    assert offered(following) == {'3': 'incomplete', '4': ''}
+    assert available(following) == {'3': 'incomplete', '4': ''}
 
 
 def test_rows_the_manager_does_not_take_answer_422_and_none_is_added(
     http: TestClient, batch: Batch
 ) -> None:
-    answer = http.post('/api/rows/take', json={'keys': ['1']})
+    answer = http.post('/api/rows/add', json={'keys': ['1']})
 
     assert answer.status_code == 422
     assert (
@@ -1383,8 +1383,8 @@ def test_a_file_source_that_cannot_list_is_said_on_each_call_that_runs_a_source(
     fake.list = failing(OSError('the mount went away'))
 
     answers = [
-        http.get('/api/rows/offered'),
-        http.post('/api/rows/take', json={'keys': ['4']}),
+        http.get('/api/rows/available'),
+        http.post('/api/rows/add', json={'keys': ['4']}),
         http.get('/api/sources/rows', params={'name': 'pairs'}),
         http.post('/api/batches', json=new_batch()),
     ]
@@ -1403,8 +1403,8 @@ def test_a_defect_of_a_source_is_said_with_its_type_and_the_page_works_on(
     fake.list = failing(KeyError('run'))
 
     answers = [
-        http.get('/api/rows/offered'),
-        http.post('/api/rows/take', json={'keys': ['4']}),
+        http.get('/api/rows/available'),
+        http.post('/api/rows/add', json={'keys': ['4']}),
         http.get('/api/sources/rows', params={'name': 'pairs'}),
         http.post('/api/batches', json=new_batch()),
     ]
@@ -1424,7 +1424,7 @@ def test_metadata_that_the_code_of_the_application_refuses_is_said_at_its_fields
     fake.list = failing(toys.refused_metadata())
 
     answers = [
-        http.get('/api/rows/offered'),
+        http.get('/api/rows/available'),
         http.get('/api/sources/rows', params={'name': 'pairs'}),
         http.post('/api/batches', json=new_batch()),
     ]
@@ -1445,7 +1445,7 @@ def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
         Intake(BatchManager(client, definitions=definitions), sources=sources)
     )
 
-    answer = opened(again, label).get('/api/rows/offered')
+    answer = opened(again, label).get('/api/rows/available')
 
     assert (answer.status_code, answer.json()['message']) == (
         422,

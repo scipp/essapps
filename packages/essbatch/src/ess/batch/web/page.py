@@ -582,7 +582,7 @@ class Page:
         return f'Removed {_rows(len(keys))}.'
 
     @_action
-    def add(self, key: str) -> str:
+    def add_empty_row(self, key: str) -> str:
         """Add an empty row of ``key``; what the batch refuses is a ``Rejected``."""
         key = key.strip()
         if not key:
@@ -592,28 +592,28 @@ class Page:
         return f'Added {key}: fill in its cells.'
 
     @_locked
-    def offered(self) -> SourceRows:
+    def available_rows(self) -> SourceRows:
         """
         The rows of the source that the batch table lacks, those incomplete marked
-        (:meth:`~ess.batch.Intake.offered`), for :meth:`take`;
+        (:meth:`~ess.batch.Intake.available_rows`), for :meth:`add_rows`;
         what the source refuses is a :class:`~.errors.Rejected`
         (:func:`~.errors.reject_on_error`).
         """
         with reject_on_error('The rows of the source cannot be listed'):
-            given = self.pages.intake.offered(self.label)
+            given = self.pages.intake.available_rows(self.label)
         return view.listed(given, self.batch.source_columns)
 
     @_action
-    def take(self, keys: Sequence[str]) -> str:
+    def add_rows(self, keys: Sequence[str]) -> str:
         """
         Add the rows of ``keys`` as the source makes them now, so that Follow
         does not add them again once removed
-        (:meth:`~ess.batch.Intake.take`). What ``Intake`` or the
+        (:meth:`~ess.batch.Intake.add_rows`). What ``Intake`` or the
         source refuses is a :class:`~.errors.Rejected`
         (:func:`~.errors.reject_on_error`).
         """
         with reject_on_error('No row was added'):
-            self.pages.intake.take(self.label, keys)
+            self.pages.intake.add_rows(self.label, keys)
         # The rows may name files that the listing lacks.
         self._list_again()
         return f'Added {_rows(len(keys))}.'

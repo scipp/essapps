@@ -110,8 +110,8 @@ A first session, in this order; each command has its own --help:
     $B export -l water results    # write the results of the rows of water
     $B -c package.module:CATALOGUE publish -l water KEY...
                                   # publish the results of KEY... to SciCat
-    $B offered -l water           # the rows of the row source that water lacks
-    $B take -l water KEY...       # put those rows into water; reduces nothing
+    $B available -l water         # the rows of the row source that water lacks
+    $B add -l water KEY...        # put those rows into water; reduces nothing
     $B follow -l water --steps 3  # add and reduce the rows that arrive: 3 steps,
                                   # or until Ctrl-C without --steps
     $B stop                       # no batch follows
@@ -538,7 +538,7 @@ def _reduce(given: _Context) -> pd.DataFrame:
     (:func:`.table.read_table`), or the rows of the source ``--source`` that are
     complete now, those that ``--first``, ``--last`` and ``--later`` pick
     (:class:`~.source.Range`), not both; without either, one row keyed by the
-    label. With ``--source``, the batch keeps its source, so that ``offered``
+    label. With ``--source``, the batch keeps its source, so that ``available``
     and its page offer the rows of the source that its batch table lacks; it
     follows only after ``follow``. ``create`` refuses a label that
     has definitions or records. If the reduction is then refused, the batch
@@ -680,17 +680,17 @@ def _publish(given: _Context) -> pd.DataFrame:
     return _table(manager.batch(label), args.keys)
 
 
-def _offered(given: _Context) -> pd.DataFrame:
+def _available(given: _Context) -> pd.DataFrame:
     """The rows of the source of a batch that its batch table lacks."""
     intake = given.intake()
-    return intake.offered(_known(intake.manager, given.args.label))
+    return intake.available_rows(_known(intake.manager, given.args.label))
 
 
-def _take(given: _Context) -> pd.DataFrame:
+def _add(given: _Context) -> pd.DataFrame:
     """Put rows of its source into a batch; those rows, as ``show`` writes them."""
     args = given.args
     intake = given.intake()
-    intake.take(_known(intake.manager, args.label), args.keys)
+    intake.add_rows(_known(intake.manager, args.label), args.keys)
     return _table(intake.manager.batch(args.label), args.keys)
 
 
@@ -1080,10 +1080,10 @@ def _export_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
-def _take_arguments(command: argparse.ArgumentParser) -> None:
+def _add_arguments(command: argparse.ArgumentParser) -> None:
     _label(command, required=True, help='the label of the batch')
     command.add_argument(
-        'keys', metavar='KEY', nargs='+', help='the key of a row that offered lists'
+        'keys', metavar='KEY', nargs='+', help='the key of a row that available lists'
     )
 
 
@@ -1299,26 +1299,26 @@ _COMMANDS = {
         arguments=_publish_arguments,
         check=_with_catalogue('publish'),
     ),
-    'offered': _Command(
-        _offered,
+    'available': _Command(
+        _available,
         description='List the rows that the row source of the batch of LABEL '
         'makes now and its batch table lacks, with a column incomplete: whether a '
         'parameter that the source fills is empty. follow adds a row once it '
         'is complete, unless the batch left it out when made or a person '
-        'removed it; take adds any.',
+        'removed it; add adds any.',
         arguments=_show_arguments,
-        check=_with_sources('offered'),
+        check=_with_sources('available'),
     ),
-    'take': _Command(
-        _take,
+    'add': _Command(
+        _add,
         description='Put the rows of KEY, as the row source of the batch of '
         'LABEL makes them now, into its batch table, and write them as show '
         'does. '
         'It reduces nothing. A row that waits for a file goes in with its cell '
         'empty, and stays incomplete until a person fills it: follow changes '
         'no row of the batch table.',
-        arguments=_take_arguments,
-        check=_with_sources('take'),
+        arguments=_add_arguments,
+        check=_with_sources('add'),
     ),
     'follow': _Command(
         _follow,
@@ -1374,7 +1374,7 @@ def _parser() -> argparse.ArgumentParser:
         '-s',
         '--sources',
         metavar='MODULE:NAME',
-        help='the row sources by name, for sources, rows, offered, take, '
+        help='the row sources by name, for sources, rows, available, add, '
         'follow, reduce --source and template',
     )
     parser.add_argument(

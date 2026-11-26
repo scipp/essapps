@@ -69,7 +69,7 @@
         <div class="grid" id="rows"></div>
         <div class="table-foot">
           <button type="button" class="quiet" id="add-row">+ Add row</button>
-          <button type="button" class="quiet" id="take-open" hidden>+ Add rows from the runs</button>
+          <button type="button" class="quiet" id="add-rows-open" hidden>+ Add rows from the runs</button>
           <form class="add-form" id="add-form" hidden>
             <input type="text" name="key" placeholder="Key" aria-label="Key of the new row" required>
             <button type="submit">Add</button>
@@ -211,13 +211,13 @@
     </aside>
   </main>
 
-  <dialog class="dialog" id="take">
+  <dialog class="dialog" id="add-rows">
     <form method="dialog">
       <h3>Add rows from the runs</h3>
       <p class="hint">The rows of the source that the batch lacks: those left out when it was made, those removed, those incomplete (marked), and, if the batch does not follow, those that arrived since. A row added here is not added by Follow again once removed.</p>
-      <div class="source-rows" id="take-rows"></div>
+      <div class="source-rows" id="add-rows-list"></div>
       <div class="buttons">
-        <button type="submit" class="primary" value="take" disabled>Add</button>
+        <button type="submit" class="primary" value="add" disabled>Add</button>
         <button type="submit" class="quiet" value="">Cancel</button>
       </div>
     </form>

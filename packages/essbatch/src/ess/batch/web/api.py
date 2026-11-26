@@ -196,19 +196,19 @@ def create_app(pages: Pages) -> FastAPI:
     def remove(page: PageOfLabel, body: Keys) -> State:
         return page.remove(body.keys)
 
-    @batch.post('/api/rows/add')
-    def add(page: PageOfLabel, body: Key) -> State:
-        return page.add(body.key)
+    @batch.post('/api/rows/add-empty')
+    def add_empty_row(page: PageOfLabel, body: Key) -> State:
+        return page.add_empty_row(body.key)
 
-    @batch.get('/api/rows/offered')
-    def offered(page: PageOfLabel) -> SourceRows:
+    @batch.get('/api/rows/available')
+    def available_rows(page: PageOfLabel) -> SourceRows:
         """The rows of the source of the batch that its batch table lacks."""
-        return page.offered()
+        return page.available_rows()
 
-    @batch.post('/api/rows/take')
-    def take(page: PageOfLabel, body: Keys) -> State:
+    @batch.post('/api/rows/add')
+    def add_rows(page: PageOfLabel, body: Keys) -> State:
         """Add rows of the source, as it makes them now."""
-        return page.take(body.keys)
+        return page.add_rows(body.keys)
 
     @batch.post('/api/settings/column')
     def make_column(page: PageOfLabel, body: MakeColumn) -> State:

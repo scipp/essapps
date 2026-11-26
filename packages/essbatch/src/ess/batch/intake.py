@@ -362,7 +362,7 @@ class Intake:
         self._mark_seen(label, made, done.seen_keys)
         return done
 
-    def offered(self, label: str) -> pd.DataFrame:
+    def available_rows(self, label: str) -> pd.DataFrame:
         """
         The rows that the source of the batch of ``label`` makes now and its
         batch table lacks, with the columns of the source and a boolean column
@@ -388,11 +388,11 @@ class Intake:
             ~given.index.isin(batch.frame().index)
         ]
 
-    def take(self, label: str, keys: Iterable[str]) -> None:
+    def add_rows(self, label: str, keys: Iterable[str]) -> None:
         """
         Add the rows of ``keys`` to the batch of ``label``, as its source
         makes them now, with the columns of its batch table; then mark
-        them seen. A seen key may be taken.
+        them seen. A seen key may be added.
 
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if it
         was not made from a source, if its source is not registered or makes

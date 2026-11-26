@@ -1277,13 +1277,13 @@ def test_a_change_closes_the_menus_dialogs_and_forms_of_the_batch_before(
     assert page.input_value('#batch-title') == 'Scan'
     assert page.is_hidden('#add-form')
     assert page.is_hidden('#files .menu-items')
-    page.click('#take-open')
-    page.wait_for_selector('#take[open]')
+    page.click('#add-rows-open')
+    page.wait_for_selector('#add-rows[open]')
 
     page.go_forward()
 
     shows(page, 'Other')
-    assert page.is_hidden('#take')
+    assert page.is_hidden('#add-rows')
     assert page.input_value('#batch-title') == 'Other'
 
 
@@ -1691,12 +1691,12 @@ def test_rows_picked_in_the_dialog_are_added_from_the_runs(
     sample(4, 'ethanol')
     sample(5, 'acetone', partner=False)
 
-    page.click('#take-open')
+    page.click('#add-rows-open')
     page.wait_for_selector(
-        '#take-rows tr:has-text("acetone") .pill:text-is("incomplete")'
+        '#add-rows-list tr:has-text("acetone") .pill:text-is("incomplete")'
     )
-    page.check('#take-rows input[aria-label=ethanol]')
-    page.click('#take [value=take]')
+    page.check('#add-rows-list input[aria-label=ethanol]')
+    page.click('#add-rows [value=add]')
 
     page.wait_for_selector('#rows .tabulator-row:has-text("ethanol")')
     assert list(batch.frame().index) == ['1', '2', '3', '4']

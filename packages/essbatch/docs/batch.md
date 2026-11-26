@@ -198,7 +198,7 @@ batch.put(table)                      # row 60340 is outdated; 60339 still takes
 
 Rows 60339 and 60340, reduced in step 2 with the default 1.0, read `settings changed` from the setting on, and `make_column` changes no state. At the `put`, row 60340 reads `outdated`, since its cell 2.0 differs from its result; row 60339 stays `settings changed`.
 `rows.json` is written with an empty column `thickness`; `settings.json` keeps `thickness: 1.5`.
-A row added later, by a step of Follow, by `take` or by hand, takes 1.5 until its cell is set.
+A row added later, by a step of Follow, by `add_rows` or by hand, takes 1.5 until its cell is set.
 `batch.put(table.drop(columns='thickness'))` drops the column, and every row takes 1.5 again.
 
 **4. Follow adds a row once its transmission run is listed.** The page calls `intake.step()` every few seconds.
@@ -561,8 +561,8 @@ intake.stop()               # none follows
 intake.follow(label)        # this batch follows; the batch that followed stops
 done = intake.step()        # a Step, or None if none follows
 done.submit_errors          # why rows were refused, by key; they do not hold back the others
-intake.offered(label)       # the rows of the source that the batch table lacks, with a boolean column `incomplete`
-intake.take(label, keys)    # put these rows as the source gives them now, also seen ones; then mark them seen
+intake.available_rows(label)       # the rows of the source that the batch table lacks, with a boolean column `incomplete`
+intake.add_rows(label, keys)    # put these rows as the source gives them now, also seen ones; then mark them seen
 ```
 
 A step (`auto.step(batch, source, seen_keys)`), as code:
@@ -605,7 +605,7 @@ sequenceDiagram
     intake-->>timer: Step
 ```
 
-A removed row stays away: its key is seen, and only `intake.take` brings it back.
+A removed row stays away: its key is seen, and only `intake.add_rows` brings it back.
 A step reduces a row once: a row that has a result, also a failed, cancelled or outdated one, is left to a person.
 
 A source whose row grows, such as the runs of a sample so far, gives the grown list a new key:
@@ -679,7 +679,7 @@ Each action of the page is one call of the batch layer:
 | **Reduce** and its ways | `batch.reduce(keys)` |
 | **+ New batch** | from a source `intake.create(..., choose=Range(first, last, later), parameter_columns=...)`; from a table file or without rows `manager.create(rows=..., parameter_columns=...)` |
 | the range's marks | `intake.marked(source, choose)` |
-| **+ Add rows from the runs** | `intake.offered(label)`, then `intake.take(label, keys)` |
+| **+ Add rows from the runs** | `intake.available_rows(label)`, then `intake.add_rows(label, keys)` |
 | "Make this a column" | `batch.make_column(name)` |
 | "Make this a setting" | `batch.values(name)`, then `batch.make_setting(name, key)` |
 | the grey text of an empty cell | `batch.settings[name]`, else the default of the parameter |
