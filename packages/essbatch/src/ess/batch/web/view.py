@@ -154,7 +154,7 @@ def settings_problem(
     return '; '.join(told) or None
 
 
-def refusal(
+def submit_problem(
     error: FieldError, named: Mapping[str, str], titles: Mapping[str, str]
 ) -> SubmitProblem:
     """``error`` of a rejected reduction, with the row name from ``named``."""
@@ -208,12 +208,11 @@ def reason(
         return '; '.join(problems.values()), ''
     if status == 'settings changed':
         named = _changed(state, titles)
-        changed = f'{named} changed' if named else ''
-        since = f': {changed} since' if changed else ''
         return (
-            f'Reduced with earlier settings{since}. "Reduce" leaves such rows;'
-            ' "Reduce rows of earlier settings" reduces them with the settings now.',
-            changed,
+            f'The settings changed since the reduction{f": {named}" if named else ""}.'
+            ' "Reduce" leaves such rows; "Reduce rows with changed settings"'
+            ' reduces them with the settings now.',
+            f'{named} changed' if named else '',
         )
     if status == 'outdated' and state.outdated:
         return _outdated(state, titles), ''
@@ -319,7 +318,7 @@ def output(
         ''
         if any(f.name == options.format for f in formats)
         else f'This application has no writer of the format {options.format} '
-        'that the form names: pick a format and apply.'
+        'that the output options name: pick a format and apply.'
     )
     lacking = ', no '.join(options.lacking)
     outputs = spec.outputs.model_fields
@@ -330,7 +329,9 @@ def output(
         catalogue=catalogue,
         problem=problem,
         unpublishable=(
-            f'The form names no {lacking}: fill it in and apply it.' if lacking else ''
+            f'The output options name no {lacking}: fill it in and apply it.'
+            if lacking
+            else ''
         ),
     )
 

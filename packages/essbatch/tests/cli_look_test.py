@@ -126,7 +126,7 @@ def test_batches_lists_each_batch_with_its_rows_reduced_and_source(
         'spec',
         'rows',
         'reduced',
-        'source',
+        'row_source',
         'follows',
     ]
     assert listed.drop(columns='label').to_dict('records') == [
@@ -135,7 +135,7 @@ def test_batches_lists_each_batch_with_its_rows_reduced_and_source(
             'spec': 'cli-toy',
             'rows': '2',
             'reduced': '0',
-            'source': 'pairs',
+            'row_source': 'pairs',
             'follows': 'True',
         },
         {
@@ -143,7 +143,7 @@ def test_batches_lists_each_batch_with_its_rows_reduced_and_source(
             'spec': 'cli-toy',
             'rows': '2',
             'reduced': '1',
-            'source': '',
+            'row_source': '',
             'follows': 'False',
         },
     ]

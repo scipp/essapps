@@ -73,9 +73,9 @@ flowchart TD
     workspace -->|"binding: compute, make_stage, make_accumulator"| package
 ```
 
-The framework is two packages ([ADR 0007](adr/0007-packages-split-by-dependencies.md)).
+Two packages are involved ([ADR 0007](adr/0007-packages-split-by-dependencies.md)).
 `ess.spec` holds what a workflow package needs: specs, bindings, and checks for tests.
-`ess.apps` holds the client, the workspace, and parts that applications are built from, such as the forms of `ess.apps.panel`.
+`ess.apps`, the framework, holds the client, the workspace, and parts that applications are built from, such as the forms of `ess.apps.panel`.
 
 **Spec.** A workflow package declares a spec, `ess.spec.WorkflowSpec`, for each workflow: a name, a version, and two pydantic models, *params* and *outputs*.
 The spec is all that a client, a form, and the workspace know of a workflow.
@@ -152,7 +152,7 @@ Running the same request again creates a new record.
 result = client.compute(IOFQ, params={...})          # submit, then wait
 client.output(result, 'iofq')                        # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})   # copies a part
-client.describe(result, 'iofq')                      # {'iofq': ArrayInfo(sizes, unit, coords)}, no data
+client.describe(result, 'iofq')                      # {'intensity': ArrayInfo(sizes, unit, coords)}, no data
 client.failure(result)                               # why it failed, or None
 ```
 

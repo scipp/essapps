@@ -79,7 +79,7 @@ class Column(BaseModel):
     ``default`` is the text of the value of an empty cell: the batch's
     setting, else the parameter's default. ``from_source`` is true for a
     column that the row source fills. There an empty cell means that the row
-    waits for its file, and the page does not offer "Make this a setting".
+    is incomplete, and the page does not offer "Make this a setting".
     """
 
     name: str
@@ -176,9 +176,9 @@ class Following(BaseModel):
     ``interval`` seconds.
 
     ``row_source`` is ``None`` for a batch made without a row source. The
-    page then hides "Add rows". While the batch follows, ``failure`` is why
-    the last step raised. ``incomplete`` counts the rows of the source that the
-    last step left out as incomplete.
+    page then hides "Add rows from the runs". While the batch follows,
+    ``failure`` is why the last step raised. ``incomplete`` counts the rows of
+    the source that the last step left out as incomplete.
     """
 
     on: bool
@@ -204,7 +204,7 @@ class Output(BaseModel):
 class Format(BaseModel):
     """
     A format offered in the tab "Output". ``outputs`` are the outputs that its
-    writer reads, ``None`` if it writes the outputs chosen in the form.
+    writer reads, ``None`` if it writes the outputs chosen in the output options.
     """
 
     name: str
@@ -273,8 +273,8 @@ class RowDetail(BaseModel):
     """
     The parameters that a row's result was reduced with, and ``differs``, the
     names of those that differ from what the row would be reduced with now.
-    ``reduced_with`` is ``None`` if the row has no result, or one of another
-    version of the workflow.
+    ``reduced_with`` is ``None`` if the row has no record, or one of another
+    spec or an unbound spec.
     """
 
     key: str

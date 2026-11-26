@@ -247,7 +247,7 @@ def create_app(pages: Pages) -> FastAPI:
     @batch.get('/api/table.{suffix}', response_class=Response)
     def table_file(page: PageOfLabel, suffix: Literal['csv', 'xlsx']) -> Response:
         media = 'text/csv' if suffix == 'csv' else _XLSX
-        return _download(page.table_file(f'.{suffix}'), f'rows.{suffix}', media)
+        return _download(page.table_file(f'.{suffix}'), f'table.{suffix}', media)
 
     @batch.post('/api/table')
     def load_table(

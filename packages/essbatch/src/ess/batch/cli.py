@@ -5,14 +5,14 @@ The command ``essbatch``: an application of the batch layer, as the page is.
 Its help, :data:`_HELP` and the description of each command, is the
 documentation for a person who operates batches (ADR 0014).
 
-A command is a function of :class:`_Context` that gives a :data:`_Result`, and
+A command is a function of :class:`_Context` that returns a :data:`_Result`, and
 an item of :data:`_COMMANDS` that names it with its arguments and checks.
 The commands are thin: the rules are those of ``BatchManager``, ``Intake``
 and ``Batch``, as the page applies them, so a label is one batch whoever
 works on it.
 
 One process works on a folder at a time: a command that opens the folder
-refuses one that another process holds. ``files`` does not open the folder,
+fails on one that another process holds. ``files`` does not open the folder,
 so it runs while ``follow`` holds it. The loop of ``follow`` ends at the
 first SIGINT, SIGTERM or SIGHUP, or after ``--steps``, once the reductions
 that run have ended; a second signal ends the process at once
@@ -119,7 +119,8 @@ A first session, in this order. Each command has its own --help:
 
 A template is YAML: the spec, and a value for each parameter that the rows
 share. A parameter that each row gives in its own column of the batch table (a
-parameter column) is left out:
+parameter column) may be left out; a value given for it is used by the rows
+whose cell is empty:
 
     spec: {name: loki-masks, version: 1}
     params:
@@ -170,10 +171,10 @@ transmission run that was newest then keeps it when a newer one arrives
 
     14:03:05 added 70011 | reducing 70011 | done 70009 | incomplete 70013
     {"time": "2026-11-23T14:03:05+01:00", "added": ["70011"], "reducing": ["70011"],
-     "ended": {"70009": "done"}, "failure": {}, "refused": {}, "incomplete": ["70013"],
-     "error": null}
+     "ended": {"70009": "done"}, "failure": {}, "submit_errors": {},
+     "incomplete": ["70013"], "error": null}
 
-ended: the status of each row whose reduction ended; failure, refused: why. A
+ended: the status of each row whose reduction ended; failure, submit_errors: why. A
 run counts once files.csv lists it: "files ... -o files.csv" brings it up to
 date, also while follow runs. Ctrl-C, SIGTERM or the last of --steps ends
 follow once the running reductions are done (exit status 0 or 3), but water
@@ -493,12 +494,12 @@ def _batches(given: _Context) -> pd.DataFrame:
                 'spec': batch.spec.name,
                 'rows': len(states),
                 'reduced': sum(s.record_status is Status.COMPLETED for s in states),
-                'source': intake.row_source(label),
+                'row_source': intake.row_source(label),
             }
         except ValueError as error:
             sys.stderr.write(f'{label}: {error}\n')
         listed.append(row | {'follows': label == following})
-    columns = ['label', 'title', 'spec', 'rows', 'reduced', 'source', 'follows']
+    columns = ['label', 'title', 'spec', 'rows', 'reduced', 'row_source', 'follows']
     return pd.DataFrame(listed, columns=columns).astype(
         {'rows': 'Int64', 'reduced': 'Int64'}
     )
@@ -509,9 +510,9 @@ def _table(batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
     The rows of ``keys`` of ``batch``, or all, with what came of each. If the
     settings are invalid, it writes why to stderr.
     """
-    states, refused = batch.shown(keys)
-    if refused:
-        sys.stderr.write(f'the settings are refused: {SubmitError(refused)}\n')
+    states, errors = batch.shown(keys)
+    if errors:
+        sys.stderr.write(f'the settings are invalid: {SubmitError(errors)}\n')
     return frames.with_results(batch, states, keys)
 
 
@@ -598,8 +599,8 @@ def _reduced(result: pd.DataFrame) -> int:
     # Only --remaining without --settings-changed leaves such rows.
     if left := int((result['status'] == 'settings changed').sum()):
         sys.stderr.write(
-            f'left {_count(left, "row")} reduced with earlier '
-            'settings: add --settings-changed to reduce them\n'
+            f'left {_count(left, "row")} with status settings changed: '
+            'add --settings-changed to reduce them\n'
         )
     return 0 if all(result['status'] == 'done') else 3
 
@@ -676,13 +677,13 @@ def _remove(given: _Context) -> int:
         raise ValueError(
             f'{label}: no batch has the label; batches lists them'
         ) from None
-    kept = len(given.client.records(label=label))
+    records = len(given.client.records(label=label))
     sys.stderr.write(
         f'removed {label}; '
         + (
-            f'the folder keeps its {_count(kept, "record")} under the label, so '
-            'a new batch takes another label\n'
-            if kept
+            f'its {_count(records, "record")} stay in the folder under the label, '
+            'so a new batch takes another label\n'
+            if records
             else 'it had no records, so the label is free\n'
         )
     )
@@ -734,7 +735,7 @@ def _follow(given: _Context) -> int:
     states, _ = intake.manager.batch(label).shown()
     if left := sum(s.status != 'done' for s in states.values()):
         sys.stderr.write(
-            f'{_count(left, "row")} of {label} not done: show -l {label} says why\n'
+            f'{_count(left, "row")} of {label} not done: show -l {label} states why\n'
         )
         return 3
     return 0
@@ -786,13 +787,13 @@ def follow(
                     (RowState.status), by key; the reductions that ran at the
                     first step count too
         failure     why each of those failed or was cancelled, by key
-        refused     why each row could not be submitted, by key
+        submit_errors  why each row could not be submitted, by key
         incomplete  the rows of the source that are not complete yet
 
         error       why the step raised, ``None`` if it did not
 
     A step did something if it added or submitted rows, if a reduction ended,
-    if ``refused`` or ``incomplete`` changed since ``write_line`` was last
+    if ``submit_errors`` or ``incomplete`` changed since ``write_line`` was last
     called, or if it raised another error than the step before. After the
     wait, it calls ``write_line`` with the reductions that ended meanwhile.
 
@@ -822,7 +823,7 @@ def follow(
         for key, state in batch.state(compare=False).items()
         if state.record is not None and state.record_status is Status.PENDING
     }
-    shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, incomplete
+    shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # submit_errors, incomplete
     failed: str | None = None  # what the step before raised, as reported
     done = 0
     while steps is None or done < steps:
@@ -847,22 +848,23 @@ def follow(
         if stepped is None:
             added: list[str] = []
             reducing: list[str] = []
-            refused, incomplete = shown
+            submit_errors, incomplete = shown
         else:
             added = list(stepped.added)
             reducing = list(stepped.records)
-            refused, incomplete = dict(stepped.submit_errors), list(stepped.incomplete)
+            submit_errors = dict(stepped.submit_errors)
+            incomplete = list(stepped.incomplete)
             running |= stepped.records
         line = _ended(batch, running)
         if (
             added
             or reducing
             or line['ended']
-            or (refused, incomplete) != shown
+            or (submit_errors, incomplete) != shown
             or fresh
         ):
-            write_line(_line(added, reducing, line, refused, incomplete, error))
-            shown = (refused, incomplete)
+            write_line(_line(added, reducing, line, submit_errors, incomplete, error))
+            shown = (submit_errors, incomplete)
     if running:
         batch.client.wait(list(running.values()))
         write_line(_line([], [], _ended(batch, running), *shown, None))
@@ -872,7 +874,7 @@ def _line(
     added: list[str],
     reducing: list[str],
     ended: Mapping[str, Mapping[str, str]],
-    refused: Mapping[str, str],
+    submit_errors: Mapping[str, str],
     incomplete: list[str],
     error: str | None,
 ) -> dict[str, Any]:
@@ -881,7 +883,7 @@ def _line(
         'added': added,
         'reducing': reducing,
         **ended,
-        'refused': refused,
+        'submit_errors': submit_errors,
         'incomplete': incomplete,
         'error': error,
     }
@@ -931,7 +933,7 @@ def _line_text(line: Mapping[str, Any]) -> str | None:
             (status, [k for k, s in ended.items() if s == status], line['failure'])
             for status in dict.fromkeys(ended.values())
         ),
-        ('refused', list(line['refused']), line['refused']),
+        ('submit errors', list(line['submit_errors']), line['submit_errors']),
         ('incomplete', line['incomplete'], {}),
     ]
     text = ' | '.join(f'{name} {keys(k, why)}' for name, k, why in parts if k)
@@ -1064,7 +1066,7 @@ def _output_options_arguments(command: argparse.ArgumentParser) -> None:
         metavar='FILE',
         type=_existing,
         nargs='?',
-        help='output options, YAML, as the command writes them, to keep for the batch',
+        help='output options, YAML, as the command writes them, to store for the batch',
     )
 
 
@@ -1247,14 +1249,15 @@ _COMMANDS = {
         'results in, the outputs for a format of chosen outputs, and the name, '
         'description, keywords, owner and contact email of the results. Until '
         'output options are stored, the format is the first that -W gives for '
-        'the spec, else scipp HDF5. With -c, the owner and contact are the '
+        'the spec, else scipp HDF5, and with -c the owner and contact are the '
         'principal investigator of the proposal, as the catalogue lists.',
         arguments=_output_options_arguments,
         output='text',
     ),
     'export': _Command(
         _export,
-        description='Write the result of each done row of the table file '
+        description='Write the result of each row whose reduction completed '
+        '(status done, settings changed or outdated) of the table file '
         'TABLE, each output as scipp HDF5, or of the batch of LABEL as it stands, by '
         'its output options, to a folder of its key in DIRECTORY, which it '
         'replaces whole, with the record as _record.json; and write the rows.',
@@ -1287,8 +1290,8 @@ _COMMANDS = {
         _add,
         description='Add the rows of KEY, as the row source of the batch of '
         'LABEL makes them now, to its batch table, and write them as show does. '
-        'It reduces nothing. A row that waits for a file is added with its cell '
-        'empty, and stays incomplete until a person fills it: follow changes '
+        'It reduces nothing. An incomplete row of the source is added with its '
+        'cell empty, and stays incomplete until a person fills it: follow changes '
         'no row of the batch table.',
         arguments=_add_arguments,
         check=_with_sources('add'),
@@ -1314,9 +1317,10 @@ _COMMANDS = {
     ),
     'remove': _Command(
         _remove,
-        description='Remove the batch of LABEL: its batch table, settings and '
-        'what it stores of its row source. Its records stay in the folder, under '
-        'the label, so a new batch takes another label.',
+        description='Remove the batch of LABEL: its batch table, settings, '
+        'output options, what it stores of its row source, and the list of what '
+        'it published (the datasets stay in the catalogue). Its records stay in '
+        'the folder, under the label, so a new batch takes another label.',
         arguments=_show_arguments,
         output=None,
     ),
@@ -1356,7 +1360,7 @@ def _parser() -> argparse.ArgumentParser:
         '--catalogue',
         metavar='MODULE:NAME',
         help='a function from the proposal to the catalogue to publish to '
-        '(ess.apps.scicat.Catalogue), for publish; output-options takes the '
+        '(ess.apps.scicat.Catalogue), for publish; output-options reads the '
         'default owner and contact from it',
     )
     parser.add_argument(
@@ -1379,7 +1383,7 @@ def _parser() -> argparse.ArgumentParser:
         dest='command',
         required=True,
         metavar='COMMAND',
-        help='a command above; COMMAND --help says more',
+        help='a command above; COMMAND --help explains it',
     )
     for name, command in _COMMANDS.items():
         sub = commands.add_parser(name, description=command.description)
@@ -1490,7 +1494,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f'{error}\n')
         return 1
     except DefinitionWriteError as error:
-        sys.stderr.write(f'not kept: {error}\n')
+        sys.stderr.write(f'not written: {error}\n')
         return 1
     except Stopped as error:
         sys.stderr.write(f'{error}\n')

@@ -43,9 +43,7 @@ def test_c1_beam_centre_feeds_a_batch_of_sample_reductions(
     assert set(client.provenance(reduced[0]).files()) == {samples[0], centre_run}
 
 
-@pytest.mark.xfail(
-    reason='publish, scicat, and files.add_published are not implemented'
-)
+@pytest.mark.xfail(reason='Client.publish and FakeFiles.add_published do not exist')
 def test_c2_vanadium_from_the_catalogue(
     client: Client, measure: toys.Measure, files: FakeFiles
 ) -> None:

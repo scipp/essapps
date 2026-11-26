@@ -36,6 +36,7 @@ flowchart TD
     last_step["LastStep: the outcome of the last step of Follow"]
     page["Page, one per batch: the settings draft, submit errors, revision"]
     intake["Intake: row sources, Follow"]
+    writing["Writing, Publisher: output options, publishing"]
     manager["BatchManager"]
     batch["Batch"]
     browser -->|HTTP| api
@@ -45,11 +46,13 @@ flowchart TD
     pages --> manager
     pages --> runs
     pages --> last_step
+    pages --> writing
     page --> runs
     page --> last_step
     page --> intake
     page --> manager
     page --> batch
+    page --> writing
     intake --> manager
     manager -->|one per label| batch
 ```
@@ -83,12 +86,14 @@ def edit(page: PageOfLabel, body: CellEdit) -> State:
 
 # page.py: Page.edit, wrapped by @_action
 with pages.lock:
-    pages.check(label)              # NotFound (404) if the batch was removed
-    page._fit()                     # rebuild the forms if the parameter columns changed
-    table = batch.table()           # a copy
-    table.loc[keys, column] = value
-    batch.set_table(table)          # the batch validates and writes to disk
-    page.revision += 1
+    try:
+        pages.check(label)          # NotFound (404) if the batch was removed
+        page._fit()                 # rebuild the forms if the parameter columns changed
+        table = batch.table()       # a copy
+        table.loc[keys, column] = value
+        batch.set_table(table)      # the batch validates and writes to disk
+    finally:
+        page.revision += 1          # also when the action raises
     return page.state(notice)
 ```
 
@@ -169,7 +174,7 @@ The page without a batch polls no state; it reloads the list of batches with eac
 `vendor.sh` fetches Tabulator and Plotly into `static/vendor/`.
 
 The document loads once.
-A change of batch (a click in the list, a new batch, a removal, Back and Forward) runs `show` in `app.js`: it changes the URL with `history.pushState`, drops the state, and polls the new batch at once.
+A change of batch (a click in the list, a new batch, a removal, Back and Forward) runs `show` in `app.js`: it records the URL with `history.pushState` (after a removal `replaceState`; at Back and Forward the browser changed it), drops the state, and polls the new batch at once.
 The grids stay and receive the rows and columns of the new batch.
 Two counters drop answers that arrive late: `changes` counts the changes of batch, and `sent[kind]` counts the requests of each kind, such as `api/plot`.
 

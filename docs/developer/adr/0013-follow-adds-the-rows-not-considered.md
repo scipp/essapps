@@ -47,7 +47,7 @@ To add rows without a memory, a step brings back a row that a person removed.
 
 ## Consequences
 
-- An incomplete row is not in the table. The page shows how many rows are incomplete, and a person can add them.
+- An incomplete row of the source is not in the batch table. The page shows how many there are, and a person can add them.
 - A batch that follows again adds at its next step every complete row it has not seen, also rows that another batch added meanwhile.
 - A stop by mistake is undone with `intake.follow(label)` or `essbatch follow -l LABEL`. On the page, a person adds the later rows with "Add rows from the runs", or makes a new batch with Follow.
 - To try settings on a few rows first, a person makes a batch without Follow, then the batch that follows with "Start with the settings of" the first. The rows tried are reduced again in the second batch.

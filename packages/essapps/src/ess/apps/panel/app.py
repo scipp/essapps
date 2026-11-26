@@ -102,7 +102,7 @@ class App:
         try:
             record = self.client.submit(self.spec, params=self.form.params)
         except SubmitError as error:
-            self.message.object = 'Refused:\n\n' + '\n'.join(
+            self.message.object = 'Rejected:\n\n' + '\n'.join(
                 f'- {e}' for e in error.errors
             )
             return None

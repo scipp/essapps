@@ -261,8 +261,8 @@ def _output_reads(params: Mapping[str, Any]) -> list[_OutputKey]:
     ]
 
 
-def _refused(index: int, error: SubmitError) -> SubmitError:
-    """The reasons of ``error``, each naming the request at ``index``."""
+def _at_index(index: int, error: SubmitError) -> SubmitError:
+    """The problems of ``error``, each naming the request at ``index``."""
     return SubmitError(replace(e, request_key=index) for e in error.errors)
 
 
@@ -282,11 +282,11 @@ def _each[T, R](
 def _every[T, R](items: Sequence[T], check: Callable[[int, T], R]) -> list[R]:
     """
     ``check`` of each item, by its index. Raises one ``SubmitError`` with the
-    reasons of all items, so that a caller learns of every rejected request at once.
+    problems of all items, so that a caller learns of every rejected request at once.
     """
     results = _each(items, check)
-    if refused := [r for r in results if isinstance(r, SubmitError)]:
-        raise SubmitError(e for r in refused for e in r.errors)
+    if rejected := [r for r in results if isinstance(r, SubmitError)]:
+        raise SubmitError(e for r in rejected for e in r.errors)
     return [r for r in results if not isinstance(r, SubmitError)]
 
 
@@ -438,8 +438,8 @@ class Workspace(WorkspaceProtocol):
     ------
     ValueError
         If two bindings have the same spec name and version, or the log holds
-        an event of another proposal or one that does not apply. In the second
-        case the log is closed.
+        an event of another proposal or a submission whose spec digest the log
+        lacks. In the second case the log is closed.
     TypeError
         If ``bind`` is not a list of bindings.
     """
@@ -566,7 +566,7 @@ class Workspace(WorkspaceProtocol):
                 self._finish_locked(
                     record_id, Status.CANCELLED, 'the workspace restarted'
                 )
-            elif (reason := self._restart_problem(record_id, runs)) is not None:
+            elif (reason := self._restart_problem_locked(record_id, runs)) is not None:
                 self._finish_locked(
                     record_id, Status.FAILED, f'the workspace restarted: {reason}'
                 )
@@ -575,7 +575,9 @@ class Workspace(WorkspaceProtocol):
         for record_id in (i for i in pending if i in runs):
             self._schedule_locked(record_id, self._request_plan_locked(record_id))
 
-    def _restart_problem(self, record_id: str, runs: Collection[str]) -> str | None:
+    def _restart_problem_locked(
+        self, record_id: str, runs: Collection[str]
+    ) -> str | None:
         """
         Why a record pending at a restart cannot run, or ``None``. ``runs``
         holds the pending records that run.
@@ -751,25 +753,25 @@ class Workspace(WorkspaceProtocol):
         return _each(items, self._resolved)
 
     def _resolved(self, index: int, item: Request | Template) -> Request | Template:
-        """``item`` resolved; a refusal names it by ``index``."""
+        """``item`` resolved; a rejection names it by ``index``."""
         if isinstance(item, Request):
             return self._prepare(index, item)[0]
         try:
             checks = self._known(item.spec).checks
             _, fixed, _ = checks.template(item, self._proposal)
         except SubmitError as error:
-            raise _refused(index, error) from None
+            raise _at_index(index, error) from None
         return Template(item.spec, params=fixed, blanks=item.blanks)
 
     def _prepare(self, index: int, request: Request) -> tuple[Request, OutputReads]:
         """
         The request as its record holds it, and the outputs it references,
-        checked except for what needs history. A refusal names it by ``index``.
+        checked except for what needs history. A rejection names it by ``index``.
         """
         try:
             return self._known(request.spec).checks.request(request, self._proposal)
         except SubmitError as error:
-            raise _refused(index, error) from None
+            raise _at_index(index, error) from None
 
     def _check_entry_locked(
         self, index: int, entry: Entry, request: Request, reads: OutputReads
@@ -783,7 +785,7 @@ class Workspace(WorkspaceProtocol):
                 reads = [r for r in reads if r[0][0] in read]
             self._check_reads_locked(reads, stage_reads)
         except SubmitError as error:
-            raise _refused(index, error) from None
+            raise _at_index(index, error) from None
 
     def _check_reads_locked(
         self, reads: OutputReads, stage_reads: Collection[_OutputKey] = ()
@@ -1026,15 +1028,15 @@ class Workspace(WorkspaceProtocol):
         if record_id in self._in_memory:
             return
         names = self._views.records.outputs(record_id)
-        kept = [n for n in names if self._readers[_OutputKey(record_id, n)]]
+        read = [n for n in names if self._readers[_OutputKey(record_id, n)]]
         if record_id not in self._views.finished:
-            if not kept and record_id not in self._views.persisted:
+            if not read and record_id not in self._views.persisted:
                 self._finish_locked(
-                    record_id, Status.CANCELLED, 'nothing keeps its outputs'
+                    record_id, Status.CANCELLED, 'nothing holds its outputs'
                 )
             return
         for name in names:
-            if name not in kept:
+            if name not in read:
                 self._outputs.pop((record_id, name), None)
 
     def _complete_locked(
@@ -1489,8 +1491,8 @@ class Workspace(WorkspaceProtocol):
             upto = len(self._views.pushes.get(accumulator_id, ()))
             self._readers[_StateKey(acc, upto)] += 1
         try:
-            if (refused := self._state_problem(acc, upto)) is not None:
-                raise SubmitError.at((), refused)
+            if (problem := self._state_problem(acc, upto)) is not None:
+                raise SubmitError.at((), problem)
             with self._changed:
                 self._check_running()
                 self._pushed_into_locked(accumulator_id)  # not released or stopped
@@ -1632,11 +1634,11 @@ class Workspace(WorkspaceProtocol):
             return checked[1]
         with self._changed:
             plain = self._views.plain(acc.id, upto)
-        refused = self._bound[plain.spec].checks.state_problem(
+        problem = self._bound[plain.spec].checks.state_problem(
             plain, acc.template.blanks
         )
-        acc.checked = (upto, refused)  # another check may overwrite it at once
-        return refused
+        acc.checked = (upto, problem)  # another check may overwrite it at once
+        return problem
 
     def _accumulator_locked(self, accumulator_id: str) -> _Accumulator:
         """
@@ -1689,8 +1691,8 @@ class Workspace(WorkspaceProtocol):
             acc, upto = self._logged_state_locked(accumulator_id)
             self._readers[_StateKey(acc, upto)] += 1
         try:  # a validator may raise anything
-            if (refused := self._state_problem(acc, upto)) is not None:
-                raise NotReadable(refused)
+            if (problem := self._state_problem(acc, upto)) is not None:
+                raise NotReadable(problem)
             yield acc, upto
         finally:
             with self._changed:
@@ -1699,8 +1701,8 @@ class Workspace(WorkspaceProtocol):
     def plain_request(self, accumulator_id: str) -> Request:
         with self._changed:
             acc, upto = self._logged_state_locked(accumulator_id)
-        if (refused := self._state_problem(acc, upto)) is not None:
-            raise NotReadable(refused)
+        if (problem := self._state_problem(acc, upto)) is not None:
+            raise NotReadable(problem)
         with self._changed:
             return self._views.plain(acc.id, upto)
 

@@ -671,7 +671,7 @@ class RowsField(Field):
         self._load()
 
     def discard(self) -> None:
-        """Shows the selected row in the editor, or nothing if none is selected."""
+        """Shows the selected row in the editor, or the defaults if none is selected."""
         self._load()
 
     def _load(self) -> None:

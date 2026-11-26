@@ -79,4 +79,4 @@ def reject_on_write_error() -> Iterator[None]:
     try:
         yield
     except DefinitionWriteError as error:
-        raise Rejected(f'The change was not kept: {error}') from None
+        raise Rejected(f'The change was not stored: {error}') from None

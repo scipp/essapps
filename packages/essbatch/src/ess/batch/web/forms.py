@@ -51,7 +51,7 @@ def params_and_missing(
     fields: Fields, parameter_columns: Collection[str] = ()
 ) -> tuple[dict[str, Any], list[FieldError]]:
     """
-    :meth:`~ess.apps.Fields.params_and_missing` of a form of settings, except
+    :meth:`~ess.apps.fields.Fields.params_and_missing` of a form of settings, except
     that a field of ``parameter_columns`` left unset as a whole is not missing.
     """
     given, missing = fields.params_and_missing()
@@ -62,16 +62,16 @@ def params_and_missing(
 
 def tree(
     fields: Fields,
-    refused: Iterable[FieldError] = (),
+    errors: Iterable[FieldError] = (),
     parameter_columns: Collection[str] = (),
 ) -> list[Node]:
     """
-    The nodes of ``fields``, each with what is missing or ``refused`` at it,
+    The nodes of ``fields``, each with what is missing or the ``errors`` at it,
     and those of ``parameter_columns`` marked as columns.
     """
     _, missing = params_and_missing(fields, parameter_columns)
-    said = {e.loc: message(e.msg) for e in (*missing, *refused) if e.loc}
-    problems = {loc: m[:1].upper() + m[1:] for loc, m in said.items()}
+    texts = {e.loc: message(e.msg) for e in (*missing, *errors) if e.loc}
+    problems = {loc: m[:1].upper() + m[1:] for loc, m in texts.items()}
     return [
         _node(field, (name,), fields.titles[name], problems).model_copy(
             update={'column': name in parameter_columns}

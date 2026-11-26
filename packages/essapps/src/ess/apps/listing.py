@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""What a client lists now, looked up once for a refresh of all views."""
+"""
+What a client lists now, looked up once for a refresh of all views.
+
+Stands in for queries the client lacks: records by output type, and short record
+labels (scipp/essapps#95).
+"""
 
 from __future__ import annotations
 
@@ -32,7 +37,7 @@ class Listing:
     record ID. A record of an unbound spec is labelled by its spec's name and
     version, its outputs by their names, and none of its outputs is offered.
 
-    Labels are computed from all records in memory, so a label that depends on
+    Labels are computed from all listed records, so a label that depends on
     other records needs no read::
 
         Find centre (11:45)                 a record: its spec's title, local time
@@ -111,7 +116,7 @@ class Listing:
 
     def is_group(self, record: Record, name: str) -> bool:
         """
-        Whether an output of a record of the bound spec is a group.
+        Whether an output of a record of a bound spec is a group.
 
         Raises ``KeyError`` for a record of an unbound spec, since only its
         stored value shows whether it is a ``DataGroup``.

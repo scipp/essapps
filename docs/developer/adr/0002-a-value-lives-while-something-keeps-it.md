@@ -1,4 +1,4 @@
-# ADR 0002: A value lives while something keeps it, and nothing is written unless persisted
+# ADR 0002: A value lives while something holds it, and nothing is written unless persisted
 
 - Status: accepted
 - Deciders: Simon
@@ -16,7 +16,7 @@ Values take memory, so something must decide when they go, and which are written
 
 ## Decision
 
-An output value lives while a *keeper* holds it: the workspace, a pending request that reads it, or the store.
+An output value lives while something holds it: the workspace, a pending request that reads it, or the store.
 The workspace of a proposal holds what any of its clients asks for, until a client releases the record or the workspace closes.
 A client holds nothing, so every client of a workspace reads, references, and releases the same values.
 Work whose outputs nothing would hold is cancelled.

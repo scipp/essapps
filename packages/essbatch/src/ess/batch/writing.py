@@ -83,9 +83,9 @@ class Writing:
         contact.
         """
         spec = self.manager.batch(label).spec
-        kept = OUTPUT_OPTIONS.load(self.manager.definitions, label)
-        if kept is not None:
-            return kept
+        stored = OUTPUT_OPTIONS.load(self.manager.definitions, label)
+        if stored is not None:
+            return stored
         contact = self._contact
         return OutputOptions(
             format=self.writers(label)[0].name,

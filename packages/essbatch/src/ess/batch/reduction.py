@@ -260,8 +260,9 @@ class Batch:
         """Raise ``ValueError`` if ``columns`` lack one of :attr:`source_columns`."""
         if lacking := [c for c in sorted(self.source_columns) if c not in columns]:
             raise ValueError(
-                f'the source of the batch fills {", ".join(lacking)}: a row waits '
-                'until its cell there is filled, so the table keeps the column'
+                f'the source of the batch fills {", ".join(lacking)}: a row is '
+                'incomplete until its cell there is filled, so the table must '
+                'have the column'
             )
 
     def table(self) -> pd.DataFrame:
@@ -318,7 +319,7 @@ class Batch:
         if at := sorted(settings.keys() & self.source_columns):
             raise ValueError(
                 f'the source of the batch fills {", ".join(at)}: an empty cell '
-                'there waits for its file, so it takes no setting'
+                'there makes the row incomplete, so it takes no setting'
             )
         settings = copy.deepcopy(dict(settings))
         self._save(settings)

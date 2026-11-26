@@ -33,11 +33,14 @@ A record object or a reference holds nothing. A value that is gone does not
 come back. An output is written to the store only if a submission or a freeze
 persists it, since the framework cannot tell which outputs are worth writing.
 
-A request may reference, and a client may read, only outputs that are held, and
-files. A client may also read the states of open accumulators. Every client of
-the workspace reads the same values. A request may reference an output of a
-pending record. :meth:`~WorkspaceProtocol.submit` rejects the reference once
-that record has failed or been cancelled.
+A request may reference, and a client may read, files and the outputs that the
+workspace or the store holds. A call through a stage may also reference the
+outputs that the stage holds. An output that only a pending request, a push or a
+template holds may not be referenced or read. A client may also read the states
+of open accumulators. Every client of the workspace reads the same values. A
+request may reference an output of a pending record.
+:meth:`~WorkspaceProtocol.submit` rejects the reference once that record has
+failed or been cancelled.
 
 A pending record whose outputs nothing would hold finishes as cancelled. A
 cancelled request no longer holds what it references, so the cancellation
@@ -175,7 +178,7 @@ class WorkspaceProtocol(Protocol):
         :meth:`open_stage`) differs: it holds only the values given, since a
         call through the stage must have exactly these.
 
-        An item that :meth:`submit` would reject comes back as the
+        An item with a value that :meth:`submit` would reject comes back as the
         ``SubmitError`` in its place, with its index in ``items`` as
         ``request_key``. A template is also rejected for a parameter that is
         neither given nor a blank and has no default. Each item is resolved on
@@ -513,10 +516,12 @@ class FileSource(Protocol):
 
         The workspace calls ``path`` when it checks a request or a template,
         for each file of a parameter that holds no reference, so that the
-        validators of a group that holds a file see its path. So ``path``
-        neither stages nor downloads the file, and does not check that it can
-        be read. A file that cannot be read fails the workflow that reads
-        it, so that it fails only its own record.
+        validators of a group that holds a file see its path. This happens for
+        every row of a batch that is shown, and the files may be on a network
+        mount. So ``path`` must be a lookup: it neither stages nor downloads the
+        file, and does not check that it can be read. A file that cannot be
+        read fails the workflow that reads it, so that it fails only its own
+        record.
         """
         ...
 

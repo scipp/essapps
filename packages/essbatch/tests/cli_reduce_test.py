@@ -478,7 +478,7 @@ def test_reduce_whose_definitions_refuse_a_write_says_so(
         definitions.chmod(0o700)
 
     assert code == 1
-    assert 'not kept: ' in capsys.readouterr().err
+    assert 'not written: ' in capsys.readouterr().err
 
 
 def test_reduce_on_a_folder_that_another_process_holds_says_so(
@@ -859,7 +859,7 @@ def test_a_reduce_whose_new_batch_cannot_be_removed_says_why_it_was_refused(
     err = capsys.readouterr().err
     assert code == 2
     assert 'locked' in err
-    assert 'not kept' not in err
+    assert 'not written' not in err
     assert (labels / 'a' / 'header.json').exists()  # the removal was refused
 
 

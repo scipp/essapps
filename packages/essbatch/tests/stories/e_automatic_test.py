@@ -16,7 +16,7 @@ from ess.apps.testing import FakeFiles
 
 from . import toys
 
-NO_PUBLISH = 'publication is not implemented'
+NO_PUBLISH = 'Client.publish and FakeFiles.add_published do not exist'
 
 
 def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:

@@ -69,6 +69,7 @@ Not drawn: the page lists the runs, and the manager finds the specs bound, throu
 | Follow, the batch that follows | a step every few seconds on one batch: add new rows, reduce them |
 
 The value and the request of a row are defined in [The request of a row](#the-request-of-a-row); its status in [The state of a row](#the-state-of-a-row-and-the-rules-over-it).
+The status `incomplete` of a row of the batch table covers any problem, not only an incomplete row of the source.
 
 `manager.create` and `intake.create` return the `Batch`, and `manager.batch(label)` returns it again.
 Every other method that refers to a batch accepts its label.
@@ -262,13 +263,13 @@ The value of a parameter for a row:
 ```mermaid
 flowchart TD
     source{"the source fills it?"}
-    waiting{"the cell holds a value?"}
+    filled{"the cell holds a value?"}
     column{"a column whose cell holds a value?"}
     setting{"the batch has a setting?"}
-    source -- yes --> waiting
+    source -- yes --> filled
     source -- no --> column
-    waiting -- yes --> cell["the cell"]
-    waiting -- no --> waits["none: the row waits for its file"]
+    filled -- yes --> cell["the cell"]
+    filled -- no --> missing["none: the row is incomplete"]
     column -- yes --> cell
     column -- no --> setting
     setting -- yes --> given["the setting"]
@@ -283,7 +284,7 @@ def value(batch, key, p):                 # the value of parameter p for the row
     if p in table.columns and not empty(table.loc[key, p]):
         return table.loc[key, p]          # the row's own value
     if p in batch.source_columns:
-        return MISSING                    # the row waits for its file
+        return MISSING                    # the row is incomplete
     if p in batch.settings:
         return batch.settings[p]          # the setting
     return default(p)                     # of the spec; None if p accepts None; else MISSING
@@ -351,6 +352,7 @@ stateDiagram-v2
 A problem is any of `RowState.problems`: a value missing, such as an empty cell of a source column, a cell that the workspace rejects, or a referenced record that failed or was cancelled.
 The workspace rejects a cell that refers to a file that the file source does not know, or cannot read now: it raised `OSError`, as when a mount is gone or a catalogue timed out.
 Only the rows that refer to that file have the problem, and the reason names the file.
+A row with a result resolves only the cells that differ from its result's request, so a `done` row keeps its status while its file cannot be read.
 A rejection is not stored, so the next state resolves the cell again, and the problem goes once the file can be read.
 A row with a problem has status `incomplete` unless it is `running`, also when it has a result, as a `done` row whose source-column cell is emptied. The arrow from the box stands for these.
 
@@ -434,7 +436,7 @@ candidates = not_reduced(batch.state(compare=False))   # ready as given, no resu
 batch.reduce(not_reduced(batch.state(candidates)))
 ```
 
-One step of Follow, from the timer to `seen_keys` kept:
+One step of Follow, from the timer to `seen_keys` stored:
 
 ```mermaid
 sequenceDiagram
@@ -457,7 +459,7 @@ sequenceDiagram
         batch->>definitions: write table.json
     end
     step->>batch: reduce(rows ready and without a result)
-    step-->>intake: Step: added, seen, submit_errors, incomplete, records
+    step-->>intake: Step: added, seen_keys, submit_errors, incomplete, records
     intake->>definitions: write source.json: seen, if it changed
     intake-->>timer: Step
 ```
@@ -527,7 +529,7 @@ A cell may refer to a record that still runs. If that record failed or was cance
 
 `source.json` exists only for a batch made from a row source, `output_options.json` once output options are set, and `publish.json` once a result is published.
 Each file has one writer, and `FolderDefinitions` writes it whole through a temporary file.
-`settings.json` has the form of a template file of the client, and `table.json` the shape of pandas' `to_json(orient='table')`.
+`settings.json` has the shape of a template file of the client, and `table.json` that of pandas' `to_json(orient='table')`.
 
 A label is a batch if and only if `header.json` exists.
 `manager.create` writes the batch table and the settings, then the header.
@@ -536,7 +538,7 @@ So whether a batch follows goes with its label: a batch made again with the labe
 `intake.create` makes the batch with the manager. With `follow=True`, it then writes `"follows": false` to the `source.json` of the batch that followed. Then it writes the `source.json` of the batch. If the definitions reject a write, it removes the batch again.
 `intake.follow(label)` writes `"follows": false` to the `source.json` of the batch that followed, then `"follows": true` to that of `label`.
 A process that stops between these writes leaves no batch that follows.
-A process that stops between the header and the `source.json` of `intake.create` leaves a batch made without a source, which neither offers rows nor follows.
+A process that stops between the header and the `source.json` of `intake.create` leaves a batch made without a source, which has no available rows and does not follow.
 
 `FolderDefinitions` rejects a folder with labels and no `format.json`, or of another format, with a `ValueError` that ends "make a new folder".
 A folder read with the wrong meaning would reduce rows with wrong values, and no folder is migrated.
