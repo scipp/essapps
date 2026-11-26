@@ -282,7 +282,7 @@ def _each[T, R](
 def _every[T, R](items: Sequence[T], check: Callable[[int, T], R]) -> list[R]:
     """
     ``check`` of each item, by its index. Raises one ``SubmitError`` with the
-    reasons of all items, so that a caller learns of every refused request at once.
+    reasons of all items, so that a caller learns of every rejected request at once.
     """
     results = _each(items, check)
     if refused := [r for r in results if isinstance(r, SubmitError)]:
@@ -806,7 +806,7 @@ class Workspace(WorkspaceProtocol):
                 if acc_id == ref.record
                 and self._views.status(record_id) in (Status.PENDING, Status.COMPLETED)
             ]
-            # at most one: a freeze is refused while one is pending or completed
+            # at most one: freeze raises while one is pending or completed
             which = f'its freeze, {frozen[0]}' if frozen else 'a freeze'
             raise SubmitError.at(
                 loc,
@@ -915,7 +915,7 @@ class Workspace(WorkspaceProtocol):
         """
         bound = self._bound[request.spec]
         # No validation here: _typed validated each value by its field, and the
-        # params model has no validators of its own, which WorkflowSpec refuses.
+        # params model has no validators of its own, which WorkflowSpec rejects.
         params = bound.spec.params.model_construct(
             **self._typed(request.spec, request.params)
         )
@@ -1574,7 +1574,7 @@ class Workspace(WorkspaceProtocol):
             else:
                 for table, rows in typed.items():
                     acc.driver.push(table, rows)
-        except Exception as error:  # the binding refuses the values or rows
+        except Exception as error:  # the binding rejects the values or rows
             with self._changed:
                 self._stop_locked(acc, f'{acc.step} failed: {_reason(error)}')
             return
@@ -1625,7 +1625,7 @@ class Workspace(WorkspaceProtocol):
     def _state_problem(self, acc: _Accumulator, upto: int) -> str | None:
         """
         Why the plain request of the state after ``upto`` pushes would be
-        refused, or ``None``.
+        rejected, or ``None``.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:
@@ -1683,7 +1683,7 @@ class Workspace(WorkspaceProtocol):
     def _reading(self, accumulator_id: str) -> Iterator[tuple[_Accumulator, int]]:
         """
         The accumulator and its logged state, held as a reader for the block.
-        Raises ``NotReadable`` if the state's plain request would be refused.
+        Raises ``NotReadable`` if the state's plain request would be rejected.
         """
         with self._changed:
             acc, upto = self._logged_state_locked(accumulator_id)

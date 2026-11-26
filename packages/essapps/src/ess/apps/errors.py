@@ -83,7 +83,7 @@ class SubmitError(ValueError):
 
     @classmethod
     def of(cls, error: ParamsError) -> SubmitError:
-        """The reasons of params that :mod:`ess.spec` refuses, with no request key."""
+        """The reasons of params that :mod:`ess.spec` rejects, with no request key."""
         return cls(FieldError(None, loc, msg) for loc, msg in error.errors)
 
     def __str__(self) -> str:

@@ -326,7 +326,7 @@ class ScalarsField(Field):
 
     :meth:`add` appends an element, and :meth:`remove` removes the last. Unset,
     the list has no elements until one is added or removed. A removal from an
-    unset list gives the empty list.
+    unset list makes it the empty list.
     """
 
     def __init__(
@@ -584,8 +584,8 @@ class RowsField(Field):
     listing leaves its row as it is.
 
     Unset, the field has no rows until one is added or :meth:`remove_rows` is
-    called, which gives the empty list. A row that the editor cannot show whole,
-    such as a reference to an output that the client may not read now, is kept
+    called, which makes it the empty list. A row that the editor cannot show whole,
+    such as a reference to an output that the client may not read now, stays
     as given.
     """
 

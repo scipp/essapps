@@ -30,7 +30,7 @@ class Table[K]:
 
     ``selectable=True`` allows several. ``show`` is called when the selection
     changes: another key, none, or new values in the selected row. :meth:`set`
-    keeps the selected keys that still have a row. So ``show`` is not called
+    leaves selected the keys that still have a row. So ``show`` is not called
     while the selected row stays the same, even as rows before it come and go.
     """
 
