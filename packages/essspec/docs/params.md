@@ -4,24 +4,10 @@ A *spec* (`ess.spec.WorkflowSpec`) declares what a workflow takes and what it re
 Every workflow package writes one spec per workflow.
 The workspace (`ess.apps.Workspace`, which runs requests), forms, and clients read everything they need from the spec's two pydantic models:
 
-| Model | Holds | A request gives | The workflow gets |
-|---|---|---|---|
-| params | everything the workflow takes: settings, files, data | each value written inline, as a file, or as a reference to an output of another record | the values, each file as a local path, and the data each reference names |
-| outputs | the results | (nothing) | (it returns them) |
-
 The models are ordinary pydantic models.
 The framework adds two markers, `Referenced[T]` and `File(...)`, and reads the rest from the field types.
 `WorkflowSpec` checks its rules when it is made; [the last section](#what-workflowspec-refuses) lists them.
 [roles/workflow-authors.ipynb](../../../docs/developer/roles/workflow-authors.ipynb) walks through a spec, its bindings, and a driver on a running example.
-
-**In short:**
-
-- A parameter is a *group* (a pydantic model), a union of groups, a file, or a list of one of these. Numbers are fields of groups.
-- A field that another workflow's output fills is typed `Referenced[T]`, where `T` is a group.
-- A field that a file fills is typed `Annotated[Path, File(...)]`, usually through a type that `ess.spec` provides, such as `SampleRunFile`.
-- A choice between ways of getting a value is a union of groups. `X | None` means "without X".
-- A default never skips a correction that a correct reduction needs.
-- A check of one value belongs to its type. A check across parameters belongs to the workflow.
 
 ## A first spec
 
@@ -208,7 +194,6 @@ A program without a workspace gives the path directly, `IofQParams(sample=Path('
 `File(...)` marks a `Path`, once: a `Path` without `File(...)` is refused, and so is `File(...)` on anything else, such as `Annotated[int, File()]`.
 A file field takes no constraint, such as `MinLen(2)`.
 It may take a validator, such as `AfterValidator(...)`, which sees the local path.
-The marker itself carries no validators: one that read the file would read it over a network mount at submission.
 A check of a file's content belongs to the workflow.
 
 A value read from a file by some users and computed by others is a union, such as `normalization: RunFile | Referenced[ComputedNormalization] | None`.
@@ -366,7 +351,6 @@ class Masks(RootModel[dict[str, sc.Variable]]): ...   # by its root type, dict[s
 class Shapes(RootModel[list[Polygon]]): ...  # any other class, such as Polygon: by module and name, 'mypackage.shapes.Polygon'
 ```
 
-Changing a file field's metadata, including the role of a raw file, changes the digest.
 `Referenced[T]` is described by the fields of `T`, since a reference is checked by class when it is used: `T` replaced by another class with the same fields keeps the digest, and a reference made with the old class is refused when it is checked.
 Requiredness counts, although a record stores its params with the defaults filled in, since a parameter that becomes required breaks callers.
 Serialization settings of a group's `model_config` other than `extra`, such as `ser_json_inf_nan`, are not covered.
@@ -382,65 +366,5 @@ check_digests([IOFQ, BEAM_CENTRE], Path(__file__).with_name('spec_digests.json')
 write_digests([IOFQ, BEAM_CENTRE], path)  # once, to make the file: {"sans-iofq/v1": "9f2c...", ...}
 ```
 
-The check names each spec whose digest differs from the file's, each spec the file lacks, with the entry the file needs, and each entry of the file that no spec given has.
 The file holds the given specs and nothing else, so a test that finds no specs fails.
 A changed interface gets a new version; the file is updated under the same version only for a change that is meant to keep it, knowing that records of the old models are then of an unbound spec.
-
-## What `WorkflowSpec` refuses
-
-Making a spec raises `pydantic.ValidationError`, which lists each problem with the model and field it concerns.
-This is every rule that `WorkflowSpec` checks; the sections above give the reasons.
-[workflow_spec_examples_test.py](../tests/workflow_spec_examples_test.py) holds a spec that breaks at least one rule of each group below.
-
-Field types ([What a field may be](#what-a-field-may-be)):
-
-- Each field of the params model, and of each group in it at any depth, is of a field type. `tuple`, `set`, `dict`, `date`, `bytes`, a `RootModel`, an array, and `int | str` are refused.
-- A group does not contain itself, at any depth.
-- A list is not typed `list[X] | None`, its element is not typed `X | None`, and it is not a list of lists.
-- No type is a `NewType` or a type alias, at any depth, also inside the `T` of `Referenced[T]` and in the outputs.
-
-Defaults ([Defaults](#defaults)):
-
-- A default is the value that validating it gives: an instance of a group, not a dict; a member of an enum, not its value. It meets the field's constraints.
-- A default is not a reference and names no file.
-- A file field, and a field typed `Referenced[T]`, has no default, but `None` if typed `X | None`, or `[]` for a list.
-- A `default_factory` takes no other values of the model, and gives values with the same JSON form when called twice.
-
-Files ([Files](#files)):
-
-- `File(...)` marks a `Path`, once. `Annotated[int, File()]` and `Annotated[Path | None, File()]` are refused; write `Annotated[Path, File()] | None`.
-- A `Path` without `File(...)` is refused.
-- A file field takes no constraint, such as `MinLen(2)`. A validator, such as `AfterValidator(...)`, is allowed.
-- A file field is in a union only with `Referenced[...]` members and `None`.
-
-`Referenced[T]` ([References to outputs](#references-to-outputs-referencedt)):
-
-- It types a field of the params, at any depth, but no output.
-- `T` is a group. `Referenced[float]`, `Referenced[sc.DataArray]`, and `Referenced[A | B]` are refused; write `Referenced[A] | Referenced[B]`.
-- `T` holds no `Path`, so no file field, and no `Referenced[...]`, at any depth.
-
-Unions of groups ([Choices](#choices-unions-and-none)):
-
-- The discriminator is the name of the tag field, `Field(discriminator='kind')`, not a callable.
-- The tag field of each alternative is a `Literal` of one string, its own, without an alias.
-- A union that holds a group holds only groups, besides `None` and `Referenced[...]` members.
-- In a union with `Referenced[...]` members, the discriminator is on the union of the members written inline.
-
-Tables ([Tables](#tables-several-runs)):
-
-- `tables` names a parameter of the params model, once.
-- A table is typed `list[X]` and has no default.
-- A table carries only length constraints, and no other constraint or validator.
-
-Outputs ([Outputs](#outputs)):
-
-- A name is of a parameter or of an output, not both.
-- An output is typed `X`, `X | None`, `list[X]`, or `dict[str, X]` (also `| None`), not a union of types.
-- No output holds a `Path` or `Referenced[...]`, at any depth.
-
-Params model and groups ([When values are validated](#when-values-are-validated)):
-
-- A field has no alias (`alias`, `validation_alias`, `serialization_alias`) and no `exclude` or `exclude_if`.
-- A group has no serializers and no computed fields.
-- A field's type has no serializer written with `Annotated`, such as `PlainSerializer` or `WrapSerializer`.
-- The params model has no decorators (validators of any mode, serializers, computed fields) and no `__init__` of its own.

@@ -24,15 +24,6 @@ Making a stage or an accumulator over a binding that does not serve it is refuse
 [roles/workflow-authors.ipynb](../../../docs/developer/roles/workflow-authors.ipynb) walks through a spec, its bindings, and a driver on a running example, [roles/toy_sans.py](../../../docs/developer/roles/toy_sans.py).
 [accumulators.md](../../../docs/developer/accumulators.md) describes stages and accumulators from the client's side.
 
-**In short:**
-
-- A binding gets values, never a reference or a file name: each group as its model, each file as its local path, each table as the list of its rows, every default filled in.
-- A binding is pure: it modifies no value it gets, returns no output that shares memory with one, and gives the same outputs for the same values. The workspace may call it from several threads at once.
-- Defaults belong to the spec. A pipeline holds no value at a key that a parameter's key leads to, since the parameter would then have no effect.
-- In a `PipelineBinding` each parameter sets the sciline key of its class. A parameter whose class names no role, such as a file or an `int`, gives its key with `keys=`. A parameter typed `X | None` sets no key.
-- A driver gives the outputs of the plain request over the rows pushed so far, however the rows were grouped into pushes and whatever the order of pushes into different tables.
-- `ess.spec.testing` checks these promises in a package's tests.
-
 ## What a binding gets
 
 A plain request calls `compute(params)` with an instance of the spec's params model.
@@ -151,11 +142,6 @@ def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     return pipeline
 ```
 
-Files that vary independently are separate parameters, not fields of one group.
-The spec names them by role, `sample` and `can`, not after the workflow's run types.
-A stage fixes or blanks whole parameters, and `sciline.Stage` computes again on each call everything that depends on the key of a blank.
-A blank group of sample, can, and direct beam would compute the can's branch again on every call, though only the sample changes.
-A group of files fits files that always change together; a provider in `make_pipeline` takes it apart into the workflow's keys.
 
 ### Unions
 
@@ -234,7 +220,6 @@ A parameter that sets no key cannot be a blank, nor can a union of groups, since
 
 A *driver* is the object behind an accumulator: tables are pushed into it, and it gives the outputs over the rows so far.
 The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
-The workspace never decides how rows combine, not even by keeping their values; only a driver accumulates.
 A driver is a sciline driver in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245):
 
 ```python
@@ -363,12 +348,6 @@ check_caching(single, {'transmission': settings['transmission'], 'sample': run_1
               [{'reduction': Reduction(bins=n)} for n in (2, 1, 2)])
 check_arrival_and_order(IofQDriver, settings, {'sample': [run_101, run_102], 'can': [run_110]})
 ```
-
-| Check | Symmetry | Compares |
-|---|---|---|
-| `check_one_row` | one-row | the multi-run binding with one row per table, and the single-run binding |
-| `check_caching` | caching | each call through one stage, and the plain request with the same values |
-| `check_arrival_and_order` | arrival and order | a driver under several push schedules, and a driver with one push per table |
 
 Values are those that the binding gets: data read, files as local paths.
 Outputs are compared up to `rtol`, since adding in another order rounds differently.
