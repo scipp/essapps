@@ -270,10 +270,11 @@ class Intake:
         registered so, and what ``choose`` raises.
         """
         found = self._source(source)
-        given = self._given(found, found.fills)
-        arrived = given[~given['waits']].drop(columns='waits')
+        given = rows_of(self.manager.client, found)
+        waits = ~filled(given, found.fills)
+        arrived = given[~waits]
         taken = arrived.index if choose is None else choose(arrived).index
-        return given.assign(taken=given.index.isin(taken))
+        return given.assign(waits=waits, taken=given.index.isin(taken))
 
     def create(
         self,
@@ -366,8 +367,8 @@ class Intake:
                 f'the spec {spec} has no {named}{", ".join(lacked)}, which the '
                 f'source {source} fills'
             )
-        given = self._given(found, found.fills)
-        arrived = given[~given['waits']].drop(columns='waits')
+        given = rows_of(self.manager.client, found)
+        arrived = given[filled(given, found.fills)]
         rows = arrived if choose is None else choose(arrived)
         _check_chosen(rows, arrived)
         before = self.following
