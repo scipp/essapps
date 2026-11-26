@@ -5,10 +5,8 @@ Naming files, and the file source that knows them.
 
 A person names a file by what they know: a run number, a path, or a PID.
 The workspace asks its file source to resolve such a name to the file's
-identity when a request is submitted, so a record names the file itself.
-A file the catalogue lists is identified by its catalogue identifier, any
-other file by its path (see :class:`FolderFiles`). :func:`replace_at_once`
-writes a files table, or any file that another process reads.
+identity when a request is submitted (see
+:meth:`~ess.apps.protocol.FileSource.resolve`).
 """
 
 from __future__ import annotations
@@ -26,11 +24,7 @@ def file(
 ) -> FileRef:
     """
     A file by its run number, its path, or the PID of the SciCat dataset
-    that holds it, as a request writes it. The workspace resolves it to the
-    file's identity when the request is submitted, and the record holds that
-    identity in place of the name: ``pid:...`` for a file the catalogue lists,
-    and ``path:...`` for any other (see :class:`FolderFiles`). Exactly one of
-    the three is given::
+    that holds it, as a request writes it::
 
         file(run=60339)
         file(path='/home/user/data/run1.h5')
@@ -40,7 +34,6 @@ def file(
     here. A path relative to the workspace's folder is written only as the
     identity a record holds, ``FileRef(file='path:masks/main.xml')``.
 
-    A string where a file field is expected is refused: write ``file(path=...)``.
     The record holds no metadata; read it with :meth:`ess.apps.Files.metadata`.
     """
     given = {'run': run, 'path': path, 'pid': pid}
@@ -116,9 +109,8 @@ class FolderFiles:
     A file source over the files of a folder, with a table a person fills.
 
     The table has a row per file: ``file``, its name in the folder, and its
-    metadata, such as ``run``, ``kind``, ``role``, and ``pid``. A row without
-    ``kind`` is a raw file (see :class:`Selector`), and without ``proposal`` is
-    open to all. The order of the rows is the order of measurement::
+    metadata, such as ``run``, ``kind``, ``role``, and ``pid``. The order of the
+    rows is the order of measurement::
 
         FolderFiles('/data/test', [
             {'file': 'run-1.nxs', 'run': 1, 'role': 'sample'},
@@ -203,8 +195,7 @@ class FolderFiles:
 
     def _known(self, ref: FileRef) -> FileRef:
         """
-        ``ref``, if it is the identity of a file of the table. A record may hold
-        one that is not, of a file moved or given a ``pid`` since it was made.
+        ``ref``, if it is the identity of a file of the table.
         """
         if ref not in self._paths:
             raise KeyError(f'the file source does not know the file {ref.file}')

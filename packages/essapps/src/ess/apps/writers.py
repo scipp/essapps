@@ -12,16 +12,9 @@ the values the outputs were computed from::
     iofq.h5            the files of the format
     _record.json       the record, the same for every format
 
-Download, ``export -l`` and publishing all write through :func:`write` by
-the form of a batch (:mod:`ess.batch.writing`), so that they give the
-same files. :data:`SCIPP_HDF5` writes each output as scipp HDF5
-(:mod:`ess.apps.hdf5`), for a spec that has no writer of its own, and for
-``export TABLE``, which names no batch.
-
-A writer is a plain function with the name of its format, a title and a
-description to show a person, and the outputs it reads. The writers of a
-technique call the save functions of its workflow package, and are given by
-the application as a mapping of spec name to writers, as bindings are.
+The writers of a technique call the save functions of its workflow package.
+The application provides them as a mapping of spec name to writers, as it
+provides bindings.
 """
 
 from __future__ import annotations

@@ -4,9 +4,8 @@
 A SciCat in memory for tests of :class:`~ess.apps.scicat.ScicatFiles`. It needs
 the extra ``scicat``.
 
-scitacean's ``FakeClient`` keeps datasets but answers no queries, so
-:class:`FakeCatalogue` extends it to answer ``query_datasets``, and lists in
-:attr:`FakeCatalogue.asked` what it was asked::
+scitacean's ``FakeClient`` holds datasets but answers no queries, so
+:class:`FakeCatalogue` extends it to answer ``query_datasets``::
 
     catalogue = FakeCatalogue()
     ref = catalogue.add(385, minutes=0, sample='water')

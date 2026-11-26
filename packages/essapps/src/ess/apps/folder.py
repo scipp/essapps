@@ -20,10 +20,6 @@ So a command that runs and ends, and the next one, are clients of one workspace:
 the second reads the records of the first, and references their outputs if they
 were persisted. One process holds the folder at a time, since a log has one
 writer.
-
-A file of the store is named by the ID of its record.
-:mod:`ess.batch.export` writes the files of a batch to folders named by
-the keys of its rows.
 """
 
 from __future__ import annotations
@@ -99,8 +95,7 @@ def scan_folder(
     ``read`` takes the path of a file and returns its metadata, such as
     ``{'kind': 'raw', 'run': 60339}``, or ``None`` for a file that is none of
     the workspace's. It knows the files of one instrument, so an instrument
-    package provides it. What no file says of itself, such as the role of a
-    run, a person adds to the table.
+    package provides it.
 
     A file that cannot be read is left out, with a warning. So is a folder
     that is a link, with all it holds, but without one.

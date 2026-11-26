@@ -4,31 +4,9 @@
 SciCat as a file source and as the place results are published. It needs the
 extra ``scicat`` (scitacean).
 
-:class:`ScicatFiles` lists the raw datasets of a proposal as files, from the
-catalogue's records alone, so listing runs downloads nothing.
-:func:`scan_catalogue` writes them as the table of a workspace folder.
-
-:func:`publish` makes one derived dataset of one completed record: its files
-are the outputs written beforehand, and the rest is read from the record and
-the workspace::
-
-    input_datasets      the catalogue identifiers of the files the record read,
-                        also through upstream records (ADR 0010); other files,
-                        such as masks, are listed in scientific_metadata
-    proposal_ids        the workspace's proposal, which is also the owner group
-    instrument_ids      the catalogue's instrument
-    used_software       the Python packages installed now (installed_software)
-    scientific_metadata the spec, the request and the record's ID
-
-A person gives the rest as :class:`~ess.apps.writers.DatasetMetadata`.
-:class:`Catalogue` says where to publish: a ``scitacean.Client``, real or
-``scitacean.testing.client.FakeClient``, with its file transfer. Whether the
-files are copied on a shared file system or sent over SFTP is the choice of
-that transfer, not of this module.
-
-The software is that of the process that publishes, not of the one that
-reduced, since a record names no software versions: correct while one
-install reduces and publishes.
+The software of a published dataset is that of the process that publishes,
+not of the one that reduced, since a record names no software versions:
+correct while one install reduces and publishes.
 """
 
 from __future__ import annotations
@@ -220,8 +198,7 @@ class ScicatFiles:
                   ' - Proposal:<proposal> - Run: <run>'
 
     The catalogue does not say what a run is for, so no file has a ``role``;
-    :class:`~ess.batch.CorrectedFiles` lets a person give one. A run number
-    that two datasets give names neither, and is logged.
+    :class:`~ess.batch.CorrectedFiles` lets a person give one.
 
     :meth:`list` asks the catalogue each time, so that a run ingested since is
     listed. :meth:`resolve` and :meth:`metadata` answer from the last listing,
@@ -342,8 +319,7 @@ class ScicatFiles:
     def _title(self, dataset: DownloadDataset) -> str | None:
         """
         The name of ``dataset`` without the end the ingestor adds, which holds
-        what the metadata hold anyway: only that exact end is cut, so a name
-        of another form stays whole.
+        what the metadata hold anyway.
         """
         added = f' - Proposal:{self._proposal} - Run: {dataset.runNumber}'
         name = dataset.datasetName
@@ -408,10 +384,8 @@ def scan_catalogue(files: ScicatFiles) -> list[dict[str, Any]]:
     way. The table opens only where the paths are mounted, since
     :class:`~ess.apps.FolderFiles` refuses a file that does not exist.
 
-    It asks the catalogue for the file list of each dataset. A dataset whose
-    path cannot be given is left out, with a warning, as ``scan_folder`` leaves
-    out a file it cannot read. Raises ``OSError`` if the catalogue does not
-    answer the listing.
+    A dataset whose path cannot be found is left out, with a warning. Raises
+    ``OSError`` if the catalogue does not answer the listing.
     """
     rows = []
     for ref in files.list(Selector()):

@@ -9,9 +9,8 @@ in its form as stored, which :meth:`ess.apps.protocol.Store.read` tables, and a
 value is read back by the type that the spec declares for the output, or
 without a type as the file holds it.
 
-A value that has no such form is refused with ``TypeError`` when it is written:
-a date, a tuple, ``None`` in a list, an object of any other class, and a
-``DataGroup`` that holds one of these. A group is read back with the fields
+A value that has no such form is refused with ``TypeError`` when it is written.
+A group is read back with the fields
 that were written, not validated again, as an instance of the declared type:
 a field the file lacks is ``None`` if ``None`` is a value of its type (an
 optional type, ``Any``, or ``object``), else its default.
