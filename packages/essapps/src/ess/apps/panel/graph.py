@@ -8,11 +8,7 @@ place of the parameter it is given at, as a refusal names it: ``sample``,
 ``runs[2]``.
 
 Files are in the first column, and each record is a column to the right of
-the rightmost of what it reads, so arrows point right; :func:`layout`
-places the nodes in their columns. A record is coloured
-by its status, so the graph shows which records are pending and where a
-failure started. Clicking a node shows it: a record as
-:func:`~ess.apps.panel.records.describe` does, a file by its metadata.
+the rightmost of what it reads, so arrows point right.
 """
 
 from __future__ import annotations
@@ -66,10 +62,7 @@ class Graph:
         self.detail = pn.pane.Markdown('', sizing_mode='stretch_width')
 
     def show(self, record: Record, listing: Listing) -> None:
-        """
-        Show the provenance of ``record``. The node picked stays so if it is
-        in the graph.
-        """
+        """Show the provenance of ``record``."""
         self._record = record
         self._listing = listing
         provenance = self._client.provenance(record)
@@ -246,13 +239,12 @@ def layout[K: Hashable](
     Where each node is drawn, in its column, and the path of each edge, as a
     layered graph is drawn (Sugiyama).
 
-    An edge points from a column to one further right. Where it spans more
-    than one, it bends at a point in each column between, which takes a
-    place there as a node does, so that it passes beside the nodes of that
-    column, not through them. The places of each column are ordered by the
-    mean place of their neighbours in the column to the left, then to the
-    right, ``sweeps`` times, which removes most crossings of edges. A column
-    is centred on 0.
+    Where an edge spans more than one column, it bends at a point in each
+    column between, which takes a place there as a node does, so that it
+    passes beside the nodes of that column. The places of each column are
+    ordered by the mean place of their neighbours in the column to the left,
+    then to the right, ``sweeps`` times, which removes most crossings of edges.
+    A column is centred on 0.
 
     Parameters
     ----------

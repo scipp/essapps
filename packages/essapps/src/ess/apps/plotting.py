@@ -4,10 +4,6 @@
 What an application decides about plots before it draws any, which needs no
 widget library: which dimensions of an array get a slider, and which values a plot
 configured for a spec reads.
-
-An application learns what an output is from :meth:`~ess.apps.Client.describe`,
-which reads no array, and reads the part of an array that it draws with
-``select=`` (see :meth:`~ess.apps.Client.output`).
 """
 
 from __future__ import annotations
@@ -51,8 +47,7 @@ def read_inputs(plot: Plot, client: Client, record: Record) -> dict[str, Any]:
     ValueError
         If a param holds anything but a reference to a whole output.
     NotReadable
-        If the output is no longer readable, which names the param: computing the
-        output again makes a new record, which this record does not reference.
+        If the output is no longer readable.
     """
     values = {}
     for name in plot.inputs:
@@ -73,6 +68,6 @@ def read_inputs(plot: Plot, client: Client, record: Record) -> dict[str, Any]:
 def slider_dims(sizes: Mapping[str, int]) -> list[str]:
     """
     The dimensions of an array that get a slider: all but the last two, which
-    are drawn. An array of one or two dimensions has none.
+    are drawn.
     """
     return list(sizes)[:-2]

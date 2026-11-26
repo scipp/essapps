@@ -30,9 +30,8 @@ class Table[K]:
 
     ``show`` is called when the row selected changes: another key, none, or
     other values in the row of the same key. Setting the rows again keeps
-    the key selected, if it has a row, so what ``show`` shows survives a
-    refresh in which that row stays the same, though rows before it come
-    and go.
+    the key selected, if it has a row, so ``show`` is not called while that
+    row stays the same, though rows before it come and go.
     """
 
     def __init__(

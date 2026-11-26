@@ -1,8 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The proposal's records, for a look below the outputs: a table with a row per
-record, and the record selected, as :func:`describe` describes it.
+The proposal's records, for a look below the outputs.
 """
 
 from __future__ import annotations
@@ -47,8 +46,8 @@ def describe(client: Client, listing: Listing, record: Record) -> str:
 
 class Records:
     """
-    A table with a row per record of the proposal, newest first, each with
-    what its request names, and beside it the record selected.
+    A table with a row per record of the proposal, newest first, and beside it
+    the record selected.
     """
 
     def __init__(self, client: Client, listing: Listing) -> None:

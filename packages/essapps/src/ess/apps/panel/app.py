@@ -1,26 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A minimal app on a client, in three tabs that fill the window and scroll by
-themselves: a form for each spec the workspace runs with a button that submits, the
-outputs of the proposal's records, and the records themselves.
-
-The app needs a client only. It submits the shown form's request through the
-client and shows what the workspace says: each reason a request is refused, by
-its position, or why a record failed. Each field of the form with nothing given
-is shown as such a reason, and nothing is submitted. A submission returns
-once the workspace has logged it, so the app lists the new record pending.
+A minimal app on a client, in three tabs: a form for each spec the workspace
+runs with a button that submits, the outputs of the proposal's records, and the
+records themselves.
 
 The client tells no one what changed, so the app asks: :meth:`App.poll` asks
 for the changes since the last listing, a record of another client of the
 proposal among them, and lists only the records that changed again. A periodic
-callback of Panel calls it while the app is served. Each time the records are
-listed again, the forms are too, so a field that takes a reference offers each
-new record, pending or not. The changes do not tell that an output was released,
-so after a release the outputs are listed from scratch.
-
-An application adds tabs of its own, shown before these (:class:`Tab`). They are
-listed again wherever the outputs are.
+callback of Panel calls it while the app is served.
 """
 
 from __future__ import annotations
@@ -56,10 +44,8 @@ class App:
     takes them. ``tabs`` holds the tabs of the application by title, shown before
     the app's own.
 
-    ``forms`` holds the forms by spec title, and ``picker`` picks the one
-    shown. ``message`` shows the outcome of the last submission, once its
-    record has finished. ``outputs`` lists the outputs of the records, and
-    ``records`` lists the records.
+    ``forms`` holds the forms by spec title. ``message`` shows the outcome of the
+    last submission, once its record has finished.
     """
 
     def __init__(

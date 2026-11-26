@@ -49,13 +49,11 @@ def selected(value: Any, select: Selection) -> Any:
 
     An array is a value with named dimensions that slices as
     ``value[dim, index]``, such as a scipp variable or data array. A
-    dimension it lacks, or an index out of range, raises what the slice
-    raises. Of a group, each dimension slices the array fields that have
-    it, as ``sc.DataGroup`` slices its items, and every other field is
-    copied whole, a group in it too. A group is a pydantic model, or a
-    mapping, such as the ``sc.DataGroup`` of an output read as stored.
-    Unlike a ``sc.DataGroup``, a group refuses a dimension that no array
-    field has, with ``ValueError``.
+    group is a pydantic model, or a mapping, such as the ``sc.DataGroup`` of an
+    output read as stored. Of a group, each dimension slices the array fields
+    that have it, and every other field is copied whole. Unlike a
+    ``sc.DataGroup``, a group refuses a dimension that no array field has, with
+    ``ValueError``.
     """
     if not isinstance(value, BaseModel | Mapping):
         for dim, index in select.items():

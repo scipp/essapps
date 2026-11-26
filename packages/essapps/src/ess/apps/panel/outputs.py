@@ -3,36 +3,7 @@ The outputs of the proposal's records, by type: what a scientist picks, to
 plot it, to see where it came from, or to remove it.
 
 Each output is to be a group, so that its type says what it is,
-``BeamCentre``, where an array's type says only ``DataArray``. An output is
-listed by its type and the time its record was created,
-``BeamCentre (11:45)``, as the pickers of a form offer it (:class:`Listing`).
-
-What an output is comes from the record's spec: the output's description,
-else the first paragraph of the docstring of its type. What its value is
-comes from :meth:`~ess.apps.Client.describe`, once its record has completed:
-the sizes, unit, and coordinates of each array, with no data read. An output
-that another client released after it was listed raises ``NotReadable`` when
-selected, which the detail shows as text. Where it came from is the
-provenance graph (:class:`~ess.apps.panel.graph.Graph`), which shows the
-records pending and where a failure started.
-
-The output selected is shown with its plot, a plot a workflow package
-configured for its spec, or its provenance graph, as picked; the pick stays as
-other outputs are selected, unless the record's spec has no plot of that name.
-A record of an unbound spec (:meth:`~ess.apps.Client.bound`)
-is listed by its outputs' names, offers no configured plot, and its outputs
-are read and drawn as stored scipp data.
-The plot has a figure per array field of an output, drawn with plopp, once its
-record has completed. A field of one or two dimensions is read with the output
-and drawn whole. A field of more dimensions has a slider for each dimension but
-the last two, and a cut of it is read with ``select=`` for the positions of the
-sliders, so no more of the array is read than is drawn. A plot configured for a
-spec (:class:`~ess.apps.plotting.Plot`) is a function of the record's outputs, every
-one of them read, and of the values its request referenced that it declares: it
-returns a plopp figure, or fails, which the view shows as text.
-
-Removing an output releases its record (``client.release``), so the record
-stays in the proposal's history and in the graphs of the records that read it.
+``BeamCentre``, where an array's type says only ``DataArray``.
 """
 
 from __future__ import annotations
@@ -64,15 +35,14 @@ Plots = Mapping[SpecId, Mapping[str, Plot]]
 class Outputs:
     """
     A sidebar with a table of the outputs of the proposal's records, grouped by
-    type, newest first, and below it the output selected, with a button that
-    removes it. Beside the sidebar are its plot, the plots configured for its
-    spec, or its provenance graph, as ``views`` picks.
+    type, newest first, and below it the output selected. Beside the sidebar are
+    its plot, the plots configured for its spec, or its provenance graph, as
+    ``views`` picks.
 
     An output is listed while a request of the client may reference it, so
     while its record is pending or completed, and when its record has failed,
     until removed. ``refresh`` is called once an output is removed; by
-    default it lists the outputs again. ``plots`` holds, for the spec of a
-    record, the plots by the name of the view that shows their figure.
+    default it lists the outputs again.
     """
 
     def __init__(
@@ -127,7 +97,7 @@ class Outputs:
         """
         List the outputs again. The output selected stays so if listed, and
         is shown again, which draws its plots again, only if its status
-        changed. A provenance graph is drawn again in any case.
+        changed.
         """
         self._listing = listing
         self._records = {r.id: r for r in listing.records}
@@ -201,11 +171,7 @@ class Outputs:
             self._show_view()
 
     def _show_view(self) -> None:
-        """
-        The view picked of the output selected: the provenance graph, the plot
-        configured, or its arrays drawn, once its record has completed and its
-        value is readable.
-        """
+        """The view picked of the output selected."""
         self.view.objects = []
         if (selected := self.selected) is None:
             return
@@ -235,10 +201,7 @@ class Outputs:
             return pn.pane.Markdown(f'{view} failed: `{type(error).__name__}: {error}`')
 
     def _plot(self, record: Record, name: str) -> list[Any]:
-        """
-        A figure for each array field of the output; a field of more than two
-        dimensions gets a slider for each but the last two.
-        """
+        """A figure for each array field of the output."""
         label = self._listing.output_label(record.ref(name))
         if record.id in self._listing.specs:
             group = self._listing.is_group(record, name)
