@@ -7,10 +7,10 @@ Twenty years of users have recorded what that model costs.
 | Git | Here | Note |
 |---|---|---|
 | commit | record | never changes; git addresses it by content hash, the workspace by a random ID |
-| parent link | the order of records under a label | git stores a link; the workspace keeps the order the records were logged in |
+| parent link | the order of records under a label | git stores a link; the workspace stores the order the records were logged in |
 | branch, its reflog | label and member, `client.latest` | git moves a pointer; a label is a query over records that are only appended |
 | gitlink (submodule entry) | reference | names one object, never a name |
-| reachability from refs | keepers ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)) | see below: the rules differ |
+| reachability from refs | holders of a value ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)) | see below: the rules differ |
 | blob | output value | a blob is history; an output value is not ([ADR 0004](../adr/0004-history-is-append-only-lists.md)) |
 | LFS pointer | record and store | the record names no file; the store keys a value by record ID and output name |
 | push of the objects a ref needs | `client.publish` with provenance | the closure travels |
@@ -37,8 +37,8 @@ A name resolved at submission gives a backlog or a re-run a different input than
 **Git keeps what is reachable, and pays for it under concurrent writers.**
 `git gc` keeps everything reachable from refs and reflogs and prunes unreachable objects after a grace period, two weeks by default ([config/gc L96-L105][gcexp]).
 The grace period protects a concurrent process that is about to reference an object that is unreachable now, and the docs admit that "users who run commands concurrently have to live with some risk of corruption" ([git-gc L157-L173][gcnotes]).
-Here, a reference keeps no value; only keepers do: the workspace until a client releases the record, a pending request until its workflow returns, the store ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)).
-A submission may reference only values the workspace keeps, persisted values, and files, so whether it is refused never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
+Here, a reference holds no value. Only these hold one: the workspace until a client releases the record, a pending request until its workflow returns, the store ([`ess.apps.protocol`](../../../packages/essapps/src/ess/apps/protocol.py)).
+A submission may reference only values the workspace holds, persisted values, and files, so whether it is rejected never depends on how far other work has come ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
 That rule removes the race git mitigates with a grace period.
 Git's rule would also keep every intermediate of a chain for as long as its final output is kept.
 
@@ -70,7 +70,7 @@ If they stay, separate the labels of the automatic reduction from the labels peo
 **The interface leaked the model.**
 Perez De Rosso and Jackson trace git's usability problems to its concepts, such as the staging area and detached HEAD, not to its commands ([Onward! 2013][wwg]).
 Their redesign, Gitless, commits changes to tracked files without a staging step, and lets branches carry uncommitted changes ([README][gitless]).
-Here, the client carries records, labels, references, and keepers.
+Here, the client carries records, labels, references, and holders of values.
 The first-release application ([requirements, Goal](../../requirements/README.md#goal)) must let a scientist select a workflow, run it, look at results, and upload them without thinking in those terms.
 
 **Automation belongs next to the versioned content, and its status on a server.**
