@@ -29,7 +29,8 @@ shows the batch table, the results and the plots all the same: the pickers offer
 no file, the Runs view is empty, and the state says why
 (:attr:`~.models.State.files_problem`).
 
-The form of the settings is a draft of the batch's settings. An edit changes
+The form of the settings is a draft of the batch's settings
+(:class:`~.draft.Draft`). An edit changes
 the form only; :meth:`Page.apply_settings` writes it to the batch, and is
 refused while something is missing; :meth:`Page.discard_settings` shows the
 batch's settings again. "Load settings" and "Put these settings in the form"
@@ -165,6 +166,7 @@ from ..state import (
 from ..table import KEY, NAME, as_request, cell_of, names, read_table, write_table
 from ..templates import checked_settings, load_template, settings_text
 from . import forms, plots
+from .draft import Draft
 from .models import (
     Action,
     Cell,
@@ -401,8 +403,7 @@ class Page:
         self._cells = Fields(
             batch.spec.params, self.pages.listing, fields=batch.parameter_columns
         )
-        self.settings = self._form()
-        self._show_settings()
+        self.draft = Draft(batch, self.pages.listing)
 
     def _follows(self) -> bool:
         """Whether this batch is the one that follows."""
@@ -441,43 +442,12 @@ class Page:
         give the pickers and the forms what is listed now.
         """
         self.pages.list_again()
-        for fields in (self.settings, self._cells):
-            fields.refresh(self.pages.listing)
-
-    def _form(self) -> Fields:
-        """
-        A form of the settings, at the fields' defaults: a field per
-        parameter, but the columns that the source fills, which take no
-        setting (:attr:`~ess.batch.Batch.fills`).
-        """
-        batch = self.batch
-        fields = [n for n in batch.spec.params.model_fields if n not in batch.fills]
-        return Fields(batch.spec.params, self.pages.listing, fields=fields)
-
-    def _form_held(self) -> tuple[dict[str, Any], list[FieldError]]:
-        """
-        What the form holds; a column left unset has no setting
-        (:func:`.forms.held`).
-        """
-        return forms.held(self.settings, self.batch.parameter_columns)
+        self.draft.refresh(self.pages.listing)
+        self._cells.refresh(self.pages.listing)
 
     def _show_settings(self) -> None:
         """Show the batch's settings in the form, which then holds no change."""
-        # Settings kept for another version of the spec may not fit the form;
-        # the batch keeps them, and the page names them, until Apply.
-        self._unfit = self.settings.set_fitting(self.batch.settings, self.pages.listing)
-        # What the form holds while it shows the batch's settings.
-        self._shown = self._form_held()
-
-    def _unapplied(self) -> str | None:
-        """
-        What a person does first while the form holds a change, since a
-        reduction would use settings other than those shown; else ``None``.
-        """
-        held = self._form_held()
-        if held == self._shown:
-            return None
-        return f'{"Fill in" if held[1] else "Apply"} or discard the settings'
+        self.draft.reset(self.batch.settings, self.pages.listing)
 
     def _states(
         self, keys: Sequence[str] | None = None
@@ -522,7 +492,7 @@ class Page:
             raise Problem(f'{why(error)}.') from None
 
     def _setting_title(self, error: FieldError) -> str:
-        return self.settings.titles.get(str(error.loc[0]), str(error.loc[0]))
+        return self.draft.fields.titles.get(str(error.loc[0]), str(error.loc[0]))
 
     @_locked
     def state(self, notice: str = '') -> State:
@@ -556,20 +526,20 @@ class Page:
         counts = dict.fromkeys(_ORDER, 0)
         for s in states.values():
             counts[s.text] += 1
-        given, missing = self._form_held()
+        given, missing = self.draft.held()
 
         # A refusal of the batch's settings is said, and marked at its field,
         # while the form shows the value refused.
         def shown(error: FieldError) -> bool:
             name = str(error.loc[0]) if error.loc else ''
-            return not name or given.get(name) == self._shown[0].get(name)
+            return not name or given.get(name) == self.draft.shown[0].get(name)
 
         errors = [*missing, *filter(shown, unusable)]
         said = [self._said(errors)] if errors else []
-        if self._unfit:
-            said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
+        if unfit := self.draft.unfit:
+            said.insert(0, f'Settings that this form cannot show: {_join(unfit)}')
         problem = '; '.join(said) or None
-        unapplied = self._unapplied()
+        unapplied = self.draft.unapplied()
         marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
         empty = batch.empty()
         header = self.pages.intake.manager.headers()[self.label]
@@ -602,10 +572,12 @@ class Page:
             rows=rows,
             counts={'all': len(states), **counts},
             action=self._primary(states, unapplied or problem, unapplied),
-            settings=forms.tree(self.settings, marks, columns),
+            settings=forms.tree(self.draft.fields, marks, columns),
             settings_problem=problem,
             settings_changed=unapplied is not None,
-            may_be_columns=[n for n in forms.edited(self.settings) if n not in columns],
+            may_be_columns=[
+                n for n in forms.edited(self.draft.fields) if n not in columns
+            ],
             refused=[self._refused(e, named) for e in self.refused],
             follow=self.pages.follow_shown(self.label),
             files_problem=self.pages.listing.failure,
@@ -682,7 +654,7 @@ class Page:
 
     def _changed(self, state: RowState, names: Iterable[str]) -> str:
         """The titles of the parameters of ``names`` that changed, in words."""
-        titles = {**self.settings.titles, **self._cells.titles}
+        titles = {**self.draft.fields.titles, **self._cells.titles}
         return _join([titles.get(n, n) for n in names if n in (state.changed or ())])
 
     def _row(
@@ -697,7 +669,7 @@ class Page:
         failures: Mapping[str, str],
         published: Mapping[str, str],
     ) -> Row:
-        titles = {**self.settings.titles, **self._cells.titles}
+        titles = {**self.draft.fields.titles, **self._cells.titles}
         problems = {
             str(e.loc[0]): say(titles.get(str(e.loc[0]), str(e.loc[0])), e.msg)
             for e in (*state.problems, *self.refused)
@@ -788,7 +760,7 @@ class Page:
         if not error.loc:
             return False
         if error.entry is None:
-            return str(error.loc[0]) in self.settings.fields
+            return str(error.loc[0]) in self.draft.fields.fields
         return error.entry in keys and str(error.loc[0]) in self.batch.parameter_columns
 
     def _refused(self, error: FieldError, named: Mapping[str, str]) -> Refused:
@@ -907,7 +879,7 @@ class Page:
         change of which parameters are columns builds the form again, which
         would drop it.
         """
-        if unapplied := self._unapplied():
+        if unapplied := self.draft.unapplied():
             raise Problem(f'Nothing was changed: {unapplied.lower()} first.')
 
     def _reshape(self, name: str, change: Callable[[], None]) -> None:
@@ -929,7 +901,7 @@ class Page:
         Make the parameter ``name`` a column with empty cells, which take the
         setting (:meth:`~ess.batch.Batch.make_column`).
         """
-        title = self.settings.titles.get(name, name)
+        title = self.draft.fields.titles.get(name, name)
         self._reshape(name, lambda: self.batch.make_column(name))
         taken = 'the setting' if name in self.batch.settings else 'the default'
         return f'{title} is a column: a row takes {taken} until its cell is set.'
@@ -950,7 +922,7 @@ class Page:
     def reduce(self, request: Reduce) -> str:
         """Submit the rows asked for, all or none."""
         frame = self._frame(request.keys)
-        if unapplied := self._unapplied():
+        if unapplied := self.draft.unapplied():
             raise Problem(f'Nothing was reduced: {unapplied.lower()}.')
         try:
             keys = (
@@ -1011,14 +983,14 @@ class Page:
     def edit_settings(self, edit: Edit) -> None:
         """Change the form of the settings; the batch's stay until Apply."""
         try:
-            forms.apply(self.settings, edit)
+            self.draft.edit(edit)
         except (KeyError, ValueError) as error:
             raise Problem(why(error)) from None
 
     @_action
     def apply_settings(self) -> str:
         """Give the batch the settings of the form, unless one is missing."""
-        given, missing = self._form_held()
+        given, missing = self.draft.held()
         if missing:
             raise Problem(f'Not applied: {self._said(missing)}.')
         self.batch.settings = given
@@ -1040,9 +1012,7 @@ class Page:
         refuses (:meth:`~ess.batch.Batch.settable`); raises as
         :meth:`Fields.set`.
         """
-        form = self._form()
-        form.set(self.batch.settable(params), self.pages.listing)
-        self.settings = form
+        self.draft.fill(self.batch.settable(params), self.pages.listing)
 
     @_action
     def use_settings(self, key: str) -> str:
@@ -1218,9 +1188,9 @@ class Page:
     @_locked
     def settings_file(self) -> bytes:
         """The batch's settings as a YAML template, those at the columns included."""
-        if unapplied := self._unapplied():
+        if unapplied := self.draft.unapplied():
             raise Problem(f'{unapplied} first.')
-        if missing := self._form_held()[1]:
+        if missing := self.draft.held()[1]:
             raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
         return settings_text(self.batch).encode()
 
