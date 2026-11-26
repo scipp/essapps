@@ -436,7 +436,7 @@ candidates = not_reduced(batch.state(compare=False))   # ready as given, no resu
 batch.reduce(not_reduced(batch.state(candidates)))
 ```
 
-One step of Follow, from the timer to `seen_keys` kept:
+One step of Follow, from the timer to `seen_keys` stored:
 
 ```mermaid
 sequenceDiagram
