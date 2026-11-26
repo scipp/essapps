@@ -13,18 +13,20 @@ One lock, the condition ``_changed``, guards the workspace and its ``_Stage``
 and ``_Accumulator`` objects. A method whose name ends in ``_locked`` must be
 called with the lock held. Any other method takes the lock where it needs it.
 
-Calls that may be slow run without the lock: the file source, the store,
-bindings, drivers, and validation. So a method that checks a request does what
-needs no history before it takes the lock, and the rest after.
+Code outside the framework runs without the lock: the file source, the store,
+bindings, and drivers. So does validation. A method that checks a request does
+what needs no history before it takes the lock, and the rest after.
 
-Three exceptions to the lock:
+Exceptions to the lock:
 
 - A stage's ``staging`` lock makes concurrent calls stage once. It is taken
   before ``_changed``, never while ``_changed`` is held.
 - An accumulator's ``_computing`` lock guards the outputs of its state. It is
   never taken while ``_changed`` is held.
-- While an accumulator is ``busy``, its worker uses the driver and the first
-  step without ``_changed``.
+- While an accumulator is ``busy``, its worker uses the driver, ``added``, and
+  the first step without ``_changed``.
+- ``_Accumulator.checked`` is read and written without ``_changed``. A race
+  costs only another check.
 
 History
 -------
@@ -43,8 +45,8 @@ started from, and none of its values is in memory.
 
 Restart
 -------
-A record's start is logged before its workflow reads anything. Its persisted
-outputs are written before its finish is logged. At a restart
+A record's start is logged before its workflow reads anything. A record
+completes only once its persisted outputs are written. At a restart
 (``_restart_locked``), only persisted work that had not started goes on. Each
 record pending in the log:
 
@@ -64,8 +66,9 @@ Values and readers
 The workspace holds in memory the outputs of the records in ``_in_memory``:
 those that a submission or a freeze made without persisting outputs, until they
 are released. Any other holder of a value is a *reader*, counted in
-``_readers``. The readers of an output are the pending records, the steps of
-accumulators, and the stages not yet staged that reference it. The readers of
+``_readers``. The readers of an output are the records that will read it or
+whose workflow is reading it, the steps of accumulators, and the stages not yet
+staged that reference it. The readers of
 an accumulator's state are the reads of it in progress, a freeze while it is
 checked, and the record of a freeze until it has finished and its workflow, if
 it ran, has returned.
@@ -78,7 +81,7 @@ passes along a chain.
 
 A workflow reads an output from memory if the workspace holds it there, and
 from the store otherwise. Persisted outputs are written once the workflow has
-returned, and the record finishes after the write.
+returned, and the record completes after the write.
 
 Waits
 -----
@@ -434,8 +437,9 @@ class Workspace(WorkspaceProtocol):
     Raises
     ------
     ValueError
-        If two bindings have the same spec, or the log holds an event of
-        another proposal. In the second case the log is closed.
+        If two bindings have the same spec name and version, or the log holds
+        an event of another proposal or one that does not apply. In the second
+        case the log is closed.
     TypeError
         If ``bind`` is not a list of bindings.
     """
@@ -509,17 +513,18 @@ class Workspace(WorkspaceProtocol):
         has a step to do, then shut down the workers and close the log.
 
         Releasing cancels the pending work that persists nothing. So closing
-        waits only for work that writes to the store, and for what that work
-        reads. A call under way that does not wait returns or raises, depending
-        on how far it has got. If an append fails while releasing, the
-        workspace stops. A workspace that has stopped does not wait: it drops
-        the work not yet started and raises ``Stopped``. Closing again does
+        waits for work that writes to the store, for what that work reads, and
+        for workflows already running. A call under way that does not wait
+        returns or raises, depending on how far it has got. If an append fails
+        while releasing, the workspace stops. A workspace that has stopped does
+        not wait for pending records: it drops the work not yet started, waits
+        for the work running, and raises ``Stopped``. Closing again does
         nothing more.
         """
         try:
             with self._changed:
                 self._closed = True
-                if self._stopped is None:  # a workspace that stopped logs nothing more
+                if self._stopped is None:  # releasing would append to a failed log
                     try:
                         self._release_locked(
                             [*self._in_memory, *self._stages, *self._accumulators]
@@ -828,7 +833,8 @@ class Workspace(WorkspaceProtocol):
     ) -> str | None:
         """
         Why a request may not reference an output of a record now, or ``None``.
-        The answer does not depend on how far other work has run.
+        A pending record passes if it is held in memory or persists the output.
+
         """
         record_id, name = key
         status = self._views.status(record_id)
