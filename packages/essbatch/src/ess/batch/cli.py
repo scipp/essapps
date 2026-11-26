@@ -5,7 +5,7 @@ The command ``essbatch``: an application of the batch layer, as the page is.
 Its help, :data:`_HELP` and the description of each command, is the
 documentation for a person who operates batches (ADR 0014).
 
-A command is a function of :class:`_Given` that gives a :data:`_Result`, and
+A command is a function of :class:`_Context` that gives a :data:`_Result`, and
 an item of :data:`_COMMANDS` that names it with its arguments and checks.
 The commands are thin: the rules are those of ``BatchManager``, ``Intake``
 and ``Batch``, as the page applies them, so a label is one batch whoever
@@ -200,11 +200,11 @@ another process holds, such as a page or a follow. Messages go to stderr.
 """The description of ``essbatch --help``."""
 
 
-class _Wrong(Exception):
+class _UsageError(Exception):
     """A wrong command line, said as argparse says one: exit status 2."""
 
 
-class _Failed(Exception):
+class _CommandError(Exception):
     """
     An error said in one line, such as a folder that another process holds:
     exit status 1.
@@ -212,28 +212,28 @@ class _Failed(Exception):
 
 
 def _named(name: str) -> Any:
-    """The object that ``package.module:NAME`` names; ``_Wrong`` if none."""
+    """The object that ``package.module:NAME`` names; ``_UsageError`` if none."""
     module, colon, attribute = name.partition(':')
     if not (module and colon and attribute):
-        raise _Wrong(f'{name}: name it as package.module:NAME')
+        raise _UsageError(f'{name}: name it as package.module:NAME')
     try:
         found = import_module(module)
     except Exception as error:  # any error of the module's code, too
-        raise _Wrong(
+        raise _UsageError(
             f'{name}: cannot import {module}: {type(error).__name__}: {error}'
         ) from None
     if not hasattr(found, attribute):
-        raise _Wrong(f'{name}: the module {module} has no {attribute}')
+        raise _UsageError(f'{name}: the module {module} has no {attribute}')
     return getattr(found, attribute)
 
 
 def _bindings(name: str) -> list[Binding[Any, Any]]:
-    """The bindings that ``name`` names; ``_Wrong`` if it names something else."""
+    """The bindings that ``name`` names; ``_UsageError`` if it names something else."""
     bind = _named(name)
     if isinstance(bind, str | bytes) or not (
         isinstance(bind, Sequence) and all(isinstance(b, Binding) for b in bind)
     ):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(bind).__name__}, not a list of bindings '
             '(ess.spec.Binding), such as package.module:BINDINGS'
         )
@@ -241,12 +241,12 @@ def _bindings(name: str) -> list[Binding[Any, Any]]:
 
 
 def _sources(name: str) -> Mapping[str, RowSource]:
-    """The sources by name that ``name`` names; ``_Wrong`` if other things."""
+    """The sources by name that ``name`` names; ``_UsageError`` if other things."""
     sources = _named(name)
     if not isinstance(sources, Mapping) or not all(
         isinstance(source, RowSource) for source in sources.values()
     ):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(sources).__name__}, not a mapping of names to '
             'row sources (ess.batch.RowSource), such as package.module:SOURCES'
         )
@@ -254,13 +254,13 @@ def _sources(name: str) -> Mapping[str, RowSource]:
 
 
 def _writers(name: str) -> Mapping[str, Sequence[Writer]]:
-    """The writers by spec that ``name`` names; ``_Wrong`` if other things."""
+    """The writers by spec that ``name`` names; ``_UsageError`` if other things."""
     writers = _named(name)
     if not isinstance(writers, Mapping) or not all(
         isinstance(given, Sequence) and all(isinstance(w, Writer) for w in given)
         for given in writers.values()
     ):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(writers).__name__}, not a mapping of spec names '
             'to lists of writers (ess.apps.writers.Writer), such as '
             'package.module:WRITERS'
@@ -271,21 +271,21 @@ def _writers(name: str) -> Mapping[str, Sequence[Writer]]:
 def _catalogue(name: str) -> Callable[[str], Any]:
     """
     The function that ``name`` names, such as
-    :func:`ess.batch.web.demo.fake_catalogue`; ``_Wrong`` if something else.
+    :func:`ess.batch.web.demo.fake_catalogue`; ``_UsageError`` if something else.
     """
     make = _named(name)
     if not callable(make):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(make).__name__}, not a function from '
             'a proposal to its catalogue (ess.apps.scicat.Catalogue)'
         )
     return make
 
 
-def _the_catalogue(given: _Given) -> Catalogue | None:
+def _the_catalogue(given: _Context) -> Catalogue | None:
     """
     The catalogue that the function of ``--catalogue`` gives for the
-    proposal, ``None`` without one; ``_Wrong`` if it gives another thing.
+    proposal, ``None`` without one; ``_UsageError`` if it gives another thing.
     """
     args = given.args
     if args.catalogue is None:
@@ -295,16 +295,16 @@ def _the_catalogue(given: _Given) -> Catalogue | None:
     try:
         catalogue = _catalogue(args.catalogue)(args.proposal)
     except Exception as error:  # a real catalogue logs in, and may fail to
-        raise _Failed(f'{args.catalogue}: {error_text(error)}') from None
+        raise _CommandError(f'{args.catalogue}: {error_text(error)}') from None
     if not isinstance(catalogue, Catalogue):
-        raise _Wrong(
+        raise _UsageError(
             f'{args.catalogue} gave a {type(catalogue).__name__}, not a catalogue '
             '(ess.apps.scicat.Catalogue)'
         )
     return catalogue
 
 
-def _writing(given: _Given, catalogue: Catalogue | None) -> Writing:
+def _writing(given: _Context, catalogue: Catalogue | None) -> Writing:
     """
     The writing of the folder, with the writers of ``-W``; the owner and
     contact of a form not set are the principal investigator of the
@@ -318,13 +318,13 @@ def _writing(given: _Given, catalogue: Catalogue | None) -> Writing:
     return Writing(given.manager, given.writers, contact)
 
 
-def _publisher(given: _Given) -> Publisher:
+def _publisher(given: _Context) -> Publisher:
     """The publisher of the folder, to the catalogue of ``--catalogue``."""
     from .publish import Publisher
 
     catalogue = _the_catalogue(given)
     if catalogue is None:
-        raise _Wrong('publish needs -c/--catalogue')
+        raise _UsageError('publish needs -c/--catalogue')
     return Publisher(_writing(given, catalogue), catalogue)
 
 
@@ -337,7 +337,7 @@ def _existing(text: str) -> Path:
 
 
 @dataclass(frozen=True)
-class _Given:
+class _Context:
     """
     What a command runs with: its arguments, the row sources by name, the
     writers by spec name, and the client and definitions of the folder, if
@@ -395,7 +395,7 @@ status of a command that said what it did as it ran.
 """
 
 
-def _files(given: _Given) -> pd.DataFrame:
+def _files(given: _Context) -> pd.DataFrame:
     """
     The files table of the folder (``files.csv``): of the files of the folder
     that READ knows, or, without READ, of the raw files of the proposal in the
@@ -403,13 +403,13 @@ def _files(given: _Given) -> pd.DataFrame:
     """
     args = given.args
     if args.run_table is None and args.output is not None and args.output.exists():
-        raise _Wrong(f'{args.output} exists, and may hold what a person added')
+        raise _UsageError(f'{args.output} exists, and may hold what a person added')
     if args.read is None:
         rows = _catalogue_files(given)
     else:
         read = _named(args.read)
         if not callable(read):
-            raise _Wrong(
+            raise _UsageError(
                 f'{args.read} is a {type(read).__name__}, not a function from the '
                 'path of a file to its metadata'
             )
@@ -420,28 +420,28 @@ def _files(given: _Given) -> pd.DataFrame:
     return described(files, read_text(args.run_table))
 
 
-def _catalogue_files(given: _Given) -> list[dict[str, Any]]:
+def _catalogue_files(given: _Context) -> list[dict[str, Any]]:
     """The rows of the raw files of ``--proposal`` in the catalogue of ``-c``."""
     args = given.args
     if args.catalogue is None:
-        raise _Wrong('give READ, or the catalogue with -c to list its files')
+        raise _UsageError('give READ, or the catalogue with -c to list its files')
     if args.proposal == 'local':
-        raise _Wrong('give --proposal, whose files the catalogue lists')
+        raise _UsageError('give --proposal, whose files the catalogue lists')
     catalogue = _the_catalogue(given)
     from ess.apps.scicat import ScicatFiles, scan_catalogue  # the extra scicat
 
     try:
         return scan_catalogue(ScicatFiles(catalogue.client, args.proposal))
     except OSError as error:
-        raise _Failed(f'{args.catalogue}: {error_text(error)}') from None
+        raise _CommandError(f'{args.catalogue}: {error_text(error)}') from None
 
 
-def _names(given: _Given, names: Iterable[str]) -> list[str] | str:
+def _names(given: _Context, names: Iterable[str]) -> list[str] | str:
     """``names`` as a list for JSON, else as text, separated by a space."""
     return list(names) if given.args.json else ' '.join(names)
 
 
-def _specs(given: _Given) -> pd.DataFrame:
+def _specs(given: _Context) -> pd.DataFrame:
     """A row per spec bound: name, version, title, and the names of its outputs."""
     specs = [
         [spec.name, spec.version, spec.title, _names(given, spec.outputs.model_fields)]
@@ -450,7 +450,7 @@ def _specs(given: _Given) -> pd.DataFrame:
     return pd.DataFrame(specs, columns=['name', 'version', 'title', 'outputs'])
 
 
-def _template(given: _Given) -> str:
+def _template(given: _Context) -> str:
     """A template of a spec to fill in, or the settings of a batch."""
     args = given.args
     if args.label is not None:
@@ -462,7 +462,7 @@ def _template(given: _Given) -> str:
     return template_to_fill(spec, given.client.specs(), given.sources)
 
 
-def _row_sources(given: _Given) -> pd.DataFrame:
+def _row_sources(given: _Context) -> pd.DataFrame:
     """A row per row source: its name, what it fills, and its description."""
     sources = [
         [name, _names(given, source.fills), source.description]
@@ -471,12 +471,12 @@ def _row_sources(given: _Given) -> pd.DataFrame:
     return pd.DataFrame(sources, columns=['name', 'fills', 'description'])
 
 
-def _rows(given: _Given) -> pd.DataFrame:
+def _rows(given: _Context) -> pd.DataFrame:
     """The rows that the row source of the name given makes now."""
     return given.intake().rows_of(given.args.source)
 
 
-def _batches(given: _Given) -> pd.DataFrame:
+def _batches(given: _Context) -> pd.DataFrame:
     """
     A row per batch: its label, title, spec, number of rows, how many have a
     completed result, the name of its row source, and whether it follows. The
@@ -519,12 +519,12 @@ def _table(batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
     return frames.with_results(batch, states, keys)
 
 
-def _show(given: _Given) -> pd.DataFrame:
+def _show(given: _Context) -> pd.DataFrame:
     """The batch table of the label, with what came of each row."""
     return _table(given.batch(given.args.label))
 
 
-def _reduce(given: _Given) -> pd.DataFrame:
+def _reduce(given: _Context) -> pd.DataFrame:
     """
     Reduce the batch of the label, and return its batch table with what came
     of each row (:func:`.frames.reduce_batch`).
@@ -632,7 +632,7 @@ def _reduced(result: pd.DataFrame) -> int:
     return 0 if all(result['status'] == 'done') else 3
 
 
-def _export(given: _Given) -> pd.DataFrame:
+def _export(given: _Context) -> pd.DataFrame:
     """
     Write the results of the rows of a table as scipp HDF5, or of a batch as
     it stands by its form; the table.
@@ -653,7 +653,7 @@ def _export(given: _Given) -> pd.DataFrame:
     return table
 
 
-def _form(given: _Given) -> str:
+def _form(given: _Context) -> str:
     """Keep the form of a file, if given; the form of a batch, as YAML."""
     args = given.args
     writing = _writing(given, _the_catalogue(given))
@@ -663,7 +663,7 @@ def _form(given: _Given) -> str:
     return writing.form_text(label)
 
 
-def _publish(given: _Given) -> pd.DataFrame:
+def _publish(given: _Context) -> pd.DataFrame:
     """Publish the rows of the keys given; those rows, as ``show`` writes them."""
     from .publish import UploadFailed
 
@@ -674,17 +674,17 @@ def _publish(given: _Given) -> pd.DataFrame:
     try:
         publisher.publish(label, args.keys)
     except UploadFailed as error:
-        raise _Failed(f'not published: {error}') from None
+        raise _CommandError(f'not published: {error}') from None
     return _table(manager.batch(label), args.keys)
 
 
-def _offered(given: _Given) -> pd.DataFrame:
+def _offered(given: _Context) -> pd.DataFrame:
     """The rows of the source of a batch that its batch table lacks, with ``waits``."""
     intake = given.intake()
     return intake.offered(_known(intake.manager, given.args.label))
 
 
-def _take(given: _Given) -> pd.DataFrame:
+def _take(given: _Context) -> pd.DataFrame:
     """Put rows of its source into a batch; those rows, as ``show`` writes them."""
     args = given.args
     intake = given.intake()
@@ -692,7 +692,7 @@ def _take(given: _Given) -> pd.DataFrame:
     return _table(intake.manager.batch(args.label), args.keys)
 
 
-def _remove(given: _Given) -> int:
+def _remove(given: _Context) -> int:
     """Remove a batch, saying that its records stay; a removal cut off too."""
     label = given.args.label
     try:
@@ -714,7 +714,7 @@ def _remove(given: _Given) -> int:
     return 0
 
 
-def _stop(given: _Given) -> int:
+def _stop(given: _Context) -> int:
     """End Follow, saying on which batch."""
     intake = given.intake()
     label = intake.following
@@ -725,7 +725,7 @@ def _stop(given: _Given) -> int:
     return 0
 
 
-def _follow(given: _Given) -> int:
+def _follow(given: _Context) -> int:
     """
     Let a batch follow, and run :func:`follow` on it until Ctrl-C or SIGTERM,
     or for ``--steps``; 0 if every row of the batch is then done, else 3.
@@ -740,10 +740,10 @@ def _follow(given: _Given) -> int:
     )
     stop = threading.Event()
 
-    def say(line: Mapping[str, Any]) -> None:
+    def write_line(line: Mapping[str, Any]) -> None:
         now = datetime.now(UTC).astimezone()  # local time, with its offset
         line = {'time': now.isoformat(timespec='seconds'), **line}
-        text = json.dumps(line, ensure_ascii=False) if args.json else _said(line)
+        text = json.dumps(line, ensure_ascii=False) if args.json else _line_text(line)
         if text is not None:
             sys.stdout.write(f'{text}\n')
             sys.stdout.flush()
@@ -751,7 +751,7 @@ def _follow(given: _Given) -> int:
     with _stopped_by_signals(stop):
         follow(
             intake,
-            say=say,
+            write_line=write_line,
             pause=lambda: stop.wait(args.interval),
             stopped=stop.is_set,
             steps=args.steps,
@@ -793,7 +793,7 @@ def _stopped_by_signals(stop: threading.Event) -> Iterator[None]:
 def follow(
     intake: Intake,
     *,
-    say: Callable[[Mapping[str, Any]], None],
+    write_line: Callable[[Mapping[str, Any]], None],
     pause: Callable[[], object],
     stopped: Callable[[], bool],
     steps: int | None = None,
@@ -803,7 +803,7 @@ def follow(
     with ``pause()`` between two, until ``stopped()`` or after ``steps``
     steps; then wait for the reductions that run, and return.
 
-    After a step that did something, ``say`` is given what, as a mapping of
+    After a step that did something, ``write_line`` is given what, as a mapping of
     names to keys::
 
         added       the rows that the step added, a list of keys
@@ -818,9 +818,9 @@ def follow(
         error       why the step raised, ``None`` if it did not
 
     A step did something if it added or submitted rows, if a reduction
-    ended, if what is refused or waits changed since ``say`` was last called,
+    ended, if what is refused or waits changed since ``write_line`` was last called,
     or if it raised something else than the step before. After the wait,
-    ``say`` is given the reductions that ended in it.
+    ``write_line`` is given the reductions that ended in it.
 
     A step may raise anything, as the code of the source may
     (:meth:`.intake.Intake.step`). It is said on stderr as the page says it
@@ -833,7 +833,7 @@ def follow(
     ----------
     intake:
         The intake, whose batch follows; ``ValueError`` if none does.
-    say:
+    write_line:
         Called with what a step did.
     pause:
         Waits between two steps, such as ``event.wait(seconds)``.
@@ -883,11 +883,11 @@ def follow(
             running |= stepped.records
         line = _ended(batch, running)
         if added or reducing or line['ended'] or (refused, waiting) != shown or fresh:
-            say(_line(added, reducing, line, refused, waiting, error))
+            write_line(_line(added, reducing, line, refused, waiting, error))
             shown = (refused, waiting)
     if running:
         batch.client.wait(list(running.values()))
-        say(_line([], [], _ended(batch, running), *shown, None))
+        write_line(_line([], [], _ended(batch, running), *shown, None))
 
 
 def _line(
@@ -934,7 +934,7 @@ def _ended(batch: Batch, running: dict[str, Record]) -> dict[str, dict[str, str]
     }
 
 
-def _said(line: Mapping[str, Any]) -> str | None:
+def _line_text(line: Mapping[str, Any]) -> str | None:
     """
     A line of :func:`follow` as a person reads it: its parts that are not
     empty, but the error, which stderr says; ``None`` if none is left.
@@ -1179,7 +1179,7 @@ class _Command:
     was written.
     """
 
-    run: Callable[[_Given], _Result]
+    run: Callable[[_Context], _Result]
     description: str
     arguments: Callable[[argparse.ArgumentParser], None] = lambda _: None
     check: Callable[[argparse.Namespace], str | None] = lambda _: None
@@ -1446,15 +1446,17 @@ def _write(result: pd.DataFrame | str, args: argparse.Namespace) -> None:
         replace_at_once(args.output, lambda path: path.write_text(result))
 
 
-def _opened(given: _Given, command: _Command) -> _Result:
+def _opened(given: _Context, command: _Command) -> _Result:
     """Run ``command`` on the folder, which it opens and closes."""
     args = given.args
     if args.bind is None:
         # a workspace goes on with pending records, which need their bindings
-        raise _Wrong('--bind is required: the bindings of the workspace')
+        raise _UsageError('--bind is required: the bindings of the workspace')
     bind = _bindings(args.bind)
     if not (args.workspace / 'files.csv').is_file():
-        raise _Wrong(f'{args.workspace}: no files.csv; the command files writes it')
+        raise _UsageError(
+            f'{args.workspace}: no files.csv; the command files writes it'
+        )
     try:  # as read once, so that a files table in error is refused
         folder_files(args.workspace)
     except FileNotFoundError as error:
@@ -1468,10 +1470,10 @@ def _opened(given: _Given, command: _Command) -> _Result:
             args.workspace, bind, proposal=args.proposal
         )
     except RuntimeError as error:  # another process holds the folder
-        raise _Failed(str(error)) from None
+        raise _CommandError(str(error)) from None
     with client:
         return command.run(
-            _Given(args, given.sources, given.writers, (client, definitions))
+            _Context(args, given.sources, given.writers, (client, definitions))
         )
 
 
@@ -1484,23 +1486,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command.output == 'table' and args.output is not None:
             suffixes = ('.json',) if args.json else SUFFIXES
             if args.output.suffix not in suffixes:
-                raise _Wrong(f'{args.output}: write a file of {", ".join(suffixes)}')
+                raise _UsageError(
+                    f'{args.output}: write a file of {", ".join(suffixes)}'
+                )
         sources = {} if args.sources is None else _sources(args.sources)
         writers = {} if args.writers is None else _writers(args.writers)
         if (wrong := command.check(args)) is not None:
-            raise _Wrong(wrong)
+            raise _UsageError(wrong)
         if args.catalogue is not None:
             _catalogue(args.catalogue)  # refused before the folder is opened
         # A name of the command line, so refused before the folder is opened,
         # also while another process holds it.
         source = getattr(args, 'source', None)
         if source is not None and source not in sources:
-            raise _Wrong(not_registered(source, sources))
-        given = _Given(args, sources, writers)
+            raise _UsageError(not_registered(source, sources))
+        given = _Context(args, sources, writers)
         result = _opened(given, command) if command.folder else command.run(given)
-    except _Wrong as error:
+    except _UsageError as error:
         parser.error(str(error))
-    except _Failed as error:
+    except _CommandError as error:
         sys.stderr.write(f'{error}\n')
         return 1
     except DefinitionWriteError as error:
