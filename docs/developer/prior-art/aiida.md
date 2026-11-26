@@ -21,7 +21,7 @@ If a story asks for it, AiiDA's answer fits [ADR 0004](../adr/0004-history-is-ap
 
 **UUIDs when data leaves the database.** Every node has a per-database integer key and a UUID.
 The docs ask for UUIDs whenever data is shared, and import deduplicates by UUID ([share_data.rst L46, L110][share]).
-Our record IDs are random UUIDs already (`ess.apps.workspace`), so `client.publish` can carry them into a SciCat entry unchanged.
+Our record IDs are random UUIDs already (`ess.apps.workspace`), so `ess.apps.scicat.publish` can carry them into a SciCat entry unchanged.
 
 **Software versions on every process node.** A process stores the versions of aiida-core and its plugin on its node when it starts ([process.py L786-789][version]).
 There, the worker that creates the node also runs it.
@@ -50,7 +50,7 @@ AiiDA shows the demand is real; keeping such a result a copy, never an input, ke
 Export mirrors this: exporting a calculation exports its inputs and outputs, and exporting a data node does not export the calculations that used it ([consistency.rst L57-61][consistency]).
 We need no traversal: [ADR 0004](../adr/0004-history-is-append-only-lists.md) drops a proposal's history as a whole, and no other proposal reads it (system story G5).
 Output values are not history ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)), so dropping stored values (H1) or a mistaken file (A4) leaves every record intact; in AiiDA a node's files are part of the immutable node.
-AiiDA's export default is what `client.provenance` and `client.publish` do: everything upstream, stopping at files, nothing downstream.
+AiiDA's export default is what `client.provenance` and `ess.apps.scicat.publish` do: everything upstream, stopping at files, nothing downstream.
 
 ## Running unattended
 
@@ -88,7 +88,7 @@ The SQLite storage is a subclass of the PostgreSQL one ([sqlite_dos/backend.py L
 `local()` needs no service either; if the service stores history differently from the in-process log, as ADR 0004 allows, AiiDA's path suggests one implementation that varies only the database engine.
 
 **One directory per node did not scale.** At millions of files, "even just determining the difference between the original and backup of a repository, for example using rsync could take days" ([repository.rst L235-238][repo]); v2.0 moved to deduplicated, append-only pack files ([CHANGELOG L3364-3365][cl-v2]).
-Our store's layout is open ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), Open); a proposal holds far fewer files, but the layout should keep backup and dropping a proposal cheap.
+Our store's layout is open ([#288](https://github.com/scipp/essapps/issues/288)); a proposal holds far fewer files, but the layout should keep backup and dropping a proposal cheap.
 
 ## Summary
 

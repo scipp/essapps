@@ -80,7 +80,7 @@ Whether the DMSC cluster runs `slurmrestd` is not known.
 It names inputs by file path and sends a message to a broker, so no identifier comes back.
 `blissoda` processors turn it on with the parameter `data_portal_upload`, off by default; once on, every saved scan is uploaded.
 No source read mentions SciCat, although slide 24 shows the DESY portal as SciCat and says registration is "ideally not part of the workflow itself", done through "Ewoks events and Ewoks plugins"; no entry-point group for such plugins exists in the sources.
-Our `client.publish` is likewise outside the workflow ([Provenance](../README.md#provenance)); whether batch results reach SciCat without a person is open ([tensions](../../requirements/tensions.md#open)).
+Our `ess.apps.scicat.publish` is likewise outside the workflow ([Provenance](../README.md#provenance)); whether batch results reach SciCat without a person is open ([tensions](../../requirements/tensions.md#open)).
 
 **Monitoring is Celery's.**
 The metrics slides (failures, workflows per minute, worker health, success rate) show Celery tooling: `ewoksjob monitor` is an alias of `celery flower` ([__main__.py L17-L18][monitor]), and the sources contain no metrics code.

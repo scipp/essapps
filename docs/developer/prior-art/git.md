@@ -13,7 +13,7 @@ Twenty years of users have recorded what that model costs.
 | reachability from refs | holders of a value ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)) | see below: the rules differ |
 | blob | output value | a blob is history; an output value is not ([ADR 0004](../adr/0004-history-is-append-only-lists.md)) |
 | LFS pointer | record and store | the record names no file; the store keys a value by record ID and output name |
-| push of the objects a ref needs | `client.publish` with provenance | the closure travels |
+| push of the objects a ref needs | `ess.apps.scicat.publish` with provenance | the files travel, the records in between do not |
 
 ## Findings
 
@@ -22,7 +22,7 @@ A commit names its parents, and where order must be right, such as merge bases a
 Plain timestamps are only a heuristic there: "A _probably_ cannot reach B", and the default `git log` order, reverse chronological by commit time ([rev-list-options L887][rlo]), may break parent order "due to clock skew".
 Here, the records under a label come in the order they were logged, and `client.latest` returns the last of them ([client.py][latest]); `Record.created` is never used for order.
 This holds because one process writes a proposal's history.
-A second writer would appear in two open questions: an upgrade where old and new instance both run ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md), Open), and the layout of logs per proposal on the service ([#27][i27]).
+A second writer would appear in two open questions: an upgrade where old and new instance both run ([#288](https://github.com/scipp/essapps/issues/288)), and the layout of logs per proposal on the service ([#27][i27]).
 Git's lesson for those: keep one append order per label, or have each record name its predecessor; do not fall back to `created`.
 
 **A reference names an object, never a name.**
@@ -55,10 +55,11 @@ An LFS pointer is a small text file holding a `sha256` object ID and a size ([LF
 Here, history names no file, and the store keys a value by record ID and output name ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)), so the separation is there already.
 The file format and the store's layout are open; a hash and size per written output would let the store detect a damaged or truncated file.
 
-**Publishing sends a closure.**
+**git publishes a closure.**
 `git push` updates remote refs and "sends all necessary data that isn't already on the remote" ([git-push L21-L23][push]), so the remote can read every commit the ref reaches.
-`client.publish` (not implemented) puts an output in a catalogue with its provenance: every record that supplied an input, down to the files ([Provenance](../README.md#provenance)).
-The catalogue entry survives the proposal's history for the same reason a pushed branch survives the local clone: what it needs travels with it.
+`ess.apps.scicat.publish` puts an output in a catalogue with its request, and the files of its provenance as inputs ([Provenance](../README.md#provenance)).
+The catalogue entry survives the proposal's history, as a pushed branch survives the local clone.
+Unlike a push, it does not carry the requests of the records in between.
 
 **Names need a namespace.**
 Git keeps branches, tags, and remote branches under separate prefixes (`refs/heads/`, `refs/tags/`, `refs/remotes/`), resolves a short name by a fixed order of rules, and warns when it is ambiguous ([revisions L27-L33][revname], `core.warnAmbiguousRefs`, true by default, [config/core L407-L409][warn]).
