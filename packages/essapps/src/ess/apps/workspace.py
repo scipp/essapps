@@ -224,6 +224,7 @@ from .records import (
     Status,
     Template,
 )
+from .selection import check_select, selected
 from .views import Views
 
 type Spec = WorkflowSpec[Any, Any]
@@ -287,41 +288,6 @@ def _element(value: Any, ref: OutputRef) -> Any:
         return value[int(key)] if isinstance(value, list) else value[key]
     except (IndexError, KeyError):
         raise _Failure(f'{ref}: the output has no element {key!r}') from None
-
-
-def _selected(value: Any, select: Selection) -> Any:
-    """
-    A copy of the part of an array, or of a group, that ``select`` names;
-    needs no lock.
-
-    An array is a value with named dimensions that slices as
-    ``value[dim, index]``, such as a scipp variable or data array. A
-    dimension it lacks, or an index out of range, raises what the slice
-    raises. Of a group, each dimension slices the array fields that have
-    it, as ``sc.DataGroup`` slices its items, and every other field is
-    copied whole, a group in it too. A group is a pydantic model, or a
-    mapping, such as the ``sc.DataGroup`` of an output read as stored.
-    Unlike a ``sc.DataGroup``, a group refuses a dimension that no array
-    field has, with ``ValueError``.
-    """
-    if not isinstance(value, BaseModel | Mapping):
-        for dim, index in select.items():
-            value = value[dim, index]
-        return value.copy()
-    fields = dict(value)
-    for dim, index in select.items():
-        sliced = {
-            n: v[dim, index] for n, v in fields.items() if dim in getattr(v, 'dims', ())
-        }
-        if not sliced:
-            raise ValueError(
-                f'{type(value).__name__} has no array field with dimension {dim!r}'
-            )
-        fields |= sliced
-    # A deep copy of a slice copies the slice only.
-    if isinstance(value, BaseModel):
-        return value.model_copy(update=copy.deepcopy(fields))
-    return type(value)(copy.deepcopy(fields))
 
 
 def _info(value: Any) -> Any:
@@ -1521,7 +1487,7 @@ class Workspace(WorkspaceProtocol):
         values = self._read(record_id, names, select=select)
         if select is None:
             return values
-        return {n: _selected(v, select) for n, v in values.items()}
+        return {n: selected(v, select) for n, v in values.items()}
 
     def describe(self, record_id: str, name: str) -> dict[str, Any]:
         value = self._read(record_id, [name], select=None)[name]
@@ -1547,7 +1513,7 @@ class Workspace(WorkspaceProtocol):
             record = self._record(record_id)
             if select is not None:
                 typed = self._other(record_id) is None
-                self._check_select(record.spec if typed else None, names)
+                check_select(self._bound[record.spec].spec if typed else None, names)
             wanted = record.outputs if names is None else names
             for name in wanted:
                 if name not in record.outputs:
@@ -1597,28 +1563,6 @@ class Workspace(WorkspaceProtocol):
             if (why := self._refusal((record_id, name))) is not None:
                 raise NotReadable(why)
         return list(names)
-
-    def _check_select(
-        self, spec_id: SpecId | None, names: Sequence[str] | None
-    ) -> None:
-        """
-        Refuse a selection unless it names outputs, each declared by
-        ``spec_id`` as an array or as a group with an array field; needs no
-        lock. A selection names the dimensions of the outputs it reads, so it
-        reads only outputs named. ``spec_id`` is ``None`` for a record of
-        another spec, whose outputs read as stored are checked by slicing.
-        """
-        if names is None:
-            raise ValueError('select= needs the name of an output')
-        if spec_id is None:
-            return
-        declared = self._bound[spec_id].spec.outputs.model_fields
-        for name in (n for n in names if n in declared):  # others raise when read
-            if not field_types.has_array(declared[name].annotation):
-                raise ValueError(
-                    f'{spec_id} output {name!r}: select= needs an array, or a group '
-                    'with an array field'
-                )
 
     # Files, within the workspace's proposal
 
@@ -2101,7 +2045,7 @@ class Workspace(WorkspaceProtocol):
         """
         with self._reading(accumulator_id) as (acc, upto):
             if select is not None:
-                self._check_select(acc.template.spec, names)
+                check_select(self._bound[acc.template.spec].spec, names)
             with self._changed:
                 self._wait_for(lambda: acc.added == upto or acc.stopped is not None)
                 if acc.added != upto:
@@ -2120,7 +2064,7 @@ class Workspace(WorkspaceProtocol):
             values = {n: outputs[n] for n in names or declared if n in outputs}
             if select is None:
                 return copy.deepcopy(values)
-            return {n: _selected(v, select) for n, v in values.items()}
+            return {n: selected(v, select) for n, v in values.items()}
 
 
 def local(
