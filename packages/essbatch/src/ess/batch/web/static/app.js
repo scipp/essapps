@@ -278,7 +278,7 @@ function gridColumns(state) {
   const cells = cellColumns(state.columns, {
     current: () => view.state.columns,
     say: showMessage,
-    // A column that the source fills stays a column: its rows wait for their runs.
+    // A column that the source fills stays a column: its rows are incomplete until their runs arrive.
     menu: (column) => (column.from_source ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
@@ -376,7 +376,7 @@ function drawRuns() {
   const {columns, rows: shown, problem} = view.runData ?? {};
   if (!shown) return;
   const fields = columns.map((c) => c.title.toLowerCase()).join(' or ');
-  $('runs-hint').textContent = problem ?? `Correct the ${fields} of a run. It changes no row of a batch; Follow adds the rows it fills.`;
+  $('runs-hint').textContent = problem ?? `Correct the ${fields} of a run. It changes no row of a batch; Follow adds the rows that become complete.`;
   $('runs-hint').classList.toggle('bad', Boolean(problem));
   if (!runs) {
     runs = new Grid($('runs'), {
@@ -876,7 +876,7 @@ function renderAction(action, settingsChanged) {
   $('settings-badge').title = action.blocked ?? '';
   $('settings-changed-badge').hidden = settingsChanged === 0;
   $('settings-changed-badge').textContent = settingsChanged;
-  $('settings-changed-badge').title = `${count(settingsChanged)} reduced with earlier settings`;
+  $('settings-changed-badge').title = `${count(settingsChanged)} with changed settings`;
 }
 
 const CHIPS = ['all', 'ready', 'running', 'done', 'settings changed', 'outdated', 'failed', 'incomplete', 'cancelled'];
@@ -955,7 +955,7 @@ function stopFollowing() {
 function renderSettings(state) {
   const {action, counts, settings_unapplied: changed, settings_problem: problem} = state;
   $('settings-changed').hidden = counts['settings changed'] === 0;
-  $('settings-changed-state').textContent = `${count(counts['settings changed'])} reduced with earlier settings.`;
+  $('settings-changed-state').textContent = `${count(counts['settings changed'])} with changed settings.`;
   $('reduce-settings-changed').disabled = Boolean(action.blocked);
   renderDraft($('draft'), changed, problem ? `${problem}.` : '', 'These settings are in force.');
   // The file holds the settings in force, so it waits for Apply or Discard.
@@ -1148,7 +1148,7 @@ function outputChanged(form = view.state?.output.options) {
 // A format with outputs of its own (`format.outputs`) ignores the outputs
 // chosen, so the choice is hidden.
 function renderOutputDraft() {
-  renderDraft($('output-draft'), outputChanged(), view.state.output.problem, 'This form is in force.');
+  renderDraft($('output-draft'), outputChanged(), view.state.output.problem, 'These output options are in force.');
   const format = view.state.output.formats.find((f) => f.name === $('output-format').value);
   $('output-outputs-field').hidden = format?.outputs != null;
   $('output-format-description').textContent = format?.description ?? '';
@@ -1185,7 +1185,7 @@ function renderPublishButton() {
   const blocked = publishBlocked();
   $('publish').disabled = Boolean(blocked);
   $('publish').textContent = n ? `Publish ${n} selected` : 'Publish';
-  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or settings changed and not published, with the form in force.';
+  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or settings changed and not published, with the output options in force.';
 }
 
 function sayOutput(text) {
@@ -1411,7 +1411,7 @@ function showTab(tab) {
 
 function reduceSettingsChanged() {
   const n = view.state.counts['settings changed'];
-  const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
+  const question = `Reduce the ${count(n)} with changed settings again, with the settings now?`;
   if (confirm(question)) act('reduce', {which: 'settings changed'});
 }
 
@@ -1502,8 +1502,8 @@ function wire() {
   const actions = {
     'load-table': loadTable,
     'load-settings': () => replaceChanges() && $('pick-settings').click(),
-    'table.csv': () => download('table.csv', 'rows.csv'),
-    'table.xlsx': () => download('table.xlsx', 'rows.xlsx'),
+    'table.csv': () => download('table.csv', 'table.csv'),
+    'table.xlsx': () => download('table.xlsx', 'table.xlsx'),
     'settings.yaml': () => download('settings.yaml', 'settings.yaml'),
     'results-selected': () => downloadResults(selectedRows(), 'results-selected.zip'),
     'results-all': () => downloadResults(view.state.rows, 'results-all.zip'),

@@ -53,7 +53,7 @@
             <button type="button" class="primary more" id="reduce-more" aria-haspopup="true" aria-label="Other ways to reduce">▾</button>
             <div class="menu-items" role="menu" hidden>
               <button type="button" data-reduce="remaining">Reduce remaining <small id="n-remaining"></small></button>
-              <button type="button" data-reduce="settings changed">Reduce rows of earlier settings <small id="n-settings-changed"></small></button>
+              <button type="button" data-reduce="settings changed">Reduce rows with changed settings <small id="n-settings-changed"></small></button>
               <button type="button" data-reduce="all">Reduce all again <small id="n-again"></small></button>
               <button type="button" data-reduce="selected">Reduce selected <small id="n-selected"></small></button>
             </div>
@@ -203,7 +203,7 @@
         </form>
         <section class="param" id="publishing" hidden>
           <h3>Publish</h3>
-          <p class="hint">Each row is published as one derived dataset of the catalogue, with the files of the form. Its inputs, proposal and software are filled in from its result.</p>
+          <p class="hint">Each row is published as one derived dataset of the catalogue, with the files that the output options specify. Its inputs, proposal and software are filled in from its result.</p>
           <p class="hint" id="publish-hint"></p>
           <button type="button" class="primary" id="publish">Publish</button>
         </section>

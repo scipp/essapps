@@ -48,10 +48,10 @@ class SafeListing(Listing):
         super().__init__(client, previous)
         self.files_listed = self.listed(Selector())
         # A snapshot: a picker may list files later and set :attr:`error`.
-        self._said = (self.files_listed, self.failure)
+        self._shown = (self.files_listed, self.failure)
         self.revision = 1
         if previous is not None:
-            self.revision = previous.revision + (self._said != previous._said)
+            self.revision = previous.revision + (self._shown != previous._shown)
 
     @property
     def failure(self) -> str | None:
@@ -168,7 +168,7 @@ class Runs:
             marks, corrected = self._marks()
             value = view.read(marks, edit)
             fields = {edit.column: None if value is UNSET else value}
-            self._kept(
+            self._correct_and_list(
                 lambda: corrected.correct_each(
                     [FileRef(file=key) for key in edit.keys], **fields
                 )
@@ -181,7 +181,7 @@ class Runs:
         """Set a field of runs back to the value in the file."""
         with self._lock:
             marks, corrected = self._marks()
-            self._kept(
+            self._correct_and_list(
                 lambda: corrected.reset_each(
                     [FileRef(file=key) for key in cells.keys], cells.column
                 )
@@ -190,7 +190,7 @@ class Runs:
             title = marks.titles.get(cells.column, cells.column)
             return Notice(notice=f'{title} set back on {n} run{"s" * (n > 1)}.')
 
-    def _kept(self, correction: Callable[[], None]) -> None:
+    def _correct_and_list(self, correction: Callable[[], None]) -> None:
         """
         Call ``correction``, then list again.
 

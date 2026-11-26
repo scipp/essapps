@@ -356,7 +356,7 @@ def test_a_refused_reduction_answers_422_and_the_state_names_the_cell(
     response = http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
 
     assert response.status_code == 422
-    assert response.json() == {'message': 'Nothing was reduced: one value is refused.'}
+    assert response.json() == {'message': 'Nothing was reduced: one value is rejected.'}
     shown = state(http)
     (refused,) = shown['submit_errors']
     assert refused['text'] == 'water: Offset: unknown record or accumulator nope'
@@ -591,7 +591,7 @@ def test_a_changed_setting_leaves_the_rows_reduced_reading_settings_changed(
     }
     assert rows(http)['1']['changed'] == 'Binning changed'
     assert rows(http)['1']['reason'].startswith(
-        'Reduced with earlier settings: Binning changed since.'
+        'The settings changed since the reduction: Binning.'
     )
     assert (shown['counts']['settings changed'], shown['counts']['done']) == (2, 0)
     assert shown['action']['label'] == 'Nothing left to reduce'
@@ -964,9 +964,9 @@ def test_a_change_the_definitions_cannot_keep_answers_422_and_nothing_changes(
         content=b'key,sample,transmission,thickness\n1,1,1001,3\n',
     )
 
-    assert setting.json() == {'message': 'The change was not kept: disk full'}
-    assert cell == {'message': 'The change was not kept: disk full'}
-    assert table.json() == {'message': 'The change was not kept: disk full'}
+    assert setting.json() == {'message': 'The change was not stored: disk full'}
+    assert cell == {'message': 'The change was not stored: disk full'}
+    assert table.json() == {'message': 'The change was not stored: disk full'}
     assert flaky.kept == before
     assert rows(kept)['1']['cells']['thickness']['text'] == ''
 
@@ -1975,7 +1975,7 @@ def test_counts_are_given_in_the_words_of_the_page(
     http: TestClient, batch: Batch, client: Client
 ) -> None:
     client.wait(batch.reduce(['1']))
-    bins(http, 3)  # row 1 is reduced with earlier settings
+    bins(http, 3)  # row 1 has status settings changed
 
     counted = http.get('/api/batches/counts').json()
 
@@ -2689,7 +2689,7 @@ def test_a_header_change_the_definitions_refuse_answers_422_and_changes_nothing(
 
     assert (answer.status_code, answer.json()) == (
         422,
-        {'message': "The change was not kept: ('labels', 'scan', 'header'): refused"},
+        {'message': "The change was not stored: ('labels', 'scan', 'header'): refused"},
     )
     assert manager.headers()['scan'].title == 'Scan'
     after = state(http)
@@ -2709,7 +2709,7 @@ def test_a_batch_to_follow_whose_follow_the_definitions_refuse_is_not_made(
 
     assert answer.status_code == 422
     assert re.fullmatch(
-        r"The change was not kept: \('labels', '[\d-]+', 'source'\): refused",
+        r"The change was not stored: \('labels', '[\d-]+', 'source'\): refused",
         answer.json()['message'],
     )
     assert (list(manager.headers()), intake.following) == (['scan'], None)
@@ -2777,7 +2777,7 @@ def test_a_removal_the_definitions_refuse_answers_422_and_the_batch_stays(
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
-        "The change was not kept: ('labels', 'f', 'header'): refused"
+        "The change was not stored: ('labels', 'f', 'header'): refused"
     )
     # Nothing was removed: the header is kept, and the batch still follows.
     assert list(manager.headers()) == ['f']
@@ -2894,7 +2894,7 @@ def test_without_a_catalogue_the_output_tab_has_the_form_but_no_publishing(
         False,
     )
     assert output['outputs'] == [{'name': 'total', 'title': 'total'}]
-    assert applied['notice'] == 'Applied the form.'
+    assert applied['notice'] == 'Applied the output options.'
     assert state(http)['output']['options']['owner'] == 'Anna'
     assert http.post('/api/publish', json={'keys': ['1']}).status_code == 422
 

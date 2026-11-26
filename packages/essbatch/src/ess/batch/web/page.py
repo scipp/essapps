@@ -18,12 +18,15 @@ While the settings form holds a change, the page rejects a reduction, the
 download of the settings, and a change of which parameters are columns,
 including "Load table". A reduction would use settings other than those
 shown, and a change of the parameter columns rebuilds the form, which would
-drop the change.
+drop the change. Only Apply and "Make this a setting" change the batch's
+settings while a page is open. The draft does not see an assignment of
+``batch.settings`` by other code, and the next Apply writes the draft over it.
 
 If a reduction raises :class:`~ess.apps.errors.SubmitError`, the errors that a
-cell or a setting can show stay in the state, and the others form the message
-of the :class:`~.errors.Rejected`. An error in the state stays until its
-value changes, the settings are applied, or a reduction succeeds. The state of
+cell or a setting can show stay in the state, and the others make up the
+message of the :class:`~.errors.Rejected`. An error in the state stays until
+its cell is edited, Apply (for an error at a setting), or a reduction
+succeeds. The state of
 the batch shows most invalid cells already, as problems of their rows. Only a
 submission finds a reference to a record that the workspace does not know, or
 to an output whose type does not fit the cell.
@@ -256,11 +259,11 @@ class Page:
 
     def _table(self, keys: Iterable[str] = ()) -> pd.DataFrame:
         """A copy of the batch table. Raises ``Rejected`` if a key has no row."""
-        frame = self.batch.table()
+        table = self.batch.table()
         for key in keys:
-            if key not in frame.index:
+            if key not in table.index:
                 raise Rejected(f'There is no row {key}.')
-        return frame
+        return table
 
     def _set_table(self, table: pd.DataFrame) -> None:
         """Set the batch table. Raises ``Rejected`` if the batch rejects it."""
@@ -277,10 +280,10 @@ class Page:
         states, unusable = self._states()
         unsubmitted = self.pages.last_step.unsubmitted(self.label, states)
         failures = self._failures(states)
-        frame = batch.table()
+        table = batch.table()
         requested = batch.cells()
-        named = row_names(frame, columns)
-        notes = [n for n in frame.columns if n not in columns and n != NAME]
+        named = row_names(table, columns)
+        notes = [n for n in table.columns if n not in columns and n != NAME]
         titles = self._titles
         published = definition.published(
             self.pages.intake.manager.definitions, self.label
@@ -299,7 +302,7 @@ class Page:
                 published,
                 key in may,
             )
-            for key, cells in frame.to_dict('index').items()
+            for key, cells in table.to_dict('index').items()
         ]
         missing = self.draft.params_and_missing()[1]
         # An error of the batch's settings is marked at its field only while
@@ -347,7 +350,9 @@ class Page:
             may_be_columns=[
                 n for n in forms.edited(self.draft.fields) if n not in columns
             ],
-            submit_errors=[view.refusal(e, named, titles) for e in self._submit_errors],
+            submit_errors=[
+                view.submit_problem(e, named, titles) for e in self._submit_errors
+            ],
             follow=self.pages.last_step.shown(self.label),
             files_problem=self.pages.runs.listing.failure,
             output=view.output(
@@ -439,13 +444,13 @@ class Page:
     def edit(self, edit: CellEdit) -> str:
         """Set one column of rows ``edit.keys`` to the value sent."""
         value = view.read(self._cells, edit)
-        frame = self._table(edit.keys)
+        table = self._table(edit.keys)
         # As objects, so that the batch, not pandas, rejects an invalid cell.
-        column = frame[edit.column].astype(object)
+        column = table[edit.column].astype(object)
         column.loc[edit.keys] = (
             None if value is UNSET or value is None else cell_of(value)
         )
-        self._set_table(frame.assign(**{edit.column: column}))
+        self._set_table(table.assign(**{edit.column: column}))
         self._forget(edit.keys, edit.column)
         if len(edit.keys) < 2:
             return ''
@@ -472,8 +477,8 @@ class Page:
         key = key.strip()
         if not key:
             raise Rejected('Give the new row a key.')
-        frame = self._table()
-        self._set_table(frame.reindex(pd.Index([*frame.index, key], name=KEY)))
+        table = self._table()
+        self._set_table(table.reindex(pd.Index([*table.index, key], name=KEY)))
         return f'Added {key}: fill in its cells.'
 
     @_locked
@@ -570,7 +575,7 @@ class Page:
     @_action
     def reduce(self, request: Reduce) -> str:
         """Submit the rows asked for, all or none."""
-        frame = self._table(request.keys)
+        table = self._table(request.keys)
         if unapplied := self.draft.unapplied():
             raise Rejected(f'Nothing was reduced: {unapplied.lower()}.')
         try:
@@ -582,12 +587,12 @@ class Page:
             records = self.batch.reduce(keys)
         except SubmitError as error:
             self._submit_errors = [
-                e for e in error.errors if self._placed(e, frame.index)
+                e for e in error.errors if self._placed(e, table.index)
             ]
             unplaced = [e for e in error.errors if e not in self._submit_errors]
-            named = row_names(frame, self.batch.parameter_columns)
+            named = row_names(table, self.batch.parameter_columns)
             raise _NotReduced(
-                [view.refusal(e, named, self._titles).text for e in unplaced],
+                [view.submit_problem(e, named, self._titles).text for e in unplaced],
                 len(self._submit_errors),
             ) from None
         self._submit_errors = []
@@ -674,8 +679,8 @@ class Page:
         Show the settings that the result of row ``key`` was reduced with
         (:meth:`~ess.batch.Batch.settings_of`).
         """
-        frame = self._table([key])
-        name = row_names(frame, self.batch.parameter_columns)[key]
+        table = self._table([key])
+        name = row_names(table, self.batch.parameter_columns)[key]
         try:
             settings = self.batch.settings_of(key)
         except ValueError as error:
@@ -718,7 +723,7 @@ class Page:
             self.pages.writing.set_options(
                 self.label, OutputOptions.model_validate(fields)
             )
-        return 'Applied the form.'
+        return 'Applied the output options.'
 
     @_action
     def publish(self, keys: Sequence[str]) -> str:
@@ -750,7 +755,7 @@ class Page:
         state = self._states([key])[0][key]
         record = state.record
         if record is None or state.spec_changed:
-            # an unbound spec's params are not this one's
+            # another spec's or an unbound spec's params are not this one's
             return RowDetail(key=key, reduced_with=None, created=None, differs=[])
         given = Fields(self.batch.spec.params, self.pages.runs.listing)
         given.set(record.request.params, self.pages.runs.listing)
@@ -769,8 +774,8 @@ class Page:
         The figure of the results among the rows ``keys``, or of the first
         results if none is given, and a note of what it shows.
         """
-        frame = self.batch.table()
-        order = {key: i for i, key in enumerate(frame.index)}
+        table = self.batch.table()
+        order = {key: i for i, key in enumerate(table.index)}
         states, _ = self._states(
             sorted({k for k in keys if k in order}, key=order.__getitem__)
             if keys
@@ -793,7 +798,7 @@ class Page:
         if not chosen or draw is None:
             return Plot(figure=None, note=note)
         colors = plots.colors([order[s.key] for s in chosen])
-        named = row_names(frame, self.batch.parameter_columns)
+        named = row_names(table, self.batch.parameter_columns)
         shown = [
             Shown(s.key, named[s.key], s.record, s.status == 'outdated', c)
             for s, c in zip(chosen, colors, strict=True)
@@ -815,7 +820,7 @@ class Page:
         """The batch table with what came of each row, as ``.csv`` or ``.xlsx``."""
         batch = self.batch
         table = frames.with_results(batch, self._states()[0])
-        with named_file(f'rows{suffix}') as path:
+        with named_file(f'table{suffix}') as path:
             write_table(table, path)
             return path.read_bytes()
 
@@ -830,18 +835,18 @@ class Page:
         self._settled()
         try:
             params = self.batch.spec.params
-            frame = read_file(name, content, lambda path: read_table(path, params))
+            table = read_file(name, content, lambda path: read_table(path, params))
             with (
                 reject_on_write_error()
             ):  # an error of the definitions, not of the file
-                self.batch.set_table(frame)
+                self.batch.set_table(table)
         except (ValueError, OSError) as error:
             raise Rejected(f'Cannot load {name}: {request_error_text(error)}') from None
         finally:
             # The rows may refer to files that the listing lacks, even if the
             # table is then rejected.
             self._list_again()
-        return f'Loaded {_rows(len(frame))} from {name}.'
+        return f'Loaded {_rows(len(table))} from {name}.'
 
     @_locked
     def settings_file(self) -> bytes:
@@ -880,19 +885,19 @@ class Page:
         with the rows as ``results.csv``.
         """
         batch = self.batch
-        frame = batch.table()
-        known = [k for k in keys if k in frame.index]
+        table = batch.table()
+        known = [k for k in keys if k in table.index]
         states, _ = self._states(known if keys else None)
         done = [k for k, s in states.items() if s.record_status is Status.COMPLETED]
         if not done:
             raise Rejected('None of these rows has a result.')
         buffer = io.BytesIO()
         with named_file('results') as folder:
-            table = frames.with_results(batch, states, done)
+            results = frames.with_results(batch, states, done)
             with reject_on_error('Not downloaded'):
                 write, _ = self.pages.writing.by_options(self.label)
-                export_table(batch.client, table, folder, write)
-            write_table(table, folder / 'results.csv')
+                export_table(batch.client, results, folder, write)
+            write_table(results, folder / 'results.csv')
             with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
                 for path in sorted(folder.rglob('*')):
                     if path.is_file():
@@ -906,11 +911,11 @@ class _NotReduced(Rejected):
     as a row still running. The state holds the others.
     """
 
-    def __init__(self, said: list[str], placed: int) -> None:
+    def __init__(self, errors: list[str], placed: int) -> None:
         if placed:
-            said.append(
-                'one value is refused.'
+            errors.append(
+                'one value is rejected.'
                 if placed == 1
-                else f'{placed} values are refused.'
+                else f'{placed} values are rejected.'
             )
-        super().__init__(f'Nothing was reduced: {"; ".join(said)}')
+        super().__init__(f'Nothing was reduced: {"; ".join(errors)}')

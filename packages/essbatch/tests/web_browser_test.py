@@ -506,10 +506,7 @@ def test_rows_reduced_with_earlier_settings_read_settings_changed_with_what_chan
     assert page.inner_text('#rows .status .changed >> nth=0') == 'Binning changed'
     assert page.inner_text('#settings-changed-badge') == '2'
     assert page.is_visible('#settings-changed')
-    assert (
-        page.inner_text('#settings-changed-state')
-        == '2 rows reduced with earlier settings.'
-    )
+    assert page.inner_text('#settings-changed-state') == '2 rows with changed settings.'
     page.click('.chip.st-settings-changed')
     page.wait_for_function(f'{PILLS}.length === 2')
     assert pills(page) == ['settings changed', 'settings changed']
@@ -1352,7 +1349,7 @@ def test_a_file_asked_for_before_a_change_is_saved(second: str, page: Any) -> No
     with page.expect_download() as saved:
         release(page, 0)
 
-    assert saved.value.suggested_filename == 'rows.csv'
+    assert saved.value.suggested_filename == 'table.csv'
     assert 'water' in Path(saved.value.path()).read_text()
 
 
@@ -2061,7 +2058,7 @@ def test_the_output_form_is_in_force_after_apply_and_holds_publishing_back_till_
     )
     published.filter(has_text='pid:').wait_for()
 
-    assert unfilled.startswith('The form names no owner, no contact email')
+    assert unfilled.startswith('The output options name no owner, no contact email')
     assert held
     assert owner == 'Anna'
 

@@ -35,9 +35,9 @@ def read_file[T](name: str, content: bytes, read: Callable[[Path], T]) -> T:
         try:
             return read(path)
         except (OSError, ValueError, KeyError) as error:
-            said = (
+            text = (
                 request_error_text(error)
                 .replace(f'{path}: ', '')
                 .replace(str(path), name)
             )
-            raise ValueError(said) from None
+            raise ValueError(text) from None
