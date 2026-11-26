@@ -111,14 +111,9 @@ Other tables are always named with what they are of:
 | the rows of a source | a frame of the form of a batch table, which the source makes from the files and a batch takes rows from; it knows no spec, so each of its columns is a note column until a batch takes the row |
 | a table file | a batch table as `.csv`, `.tsv` or `.xlsx`, to edit elsewhere and load again |
 
-### Invariants
+### Errors
 
-1. Only `put` changes a batch table. `Batch.put` is the only method that sets the table of a `Batch` after it is made.
-2. A `Batch` never calls a row source. `reduction.py` does not import `source.py`; `test_reduce_on_a_batch_of_the_manager_reduces_its_rows_without_its_source`.
-3. The batch layer refuses what is asked with `ValueError`, a label that no batch has with `KeyError`, and a write that the definitions refuse with `NotKept`. `test_a_label_that_is_no_batch_is_refused` in `manager_test.py` and `intake_test.py`.
-
-The invariants of Follow are in [Follow](#follow).
-The page adds no rule of its own: see "The batch layer decides" in [the web README](../src/ess/batch/web/README.md).
+The batch layer refuses what is asked with `ValueError`, a label that no batch has with `KeyError`, and a write that the definitions refuse with `NotKept`.
 
 ### What is kept on disk
 
@@ -617,13 +612,8 @@ sequenceDiagram
     intake-->>timer: Step
 ```
 
-Invariants:
-
-1. At most one batch follows. `Intake._follow_instead`; `test_a_batch_made_to_follow_ends_follow_on_the_one_before_then_writes_its_own`.
-2. A step never changes a row that the batch table has, nor the template's blanks. `auto.added`; `test_a_step_changes_no_row_that_the_table_has`, `test_a_step_adds_the_rows_new_and_filled_with_the_columns_of_the_table`.
-3. A step never adds a row whose key is considered. `auto.added`; `test_a_step_adds_no_row_that_is_considered`.
-4. After a step, every key of the source that the batch table has is considered, whoever added the row. `auto.step`, and `Intake.step` if the step raises; `test_a_row_added_by_hand_with_a_key_the_source_gives_later_stays_away_once_removed`, `test_a_row_added_by_a_step_whose_submission_raised_stays_away_once_removed`.
-5. A step never reduces a row that has a result, also an outdated, failed or cancelled one. `state.not_reduced`; `test_a_row_with_a_result_is_left_to_a_person`.
+A removed row stays away: its key is considered, and only `intake.take` brings it back.
+A step reduces a row once: a row that has a result, also a failed, cancelled or outdated one, is left to a person.
 
 A source whose row grows, such as the runs of a sample so far, gives the grown list a new key:
 

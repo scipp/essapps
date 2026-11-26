@@ -87,7 +87,7 @@ def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
 class Intake:
     """
     Brings the rows of row sources into the batches of ``manager``, and keeps
-    which batch follows. It raises as ``batch.md``, "Invariants", says.
+    which batch follows. It raises as ``batch.md``, "Errors", says.
 
     Parameters
     ----------

@@ -14,12 +14,6 @@ One step of Follow on a batch::
 The caller keeps ``considered`` from one step to the next
 (:class:`~.intake.Intake` in ``source.json``).
 
-Invariants:
-
-- A step never changes a row that the batch table has, nor the template's blanks.
-- A step never adds a row whose key is considered.
-- A step never reduces a row that has a result.
-
 Guide: ``packages/essbatch/docs/batch.md``, "Follow".
 Decision: ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
 Cost: ``docs/developer/automatic-reduction.md``, "Cost".
