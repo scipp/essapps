@@ -5,10 +5,9 @@
 Toy specs of the user stories (docs/developer/user-stories.md).
 
 A file made by ``measure`` holds a list of counts. The toy specs compute
-what the table in user-stories.md says, so that every number can be checked
-by hand. Each toy workflow takes an instance of its spec's params model,
-where each run is the local path of its file, and reads the counts of each
-file.
+so little that every number can be checked by hand. Each toy workflow takes
+an instance of its spec's params model, where each run is the local path of
+its file, and reads the counts of each file.
 """
 
 from __future__ import annotations
