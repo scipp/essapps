@@ -464,14 +464,11 @@ class Client:
         Raises
         ------
         SubmitError
-            If a request cannot run: an invalid value, an unknown spec or file, a
-            file that the file source cannot read (it raised ``OSError``), a
-            reference at a field that the spec does not mark ``Referenced[...]``, a
-            reference that may not be read, one to an output of a record of another
-            spec than the one bound, or one whose data do not fit its field. No
-            request of the call is submitted. Each of its ``errors`` names
-            the field at fault by its position and the request by its key or index
-            (see :class:`~ess.apps.errors.FieldError`).
+            If a request or ``persist`` is refused (see
+            :meth:`~ess.apps.protocol.WorkspaceProtocol.submit`). No request of the
+            call is submitted. Each of its ``errors`` names the field at fault by
+            its position and the request by its key or index (see
+            :class:`~ess.apps.errors.FieldError`).
         """
         stage = None
         if each is not None and (params is not None or not isinstance(what, Stage)):
@@ -707,12 +704,8 @@ class Client:
     @_shaped
     def bound(self, records: list[Record]) -> list[bool]:
         """
-        Whether each record is of the bound spec: the workspace has a binding
-        with the same name, version, and digest as the record's spec. The
-        outputs of any other record are read as stored data and cannot be
-        referenced
-        (``docs/developer/adr/0009-a-record-of-another-spec-stays-readable.md``).
-        A view asks for the spec of a bound record only::
+        Whether each record is of the bound spec. A view asks for the spec of a
+        bound record only::
 
             for record, bound in zip(records, client.bound(records)):
                 spec = client.spec(record.spec) if bound else None
