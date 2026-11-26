@@ -221,8 +221,9 @@ def typed(frame: pd.DataFrame, model: type[BaseModel]) -> pd.DataFrame:
 
     The index is text, named :data:`KEY`. Each parameter column has the dtype
     of :func:`dtypes`. Each note column has the dtype of ``convert_dtypes()``.
-    A note column without values keeps its dtype, or becomes ``string`` if it
-    is ``float64`` or ``object``. Lists and dicts in cells are copied.
+    A note column without values keeps its dtype if that is ``string``,
+    ``Float64``, ``Int64`` or ``boolean``, else becomes ``string``. Lists and
+    dicts in cells are copied.
 
     Raises ``ValueError`` naming each bad key, column or cell.
     """

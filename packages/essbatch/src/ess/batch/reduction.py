@@ -6,9 +6,10 @@ row, reducing rows, and reading their results.
 
 The state of a row is read from the records under the label, not from what
 this object submitted. So every ``Batch`` of the label, and this one after a
-restart, computes the same state. :class:`LabelRecords` holds the records read
-and follows ``client.changes``, so that the state of some rows does not read
-every record under the label.
+restart, computes the same state, except for a file that gained a catalogue
+identifier after a ``Batch`` cached it (below). :class:`LabelRecords` holds
+the records read and follows ``client.changes``, so that the state of some
+rows does not read every record under the label.
 
 :meth:`Batch.state` compares a row with its result as a record holds both. It
 resolves the settings once per call, and for a row with a result only the

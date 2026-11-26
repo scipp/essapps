@@ -8,7 +8,7 @@ The caller keeps ``seen_keys`` from one step to the next
 
 How a step works: ``packages/essbatch/docs/batch.md``, "Follow".
 Decision: ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
-Cost: ``docs/developer/automatic-reduction.md``, "Cost".
+Cost: ``docs/developer/automatic-reduction.md``, "Why a step reads every file".
 """
 
 from __future__ import annotations

@@ -98,6 +98,7 @@ Any other table is named with what it is of, such as "the rows of a source".
 ### Errors
 
 The batch layer refuses what is asked with `ValueError`, a label that no batch has with `KeyError`, and a write that the definitions refuse with `DefinitionWriteError`.
+`Batch.state` and `Batch.reduce` raise `SubmitError` of `ess.apps` when the workspace rejects the settings or a row.
 
 ## One example followed through
 
@@ -290,7 +291,8 @@ def value(batch, key, p):                 # the value of parameter p for the row
 
 The request of a row is the spec with `value(batch, key, p)` for each parameter `p`.
 In [the batch table](#the-batch-table) with `batch.settings == {'thickness': 1.5, ...}`, row 60339 is reduced with thickness 1.5 and row 60340 with 2.0.
-A parameter without a value (`MISSING`) is the problem `empty` of the row: the row is incomplete, and is not reduced.
+A parameter column without a value (`MISSING`) is the problem `empty` of the row: the row is incomplete, and is not reduced.
+A required parameter without a column, a setting or a default makes the workspace reject the settings: `batch.state` raises `SubmitError`, and no row can run.
 A row added by hand before its transmission run is listed has an empty cell at `sample_transmission`. Without the second branch, it would be reduced with the transmission run of another sample, from the settings.
 A table has no word for `None`: an empty cell takes `None` only by the last branch.
 
@@ -493,8 +495,8 @@ key,sample,thickness,binning,name
 - `table.write_table(table, path)` is the only writer, and `table.read_table(path, spec.params)` the only reader that gives a batch table. `table.read_text(path)` reads a table file as text, without a spec.
 - A list or a group is JSON text. Empty is the only missing marker, so `NA` in a note column is text.
 - `read_table` reads columns with their dtypes, and drops `status`, `record`, `failure` and `published`, which `frames.with_results` adds.
-- A note column of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note column of a `.xlsx` file keeps the type of its cells.
-- A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row takes its setting, or the row is incomplete if there is none.
+- A note column of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note column of a `.xlsx` file keeps the type of its cells if that is text, a number, a whole number or true/false; else it is text.
+- A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row takes its setting, or the settings are rejected if there is none.
 
 ## Chains
 

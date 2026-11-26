@@ -199,7 +199,7 @@ def _repeated(client: Client) -> Stepping:
     return Stepping(batch, source)
 
 
-# The files of the section "The model: tables and one cycle" of the guide, in
+# The files of a sample and its transmission, in
 # the order they arrive: name, run, role, and sample.
 ARRIVALS = [
     ('s1', 1, 'sample', '1'),
