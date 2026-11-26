@@ -53,7 +53,7 @@ The spec must state these choices so that:
 - **The discriminator on the whole union.** pydantic would need a tag on the `Referenced[...]` members.
 - **An exception for groups that only a reference fills**, where `None` means something else. "None" still reads "without X", and an exception is one more thing to teach.
 - **No `X | None` in the spec**, with an empty alternative such as `NoMask`. It puts a concern of sciline bindings into the spec, which `function_binding` and `DriverBinding` do not share.
-- **`X | None` only at a parameter.** A form that shows every `X | None` as a choice removes the reason.
+- **`X | None` only at a parameter**, since a text input at a field of a group cannot tell an empty text from `None`. A form that shows every `X | None` as a choice removes that reason.
 - **`X | None` keyed like a union, `None` setting nothing.** `None` would mean whatever the graph does without `X`.
 - **`X | None` setting `pipeline[X] = None`.** Every provider that uses `X` must then accept `None`.
 - **A `NotSet` type of the framework.** One type for many parameters is one key for all of them.

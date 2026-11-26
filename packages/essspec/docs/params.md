@@ -108,6 +108,8 @@ A list without elements is `[]`, so a list is not typed `list[X] | None`.
 Each element is a value, so the element of a list is not typed `X | None`.
 A list is not of lists. Its element is a group that holds a list, and the group's class states what each inner list is.
 A group does not contain itself, at any depth.
+A field of plain numbers states its unit in its declaration or in a `unit` field beside it, as `RangeModel` and `EdgesModel` do.
+An array carries its own unit.
 
 No type in the params or the outputs is a `NewType` or a type alias (`type X = ...`), at any depth, since a class states what a value is.
 A name assigned a type, such as `RunFile = Annotated[Path, File()]`, is not an alias: it is that type.
@@ -136,7 +138,7 @@ So a workflow that computes an array outputs a group that holds it, such as `Com
 A field that accepts either of two groups is typed `Referenced[A] | Referenced[B]`.
 `Referenced[A | B]` is rejected.
 `T` holds no `Path` and no `Referenced[...]` at any depth, since no output holds either ([Outputs](#outputs)).
-Apart from that, a field of `T` may be of any type, such as `sc.DataArray`.
+Apart from these and the rule on `NewType`s, a field of `T` may be of any type, such as `sc.DataArray`.
 
 `Referenced[T]` is `Annotated[T, REFERENCED]`, so pydantic, the binding and any direct use of the params model see `T`.
 A value that one user types in and another computes is a union of both, and the request picks one member:
