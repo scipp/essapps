@@ -4,14 +4,6 @@
 What an application gives a batch: a :class:`RowSource` makes rows from the
 files.
 
-A row source is code of the application, registered by name with an
-:class:`~.intake.Intake`. Its :data:`RowFunction` takes the files with
-their metadata and returns a frame, the form that ``Batch.set_table`` takes::
-
-    key     run    name         sample      sample_transmission
-    60339   60339  D2O buffer   run:60339   run:60305
-    60340   60340  sample A     run:60340   <NA>
-
 The key of each row as index, as text; a column per parameter that it fills,
 each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and notes,
 such as ``run`` and ``name``. :func:`rows_of` is what a source makes from the
@@ -20,6 +12,8 @@ column that the source fills; until then it is *incomplete*. A batch is made
 from the complete rows, or from a range of them (:class:`Range`), and Follow
 adds the rows that are new and complete (:mod:`~.auto`). A batch never asks its
 source again: how its batch table was made is not part of it.
+
+Guide: ``packages/essbatch/docs/batch.md``, "Writing a row source".
 """
 
 from __future__ import annotations

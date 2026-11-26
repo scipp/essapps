@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The files that a person takes away from a batch. It needs pandas, scipp, and h5py.
+The files that a person takes away from a batch.
 
 :func:`export_table` takes the table that :func:`.frames.reduce_table` returned,
 indexed by key, and writes the result of each completed row to a folder named

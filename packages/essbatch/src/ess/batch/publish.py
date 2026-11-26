@@ -6,11 +6,6 @@ row as one derived dataset (:func:`ess.apps.scicat.publish`), with the files tha
 :class:`~.writing.Writing` writes by the output options of the batch. It needs the extra
 ``scicat``.
 
-A batch keeps one entry of the definitions for this, ``publish``, which only
-the publisher writes (:class:`~.definition.Publishing`): each upload::
-
-    {'published': [{'key': '60339', 'record': '7f3a...', 'pid': 'pid:...'}]}
-
 A result is published if its row reads ``done`` or ``settings changed``: completed,
 and not outdated (:func:`~.state.publishable`). A record is published at
 most once; a newer result of the row is published as a new dataset. Each

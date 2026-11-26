@@ -3,21 +3,8 @@
 """
 Templates as a person writes them: YAML files (see :func:`load_template`).
 
-At a parameter that takes a file, or a list of them, a file is named as in a
-cell of a batch table (:func:`~.table.as_request`)::
-
-    sample: run:60339           the file of that name
-    sample: 60339               the run 60339
-    masks: [path:masks/a.xml]   a file of the workspace's folder, by its identity
-
-A file field inside a group takes the JSON form of a file, as the record holds
-it, since :func:`~.table.as_request` converts the value of a parameter, not of
-a field inside it.
-
-A file that is written before the records it reads exist names them by label
-(see :func:`with_latest`)::
-
-    masks: {'@latest': masks, output: masks}
+How a person writes each kind of value is in :data:`_HOW`, which every
+template to fill in carries.
 
 :func:`settings_text` writes the settings of a batch, those at its parameter
 columns included, as a template, with each file and reference in its JSON form, which

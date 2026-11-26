@@ -11,21 +11,12 @@ files.
 The output options pick a writer by the name of its format, among those the
 application gives for the spec of the batch and
 :data:`~ess.apps.writers.SCIPP_HDF5`, which every spec has, and name what a
-person says of the results (:class:`~ess.apps.writers.DatasetMetadata`). A
-batch keeps its output options in the entry ``output_options`` of the
-definitions, which only :class:`Writing` writes::
-
-    {'format': 'nxcansas', 'outputs': ['iofq'], 'name': '{title} {name}',
-     'description': '', 'keywords': [], 'owner': 'Ada Lovelace',
-     'contact_email': 'ada@example.org'}
+person says of the results (:class:`~ess.apps.writers.DatasetMetadata`).
 
 Output options name their format by the writer's name, not its title, so a title may
 change, but a name changed is one that kept output options lack. Kept output options
 whose format this process lacks, such as a command run without the writers, are refused
 when writing, never written in another format.
-
-The command line gives the output options as a YAML file of their fields,
-which :meth:`Writing.options_text` writes and :func:`load_options` reads.
 """
 
 from __future__ import annotations

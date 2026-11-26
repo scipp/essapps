@@ -3,8 +3,7 @@
 """
 A toolbox for applications that reduce many samples, built on :mod:`ess.apps`.
 
-This package depends on the rest of ``ess.apps``, which knows nothing of it, and
-imports no widget library. The page is in :mod:`ess.batch.web`. The guide
+The page is in :mod:`ess.batch.web`. The guide
 for application developers is ``packages/essbatch/docs/batch.md``.
 """
 

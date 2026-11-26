@@ -145,12 +145,6 @@ of two ways:
 A run corrected on the page (its Runs view) keeps the correction in the folder,
 not in files.csv, and the commands see it too, either way.
 
-reduce on a label without a batch makes the batch: of the rows of --source, of
-a table file, or else of one row keyed by the label; on a label with a batch, a
-template replaces its settings and a table file its batch table. It reduces
-every row that can be, or with --remaining the rows not done. A refused reduce
-makes no batch, but a batch keeps the template and table file given to it.
-
 The status of a row:
     ready             no result yet; it can be reduced, unless the settings are refused
     incomplete        it cannot be reduced: a value is missing, such as an empty cell,
@@ -1256,11 +1250,15 @@ _COMMANDS = {
     ),
     'reduce': _Command(
         _reduce,
-        description='Make the batch of LABEL if it has none, or give it new '
-        'settings and a new batch table; then reduce its rows, every one that '
-        'can be reduced unless --remaining, and write its batch table with the '
-        'columns '
-        'status, record, failure and published. Earlier records stay in the folder.',
+        description='Make the batch of LABEL if it has none: of the rows of '
+        '--source, of the table file TABLE, or else of one row keyed by LABEL. '
+        'For a batch that exists, TEMPLATE replaces its settings and TABLE its '
+        'batch table. Then reduce every row that can be reduced, or with '
+        '--remaining the rows not done, and write the batch table with the '
+        'columns status, record, failure and published. An invalid TEMPLATE or '
+        'TABLE changes nothing. If a row then cannot be submitted, nothing is '
+        'reduced: a new batch is removed again, and a batch that exists keeps '
+        'the TEMPLATE and TABLE given. Earlier records stay in the folder.',
         arguments=_reduce_arguments,
         check=_reduce_check,
         status=_reduced,

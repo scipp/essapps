@@ -2,10 +2,9 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 A batch run as a command: reduce its rows, wait, and return its batch table
-with what came of each row. It needs pandas.
+with what came of each row.
 
-The batch table is the frame of a batch (:mod:`.table`): the key of each row as
-index, a column per blank, and notes. :func:`reduce_table` reduces a table
+:func:`reduce_table` reduces a table
 with a template, keeping nothing; :func:`reduce_batch` reduces the rows of a
 batch, such as one of a manager. Both return the table with the columns of
 :data:`RESULT`, so the table that comes back is the table that went in::
