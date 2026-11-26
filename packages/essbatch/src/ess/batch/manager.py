@@ -284,8 +284,8 @@ class BatchManager:
         parameter of the name of a note, refuses the cells of the batch table, and
         the batch cannot be shown either.
 
-        The blanks of the settings kept are the parameters that the source of
-        the batch filled when it was made (:attr:`.reduction.Batch.source_columns`).
+        The blanks of the settings kept are the source columns of the batch
+        (:attr:`.reduction.Batch.source_columns`).
         """
         if (batch := self._batches.get(label)) is not None:
             return batch

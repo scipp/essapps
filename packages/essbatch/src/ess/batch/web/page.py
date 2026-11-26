@@ -113,7 +113,7 @@ no action to let a stopped batch follow again
 not follow has no action of Follow. While a batch follows, :meth:`Pages.tick
 <.pages.Pages.tick>` steps it every ``interval`` seconds
 (:meth:`~ess.batch.Intake.step`), which adds the rows of its
-source that are new and filled, and reduces the rows that
+source that are new and complete, and reduces the rows that
 :func:`~ess.batch.not_reduced` gives, the rows that are ready and have
 no result, under the lock of all pages, with the batch's settings, whatever
 the form holds; then :meth:`Page.after_step` shows what the step changed, if

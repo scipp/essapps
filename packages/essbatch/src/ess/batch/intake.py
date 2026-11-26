@@ -43,7 +43,7 @@ from .auto import SourceError, Step
 from .definition import SOURCE, DefinitionWriteError, FromSource
 from .manager import BatchManager
 from .reduction import Batch
-from .source import Range, RowSource, filled, rows_of
+from .source import Range, RowSource, complete, rows_of
 
 
 def fits(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> bool:
@@ -209,7 +209,7 @@ class Intake:
         """
         found = self._source(source)
         given = rows_of(self.manager.client, found)
-        waits = ~filled(given, found.source_columns)
+        waits = ~complete(given, found.source_columns)
         arrived = given[~waits]
         taken = arrived.index if choose is None else choose(arrived).index
         return given.assign(waits=waits, taken=given.index.isin(taken))
@@ -233,7 +233,7 @@ class Intake:
         its ``Batch``. The source is listed once::
 
             given = rows_of(client, source)
-            arrived = given[filled]          # a value in each of source.source_columns
+            arrived = given[complete]        # a value in each of source.source_columns
             rows = arrived if choose is None else choose(arrived)
             considered = arrived.index       # the rows taken and those left out
 
@@ -284,7 +284,7 @@ class Intake:
                 f'source {source} fills'
             )
         given = rows_of(self.manager.client, found)
-        arrived = given[filled(given, found.source_columns)]
+        arrived = given[complete(given, found.source_columns)]
         rows = arrived if choose is None else choose(arrived)
         _check_chosen(rows, arrived)
         before = self.following
@@ -371,15 +371,15 @@ class Intake:
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, if its source is not registered, or
-        raises ``ValueError``, or no longer gives a column of the batch's
-        fills (:func:`~.source.filled`).
+        raises ``ValueError``, or no longer gives a source column of the batch
+        (:func:`~.source.complete`).
         """
         made = self._made(label)
         source = self._source(made.source)
         batch = self.manager.batch(label)
         try:
             given = rows_of(self.manager.client, source)
-            waits = ~filled(given, batch.source_columns)
+            waits = ~complete(given, batch.source_columns)
         except ValueError as error:  # as step says it
             raise ValueError(
                 f'the source {made.source}: {error_text(error)}'

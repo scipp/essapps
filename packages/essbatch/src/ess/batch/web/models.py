@@ -179,7 +179,7 @@ class SubmitProblem(BaseModel):
 class Following(BaseModel):
     """
     Whether the batch of the page follows its source, ``on``: a step every
-    ``interval`` seconds adds the rows of the source that are new and filled,
+    ``interval`` seconds adds the rows of the source that are new and complete,
     and reduces the rows not reduced yet: ready and without a result.
     ``source`` names the source that the batch was made from, ``None`` if it
     was made without one, so that it offers no rows of a source.
@@ -458,8 +458,8 @@ class Reduce(BaseModel):
 
 class NewBatch(BaseModel):
     """
-    Make a batch of ``spec``: with a ``source``, of the rows that the source
-    has filled now from the row of key ``first`` to that of ``last``, or of
+    Make a batch of ``spec``: with a ``source``, of the rows of the source
+    complete now from the row of key ``first`` to that of ``last``, or of
     none of them if ``later``, so that it gets only the rows added later
     (:class:`~ess.batch.Range`); without, of no rows, or of those of a
     table file. ``parameter_columns`` are the parameter columns, those that

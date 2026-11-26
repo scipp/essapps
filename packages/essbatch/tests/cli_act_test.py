@@ -44,7 +44,7 @@ def test_reduce_with_a_source_makes_a_batch_of_the_rows_picked(
 @pytest.mark.parametrize(
     ('pick', 'said'),
     [
-        (['--first', '9'], '9 is not a filled row'),
+        (['--first', '9'], '9 is not a complete row'),
         (['--first', '3', '--last', '2'], 'the row 3 comes after the row 2'),
         (['--later', '--first', '2'], 'arrive later has no first or last'),
     ],

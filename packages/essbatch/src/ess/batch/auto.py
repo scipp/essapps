@@ -22,7 +22,7 @@ from ess.apps.errors import SubmitError, error_text
 from ess.apps.records import Record
 
 from .reduction import Batch
-from .source import RowSource, filled, rows_of
+from .source import RowSource, complete, rows_of
 from .state import not_reduced
 
 
@@ -44,11 +44,11 @@ def added(
     and the keys of the rows that wait.
 
     A row is added if its key is neither considered nor in ``table`` and it
-    is filled: it has a value in each of ``source_columns``. A row with such a key
-    that is not filled waits.
+    is complete: it has a value in each of ``source_columns``. A row with such a key
+    that is not complete waits.
     """
     is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
-    is_ready = filled(given, source_columns)
+    is_ready = complete(given, source_columns)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     return new, given.index[is_new & ~is_ready]
 
@@ -73,7 +73,7 @@ class Step:
         ready as given, also a row whose cell would be refused, since no cell
         is resolved then.
     waiting:
-        The keys of the new rows that are not filled yet.
+        The keys of the new rows that are not complete yet.
     records:
         The records of the rows reduced, by key.
     """
@@ -87,7 +87,7 @@ class Step:
 
 def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     """
-    Add the rows of ``source`` that are new and filled to ``batch``, then
+    Add the rows of ``source`` that are new and complete to ``batch``, then
     reduce the rows of :func:`~.state.not_reduced`. A row whose request is
     refused does not hold back the others: :attr:`Step.submit_errors` says why.
 

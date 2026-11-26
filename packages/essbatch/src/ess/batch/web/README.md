@@ -40,7 +40,7 @@ Each change of rows on the page, an edit of cells, **+ Add row**, **Remove selec
 A run chosen in a cell is kept as the text of its file (`table.cell_of`).
 **Load table** replaces the whole batch table, its columns too; the page then shows the cells and the settings form of the parameter columns loaded.
 It is refused while the settings form holds a change, which the new form would drop, as "Make this a column" and "Make this a setting" are.
-**+ Add rows from the runs**, on the page of a batch made from a row source, lists the rows of the source that the batch table lacks (`Intake.offered`): those left out when the batch was made, those removed, those that wait for a run, marked, and, in a batch that does not follow, those filled after it was made or after it stopped.
+**+ Add rows from the runs**, on the page of a batch made from a row source, lists the rows of the source that the batch table lacks (`Intake.offered`): those left out when the batch was made, those removed, those that wait for a run, marked, and, in a batch that does not follow, those complete after it was made or after it stopped.
 The rows a person picks are added as the source makes them now (`Intake.take`), and Follow does not add them again once removed; so a removed row comes back this way.
 
 "Make this a column", at a setting in the Settings tab, makes the parameter a column with an empty cell in each row (`Batch.make_column`); it is offered only for a parameter that has no column and whose cell the page edits.
@@ -92,7 +92,7 @@ done.submit_errors     # why a row could not be submitted, by key
 done.waiting           # the keys of the rows of the source not filled yet
 ```
 
-It adds the rows of the source that the batch has not considered and that are filled, and reduces the rows that are ready and have no result (`ess.batch.not_reduced`).
+It adds the rows of the source that the batch has not considered and that are complete, and reduces the rows that are ready and have no result (`ess.batch.not_reduced`).
 A row that waits for a run is added at the first step after the run arrives; the page of the batch that follows says how many rows wait.
 A row that a person removed is not added again.
 A step changes no row that the batch table has: a run that arrives later, or a correction in the Runs view, leaves the cells as they are.
@@ -162,15 +162,15 @@ The page remembers in the session of the browser, so that a reload or a return t
 |---|---|
 | Title, Description | the header of the batch; the title is required |
 | Rows | from a row source that the application registers (`Intake(sources=...)`), from a table file, or "none: no rows" |
-| Range | with a row source: the first and the last row to take, each open if not chosen, among the rows that the source has filled now (`Range`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; below it, the rows of the source, each marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
+| Range | with a row source: the first and the last row to take, each open if not chosen, among the rows of the source complete now (`Range`); or, as the last choice of "From", no row now (`later`): the batch gets only the rows added later, by Follow if ticked, else with **+ Add rows from the runs**; below it, the rows of the source, each marked by the server as taken, left out, or waiting (`GET api/sources/rows?name=...&first=...&last=...&later=...`) |
 | Table file | from a table file: a `.csv`, `.tsv` or `.xlsx` file with a column `key` (`table.read_table`) |
 | Workflow | a spec that the workspace binds and that has a parameter for each column that the row source fills; any spec without a row source |
 | Settings | on the page of a batch: start with the settings of that batch, else with those that the application gives; a setting at a parameter column ticked stays, and each row whose cell is empty takes it, also a row that Follow adds; a parameter column that the row source fills gets no setting |
-| Follow | with a row source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows filled between it and the making for good; the `Intake` refuses a last row with Follow (`Intake.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
+| Follow | with a row source: add the rows that arrive later, and reduce them; off unless ticked. While ticked, the end of the range is open and cannot be chosen, since a last row would leave out the rows complete between it and the making for good; the `Intake` refuses a last row with Follow (`Intake.create`). Beside it, how many rows taken are reduced at once, and the batch that follows now, which stops following if ticked |
 | Columns | the parameter columns that the row source fills, fixed; the other parameters of the spec whose cell the page edits, to tick (a group of fields, such as a Q binning, stays a setting); none for a table file, whose columns are those of the file |
 
 **Make** sends the form to `POST api/batches`, or the file to `POST api/batches/table`, and the page shows the new batch in the Rows view.
-With a row source, the batch holds the rows of the range that the source has filled now, with an empty parameter column for each column ticked that the source does not fill; a row that waits cannot be taken; if the batch follows, Follow adds it once filled, as it adds those that arrive later.
+With a row source, the batch holds the rows of the range of the source complete now, with an empty parameter column for each column ticked that the source does not fill; a row that waits cannot be taken; if the batch follows, Follow adds it once complete, as it adds those that arrive later.
 A table file refused, or empty, is named as the person chose it.
 From a table file, the batch has no row source; a column of the file named as no parameter is a note column, so a misspelt column is a note, and the parameter it meant is a setting that the settings form asks for.
 Without a row source, the batch holds no rows and the parameter columns ticked; rows are added on its page or by **Load table**.

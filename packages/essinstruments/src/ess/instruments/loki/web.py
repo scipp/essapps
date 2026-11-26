@@ -124,8 +124,8 @@ def build(
     The pages of the batches of ``client``, kept in ``definitions``, with a
     step of Follow every ``interval`` seconds while a batch follows. A new
     batch of I(Q) starts with ``settings``. If no batch is listed, a batch is
-    made from the source ``first`` (:data:`FIRST_BATCHES`), with the rows it has
-    filled now, so also at a start after a person removed the last one; it
+    made from the source ``first`` (:data:`FIRST_BATCHES`), with its rows that are
+    complete now, so also at a start after a person removed the last one; it
     follows from the start if ``follow``. A folder with only the
     detector and the masks that the command reduced has batches, so a person
     makes the batch of I(Q) with "New batch".

@@ -57,7 +57,7 @@ def made(intake: Intake, sample: Measure) -> Intake:
     return intake
 
 
-def test_a_batch_made_from_a_source_takes_and_considers_its_filled_rows(
+def test_a_batch_made_from_a_source_takes_and_considers_its_complete_rows(
     made: Intake, definitions: FolderDefinitions
 ) -> None:
     kept = SOURCE.load(definitions, 'a')
@@ -139,7 +139,7 @@ def four(intake: Intake, sample: Measure) -> Intake:
     ],
     ids=['from', 'to', 'one', 'later'],
 )
-def test_a_range_takes_the_filled_rows_between_its_ends_and_considers_all(
+def test_a_range_takes_the_complete_rows_between_its_ends_and_considers_all(
     four: Intake,
     definitions: FolderDefinitions,
     chosen: Range,
@@ -155,7 +155,7 @@ def test_a_range_takes_the_filled_rows_between_its_ends_and_considers_all(
 @pytest.mark.parametrize(
     ('chosen', 'said'),
     [
-        (Range(first='3'), '3 is not a filled row'),
+        (Range(first='3'), '3 is not a complete row'),
         (Range('2', '1'), 'the row 2 comes after the row 1'),
     ],
     ids=['waits', 'reversed'],
@@ -188,7 +188,7 @@ def test_a_batch_of_the_rows_that_arrive_later_that_follows_gets_only_those(
     assert list(batch.frame().index) == ['3', '5']
 
 
-def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_filled(
+def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_complete(
     intake: Intake, fake: FakeFiles, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -602,7 +602,7 @@ def test_a_stopped_batch_gets_no_rows_at_a_step(
     assert intake.offered('a')['waits'].to_dict() == {'2': False}
 
 
-def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_filled_since(
+def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_complete_since(
     intake: Intake, sample: Measure
 ) -> None:
     sample(1, 'water')

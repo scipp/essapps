@@ -326,7 +326,7 @@ class Pages:
         manager (:meth:`~ess.batch.BatchManager.create`), so that a
         refusal leaves no batch: with a source, of the rows of the
         :class:`~ess.batch.Range` of ``new.first``, ``new.last`` and
-        ``new.later`` of those that the source has filled now, with an empty
+        ``new.later`` of the rows of the source complete now, with an empty
         column for each other of ``new.columns``; with a table ``file``, its
         name and content, of its rows
         (:func:`~ess.batch.table.read_table`); else of a batch table of

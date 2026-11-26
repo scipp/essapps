@@ -15,10 +15,10 @@ their metadata and returns a frame, the form that ``Batch.put`` takes::
 The key of each row as index, as text; a column per parameter that it fills,
 each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and
 notes, such as ``run`` and ``name``. :func:`rows_of` is what a source makes
-from the files now. A row is *filled* (:func:`filled`) once it has a value
+from the files now. A row is *complete* (:func:`complete`) once it has a value
 in each column that the source fills; until then it *waits*. A batch is made
-from the filled rows, or from a range of them (:class:`Range`), and Follow
-adds the rows that are new and filled (:mod:`~.auto`). A batch never asks
+from the complete rows, or from a range of them (:class:`Range`), and Follow
+adds the rows that are new and complete (:mod:`~.auto`). A batch never asks
 its source again: how its batch table was made is not part of it.
 """
 
@@ -109,17 +109,17 @@ def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     return typed(frame.assign(**empty), BaseModel)
 
 
-def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
+def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     """
     Whether each row of ``given`` has a value in each of ``columns``, such as
     the columns that a source fills: a row that has not waits. Raises
     ``ValueError`` if ``given`` lacks one of ``columns``, as when the code of
-    a source no longer fills a column that a batch keeps as filled by it.
+    a source no longer fills a column that a batch keeps as a source column.
     """
     if lacking := [c for c in columns if c not in given.columns]:
         raise ValueError(
             f'it no longer gives the column {", ".join(sorted(lacking))} that '
-            'the batch keeps as filled by it'
+            'the batch keeps as a source column'
         )
     return given[list(columns)].notna().all(axis=1)
 
@@ -127,10 +127,10 @@ def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
 @dataclass(frozen=True)
 class Range:
     """
-    Which rows a new batch takes of those that its source has filled now, as
+    Which rows a new batch takes of the rows of its source complete now, as
     a person picks them, given as ``choose`` to
     :meth:`~.intake.Intake.create` and
-    :meth:`~.intake.Intake.marked`: called on the filled rows, it gives
+    :meth:`~.intake.Intake.marked`: called on the complete rows, it gives
     the rows from the row of key ``first`` to the row of key ``last``, both
     included, in their order; an end not given is open. With ``later``, it
     gives none, so that the batch gets only the rows added later, by Follow
@@ -139,10 +139,10 @@ class Range:
     Raises ``ValueError`` for ``later`` with an end; called, for an end that
     is not a key of the rows given, and for a ``first`` after the ``last``.
     ``create`` refuses a ``Range`` with a ``last`` and ``follow``: the rows
-    filled between the last row and the making would be considered, so
+    complete between the last row and the making would be considered, so
     Follow would never add them, but would add the rows that arrive later.
     A ``choose`` that is a function may pick any rows, also with
-    ``follow``: a person chose them in code, and the filled rows that it
+    ``follow``: a person chose them in code, and the complete rows that it
     leaves out are considered, so Follow adds only what arrives later.
     """
 
@@ -162,7 +162,7 @@ class Range:
         first, last = self.first, self.last
         for end in (first, last):
             if end is not None and end not in arrived.index:
-                raise ValueError(f'{end} is not a filled row')
+                raise ValueError(f'{end} is not a complete row')
         start = 0 if first is None else arrived.index.get_loc(first)
         stop = len(arrived) if last is None else arrived.index.get_loc(last) + 1
         if first is not None and last is not None and stop <= start:

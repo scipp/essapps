@@ -165,7 +165,7 @@ The status of a row:
     cancelled         the reduction was cancelled
 
 follow -l water: water follows its row source, with a step every --interval
-seconds (5). A step adds the rows of the source that are filled and not
+seconds (5). A step adds the rows of the source that are complete and not
 considered (not one that a person removed or left out), and reduces each row
 that is ready and has no result. It never changes a row of the batch table: a
 row added with the transmission run that was newest then keeps it when a newer
@@ -535,8 +535,8 @@ def _reduce(given: _Context) -> pd.DataFrame:
     (:meth:`~.manager.BatchManager.create`) of the template's spec, with the
     label as title; with ``--source``, the intake makes it
     (:meth:`~.intake.Intake.create`). Its batch table is the table file given
-    (:func:`.table.read_table`), or the rows that the source ``--source`` has
-    filled now, those that ``--first``, ``--last`` and ``--later`` pick
+    (:func:`.table.read_table`), or the rows of the source ``--source`` that are
+    complete now, those that ``--first``, ``--last`` and ``--later`` pick
     (:class:`~.source.Range`), not both; without either, one row keyed by the
     label. With ``--source``, the batch keeps its source, so that ``offered``
     and its page offer the rows of the source that its batch table lacks; it
@@ -815,7 +815,7 @@ def follow(
                     first step count too
         failure     why each of those failed or was cancelled, by key
         refused     why each row could not be submitted, by key
-        waiting     the rows of the source that are not filled yet
+        waiting     the rows of the source that are not complete yet
 
         error       why the step raised, ``None`` if it did not
 
@@ -1021,8 +1021,8 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         '--source',
         metavar='NAME',
-        help='make a new batch of the rows that the row source NAME in '
-        '-s/--sources has filled now; not with a table file',
+        help='make a new batch of the rows of the row source NAME in '
+        '-s/--sources that are complete now; not with a table file',
     )
     command.add_argument(
         '--first', metavar='KEY', help='with --source, the rows from the row KEY on'
@@ -1033,8 +1033,8 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         '--later',
         action='store_true',
-        help='with --source, no rows now: follow adds the rows filled from now '
-        'on, take any',
+        help='with --source, no rows now: follow adds the rows that are '
+        'complete from now on, take any',
     )
     command.add_argument(
         '--staged',
@@ -1298,7 +1298,7 @@ _COMMANDS = {
         description='List the rows that the row source of the batch of LABEL '
         'makes now and its batch table lacks, with a column waits: whether a '
         'parameter that the source fills is empty. follow adds a row once it '
-        'is filled, unless the batch left it out when made or a person '
+        'is complete, unless the batch left it out when made or a person '
         'removed it; take adds any.',
         arguments=_show_arguments,
         check=_with_sources('offered'),
@@ -1319,7 +1319,7 @@ _COMMANDS = {
         description='Let the batch of LABEL follow its row source, in place '
         'of the batch that followed, and do a step every SECONDS until Ctrl-C '
         'or SIGTERM, or for N steps; then wait for the reductions that run. '
-        'A step adds the rows of the source that are filled and not '
+        'A step adds the rows of the source that are complete and not '
         'considered, and reduces the rows that are ready and have no result. '
         'It writes a line per step that did something, an object with --json. '
         'The batch still follows when it exits: stop ends that.',

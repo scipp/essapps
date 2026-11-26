@@ -1450,8 +1450,8 @@ def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
     assert (answer.status_code, answer.json()['message']) == (
         422,
         'The rows of the source cannot be listed: the source pairs: it no '
-        'longer gives the column transmission that the batch keeps as filled '
-        'by it.',
+        'longer gives the column transmission that the batch keeps as a source '
+        'column.',
     )
 
 
@@ -2146,7 +2146,7 @@ def test_a_source_that_no_spec_fits_is_not_offered_and_no_source_always_is(
     assert [s['name'] for s in offered] == [None]
 
 
-def test_a_batch_made_from_a_source_has_every_row_it_filled_and_the_columns_sent(
+def test_a_batch_made_from_a_source_has_every_complete_row_and_the_columns_sent(
     http: TestClient, pages: Pages, manager: BatchManager
 ) -> None:
     sent = new_batch(
@@ -2244,7 +2244,7 @@ def test_the_rows_of_a_source_are_marked_as_a_range_takes_them(
 @pytest.mark.parametrize(
     ('ends', 'said'),
     [
-        ({'first': '3'}, '3 is not a filled row'),
+        ({'first': '3'}, '3 is not a complete row'),
         ({'first': '2', 'last': '1'}, 'the row 2 comes after the row 1'),
     ],
     ids=['waits', 'reversed'],

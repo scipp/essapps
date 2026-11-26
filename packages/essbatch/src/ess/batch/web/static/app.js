@@ -574,7 +574,7 @@ async function show(url, page, how) {
 
 // The form "New batch". The server says what a batch can be made with
 // (api/sources) and decides what can be made: a refusal shows at the form.
-// The rows come from a source, a range of those that it has filled now; from
+// The rows come from a source, a range of those complete now; from
 // a table file; or none. Opened on the page of a batch, the form starts at
 // that batch's source, workflow, columns and settings, so that the next batch
 // is this form with a range that starts later. A batch from a source may
@@ -703,7 +703,7 @@ function chooseSpec() {
 }
 
 // The rows that the source makes now, for the range; the first and the last
-// row are chosen among those that are filled.
+// row are chosen among those that are complete.
 async function loadSourceRows(name) {
   const {elements} = $('new-batch');
   sourceRows = null;
@@ -711,14 +711,14 @@ async function loadSourceRows(name) {
   drawRange();
   const loaded = await markRange(name);
   if (!loaded) return;
-  const filled = loaded.rows.filter((row) => row.mark !== 'waits');
+  const complete = loaded.rows.filter((row) => row.mark !== 'waits');
   const option = (row) => h('option', {value: row.key, text: row.name === row.key ? row.key : `${row.name} (${row.key})`});
   elements.first.replaceChildren(
     h('option', {value: '', text: 'the first'}),
-    ...filled.map(option),
+    ...complete.map(option),
     h('option', {value: '', 'data-later': true, text: 'no row now'}),
   );
-  elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...filled.map(option));
+  elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...complete.map(option));
   chooseFollow();
 }
 

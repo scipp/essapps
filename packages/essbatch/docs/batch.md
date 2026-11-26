@@ -75,9 +75,9 @@ Nothing in the batch layer imports the page or the command.
 | batch table | the rows of a batch, one per reduction: one `pandas.DataFrame` (below) |
 | result of a row | the newest record under the label with the row's key as member |
 | row source | code of the application that makes rows from the files (a `RowSource`) |
-| filled, waits | a row of a source is filled once it has a value in each parameter that the source fills (`RowSource.source_columns`, kept as `batch.source_columns`); until then it waits |
+| complete, waits | a row of a source is complete once it has a value in each parameter that the source fills (`RowSource.source_columns`, kept as `batch.source_columns`); until then it waits |
 | considered | the keys of its source that a batch has taken, left out when it was made, or had in its batch table at a step (`source.json`) |
-| Follow, the batch that follows | Follow is a step every few seconds on the batch that follows (`intake.following`): add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result |
+| Follow, the batch that follows | Follow is a step every few seconds on the batch that follows (`intake.following`): add the rows of its source that are complete and not considered, then reduce the rows that are ready and have no result |
 
 The value and the request of a row are defined in [The request of a row](#the-request-of-a-row); its state, `outdated` and `settings changed` in [The state of a row](#the-state-of-a-row-and-the-rules-over-it).
 
@@ -170,10 +170,10 @@ batch = intake.create('loki-iofq', title='Afternoon', source='sample-runs',
                       follow=True)
 ```
 
-`intake.create` lists the source once and gives `choose` the rows that are filled; a `Range` picks those from 60339 on. In code, `choose` may be any function that picks rows and adds columns.
+`intake.create` lists the source once and gives `choose` the rows that are complete; a `Range` picks those from 60339 on. In code, `choose` may be any function that picks rows and adds columns.
 On disk: `header.json`, `settings.json`, `rows.json` with rows 60339 and 60340, and `source.json` with `considered` = 60337 to 60340 and `"follows": true`.
 Rows 60337 and 60338 are considered and not in the batch table: they were left out when the batch was made, so Follow never adds them.
-A row that waits when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor considered: Follow adds it once it is filled.
+A row that waits when the batch is made, such as a sample run whose transmission run is not listed yet, is neither taken nor considered: Follow adds it once it is complete.
 
 **2. A person edits a cell and reduces.**
 
@@ -244,11 +244,11 @@ evening = intake.create('loki-iofq', title='Evening', source='sample-runs',
 
 No row moves between batches.
 `afternoon` keeps its rows, also those from 60400 on that it added before, until a person removes them.
-`intake.follow('afternoon')` would let it follow again, in place of `evening`: its next step would add every filled row it has not considered, also those that `evening` took.
-A batch that follows has no last row: the rows filled between a last row and the making would never be added.
-`intake.create` refuses `follow=True` with a `Range` that has a `last` (see [From a row source](#from-a-row-source)); a function as `choose` may pick any rows, and the filled rows it leaves out are considered.
+`intake.follow('afternoon')` would let it follow again, in place of `evening`: its next step would add every complete row it has not considered, also those that `evening` took.
+A batch that follows has no last row: the rows complete between a last row and the making would never be added.
+`intake.create` refuses `follow=True` with a `Range` that has a `last` (see [From a row source](#from-a-row-source)); a function as `choose` may pick any rows, and the complete rows it leaves out are considered.
 For a batch of only the rows that arrive from now on, `choose` takes none: `choose=Range(later=True)`.
-Every row filled now is then considered, and none is reduced again.
+Every row complete now is then considered, and none is reduced again.
 
 ## Writing a row source
 
@@ -524,7 +524,7 @@ intake.source(batch.label)               # 'sample-runs'; None for a batch made 
 
 ```python
 given = rows_of(client, source)
-arrived = given[filled]                  # a value in each of source.source_columns
+arrived = given[complete]                # a value in each of source.source_columns
 table = arrived if choose is None else choose(arrived)
 considered = arrived.index               # the rows taken and those left out
 batch = manager.create(spec, rows=table, source_columns=source.source_columns, ...)
@@ -533,7 +533,7 @@ batch = manager.create(spec, rows=table, source_columns=source.source_columns, .
 ```
 
 `Range` refuses an end that is not a key of the rows that arrived (a row that waits is not one), a first row after the last, and an end with `later=True`.
-`intake.create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the filled rows it leaves out are considered.
+`intake.create` refuses a `Range` with a `last` and `follow=True`; a function as `choose` picks any rows, also with `follow=True`, and the complete rows it leaves out are considered.
 It refuses a source that is not registered, a source that fills a parameter that the spec lacks (`fits`), and a key from `choose` that is not in `arrived`, and refuses as `manager.create` does.
 It checks the label, the title and the spec first, with `manager.check`, then the source and whether the spec fits it, so these refusals come before the source is listed.
 If the process stops while a batch that follows is made, the batch may be there and no batch follow (see [What is kept on disk](#what-is-kept-on-disk)).
@@ -594,7 +594,7 @@ sequenceDiagram
     step->>source: rows_of(client, source)
     Note over source: lists the files
     source-->>step: given: every row the source makes now
-    Note over step: new: not considered, not in the batch table, filled. Waiting: not filled yet.
+    Note over step: new: not considered, not in the batch table, complete. Waiting: not complete yet.
     opt rows are new
         step->>batch: put(table + new)
         batch->>definitions: write rows.json

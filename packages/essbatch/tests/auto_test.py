@@ -145,7 +145,7 @@ def table(**rows: dict[str, Any]) -> pd.DataFrame:
     return frame.rename_axis(KEY)
 
 
-def test_a_step_adds_the_rows_new_and_filled_with_the_columns_of_the_table() -> None:
+def test_a_step_adds_the_rows_new_and_complete_with_the_columns_of_the_table() -> None:
     held = table(a={'sample': 's', 'transmission': 't'})
     given = table(
         a={'sample': 's2', 'transmission': 't', 'note': 1},
@@ -160,7 +160,7 @@ def test_a_step_adds_the_rows_new_and_filled_with_the_columns_of_the_table() -> 
     assert list(waiting) == ['c']
 
 
-def test_a_row_waits_until_it_is_filled_and_is_not_in_the_table(
+def test_a_row_waits_until_it_is_complete_and_is_not_in_the_table(
     client: Client, fake: FakeFiles
 ) -> None:
     loop = _repeated(client)
@@ -211,7 +211,7 @@ ARRIVALS = [
 ]
 
 
-def test_a_row_is_added_once_filled_and_not_changed_when_its_files_change(
+def test_a_row_is_added_once_complete_and_not_changed_when_its_files_change(
     client: Client, fake: FakeFiles
 ) -> None:
     loop = _repeated(client)

@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 Follow on the page of a batch: a step of the batch that follows adds the rows
-of its source that are new and filled, and reduces the rows not reduced yet.
+of its source that are new and complete, and reduces the rows not reduced yet.
 The tests call :meth:`Pages.tick` in place of the timer, except one, which
 runs the app's timer.
 """
@@ -98,7 +98,7 @@ def test_a_step_shows_new_rows_and_runs_and_reduces_them(
     assert statuses(done(page, client)) == {'water': 'done'}
 
 
-def test_a_row_that_waits_is_added_and_reduced_once_it_is_filled(
+def test_a_row_that_waits_is_added_and_reduced_once_it_is_complete(
     page: Page, client: Client, sample: Measure, fake: FakeFiles
 ) -> None:
     sample(1, 'oil', partner=False)

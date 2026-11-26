@@ -23,15 +23,15 @@ To do the third, a batch has to know who wrote each cell. To do the first withou
 
 ## Decision
 
-**A batch made from a source keeps the name of the source and the keys it has considered. A step of Follow adds the rows of the source whose keys are not considered, once the source has filled them, and never changes a row that the table has.**
+**A batch made from a source keeps the name of the source and the keys it has considered. A step of Follow adds the rows of the source whose keys are not considered, once they are complete, and never changes a row that the table has.**
 
 ```python
 def step(batch, source, considered):
     given = rows_of(batch.client, source)                  # every row the source makes from the files now
     table = batch.frame()
-    filled = list(batch.source_columns)                             # source.source_columns as at making; each is a column of the table
+    columns = list(batch.source_columns)                   # source.source_columns as at making; each is a column of the table
     is_new = ~given.index.isin(considered) & ~given.index.isin(table.index)
-    is_ready = given[filled].notna().all(axis=1)
+    is_ready = given[columns].notna().all(axis=1)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     batch.put(pd.concat([table, new]))                     # ADR 0012: the table is changed with `put`
     considered |= set(new.index) | (set(given.index) & set(table.index))   # kept, after the table is
@@ -45,7 +45,7 @@ def step(batch, source, considered):
 definitions/labels/20261118-130204/source.json     {"source": "sample-runs", "considered": ["60337", "60338", "60339"], "follows": true}
 ```
 
-- A key is *considered* by a batch once a row of that key was put into the batch from the source, or was filled and left out when the batch was made.
+- A key is *considered* by a batch once a row of that key was put into the batch from the source, or was complete and left out when the batch was made.
 - A key of the source that the table has is considered, whoever added the row, and each step keeps it so. So a step that stops between writing the table and writing `source.json` adds no row twice, and a row that a person added by hand with a key that the source gives later stays away once removed.
 - A batch made without a source, such as one from a table file, has no `source.json` and cannot follow.
 
@@ -69,7 +69,7 @@ The key of a row that grows must name its list, since a step adds a row only und
 
 What removes a bad run from the later rows is a correction of the run, which the source reads.
 
-### A row waits until the source has filled it
+### A row waits until it is complete
 
 A source says which columns it fills (`RowSource.source_columns`, such as `sample` and `sample_transmission`), and a batch made from it keeps them as `batch.source_columns`. A row is added once it has a value in each of `batch.source_columns`. Until then it is *waiting*: the source gives it again at every step, and the page says how many rows wait.
 
@@ -80,7 +80,7 @@ A source says which columns it fills (`RowSource.source_columns`, such as `sampl
 
 ### Making a batch from a source
 
-`create` lists the source once, and a person chooses the table of the batch from the rows that are filled:
+`create` lists the source once, and a person chooses the table of the batch from the rows that are complete:
 
 ```python
 intake.create('loki-iofq', title='Afternoon', source='sample-runs',
@@ -89,21 +89,21 @@ intake.create('loki-iofq', title='Afternoon', source='sample-runs',
 
 # in create:
 given = rows_of(client, source)                  # one listing
-arrived = given[filled]                          # the rows that have a value in each of source.source_columns
+arrived = given[complete]                        # the rows that have a value in each of source.source_columns
 table = arrived if choose is None else choose(arrived)
 considered = arrived.index                       # the rows taken and the rows left out
 ```
 
-- A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is filled, if the batch follows.
+- A row that waits when the batch is made is neither taken nor considered. It keeps waiting, and Follow adds it once it is complete, if the batch follows.
 - A person picks a range of `arrived`: `Range(first, last, later)`, a value that `create` calls as `choose` and reads, each end open if not given, or no row now with `later`. `parameter_columns` adds an empty column for each parameter named, such as the thickness.
-- In code, `choose` may be any function that gives rows of `arrived`, with any columns, such as `lambda given: given[given.run >= 60339]`; `create` refuses a key that `arrived` lacks. Without `choose`, every filled row is taken as the source gives it.
+- In code, `choose` may be any function that gives rows of `arrived`, with any columns, such as `lambda given: given[given.run >= 60339]`; `create` refuses a key that `arrived` lacks. Without `choose`, every complete row is taken as the source gives it.
 - A batch made from a source takes no `rows`: its rows come from the one listing, so no file listed in between is considered without being seen.
 
 No scope is kept: "from run 60339 on" is the choice of rows at making, and what arrives later is what Follow adds.
 
 ### A person adds rows of the source
 
-"Add rows from the runs" shows the rows that the source gives and the table lacks: the rows that wait, the rows left out at making, the rows a person removed, and, in a batch that does not follow, the rows filled after it was made or after it stopped. A person sees what they take, so the rows taken may be incomplete or waiting. The person picks rows, and they are put into the table as the source gives them now. This is also how a removed row is brought back.
+"Add rows from the runs" shows the rows that the source gives and the table lacks: the rows that wait, the rows left out at making, the rows a person removed, and, in a batch that does not follow, the rows complete after it was made or after it stopped. A person sees what they take, so the rows taken may be incomplete or waiting. The person picks rows, and they are put into the table as the source gives them now. This is also how a removed row is brought back.
 
 ### What a step reduces
 
@@ -124,7 +124,7 @@ intake.create('loki-iofq', title='Evening', source='sample-runs',
 
 The earlier batch keeps its rows, also those from 60400 on, until a person removes them. It has considered the keys it has seen, and takes no row that arrives later while it does not follow.
 
-A batch of only the rows that arrive later takes no row at making. Every row filled then is considered, so no row is reduced again:
+A batch of only the rows that arrive later takes no row at making. Every row complete then is considered, so no row is reduced again:
 
 ```python
 intake.create('loki-iofq', title='Night', source='sample-runs',
@@ -149,8 +149,8 @@ essbatch stop                                       # none follows
 
 - At most one batch follows, as in ADR 0011: `Intake` keeps whether a batch follows in its `source.json`, a restart resumes, and removing that batch ends Follow. Since `considered` is kept, the first step after a restart adds the rows that arrived in between.
 - A batch made without a source cannot follow: only `intake.create`, which takes a source, takes `follow=True`, and `intake.follow` refuses a batch without one.
-- A batch that follows again adds at its next step every row of its source that is filled and not considered: those that arrived while it did not follow, also those that another batch took meanwhile. A row left out when it was made, or removed by a person, stays out, since its key is considered.
-- A batch that follows has no last row. With one, the rows filled between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range that a person picks is a value, `Range(first, last, later)`, which `Intake` reads: `create(follow=True)` with a `Range` that has a `last` is refused there. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form; `essbatch reduce --source` makes no batch that follows, and `essbatch follow` lets one follow later. A `choose` that is a function may pick any rows, also with Follow: the rows were chosen in code, and the filled rows that it leaves out are considered, so Follow adds only the rows that arrive later.
+- A batch that follows again adds at its next step every row of its source that is complete and not considered: those that arrived while it did not follow, also those that another batch took meanwhile. A row left out when it was made, or removed by a person, stays out, since its key is considered.
+- A batch that follows has no last row. With one, the rows complete between the last row chosen and the making would be considered and never added, and the rows that arrive later would be. The range that a person picks is a value, `Range(first, last, later)`, which `Intake` reads: `create(follow=True)` with a `Range` that has a `last` is refused there. The page leaves the end of the range open while Follow is ticked, to say so before a person sends the form; `essbatch reduce --source` makes no batch that follows, and `essbatch follow` lets one follow later. A `choose` that is a function may pick any rows, also with Follow: the rows were chosen in code, and the complete rows that it leaves out are considered, so Follow adds only the rows that arrive later.
 - Nothing is kept that says a batch has followed. A batch made without Follow and a batch that was stopped are in the same state, and `intake.follow` writes `"follows": true` to either.
 - On the page, the next batch is one form, "New batch" with Follow. Follow is a state with one action, "Stop following", not a switch: the page offers no action to let a batch follow again.
 
@@ -177,11 +177,11 @@ A batch made from `sample-runs` with the rows from run 60339 on, with Follow.
 - **A step changes cells that have a value**, as today, so that a transmission run measured again reaches the earlier rows and they are reduced again. It needs to know who wrote each cell, and results change with nobody asking. A person can do it for the rows they choose.
 - **A scope kept in the header** (ADR 0011): a slice of an index that a source gives each row. With `considered`, the start of the slice is the choice of rows at making, and it has no end: the next batch is made from the source and follows in its place. The index, its type, and the conversion of the ends go.
 - **Follow as a switch on the page of each batch**, in place of Follow in "New batch". The next batch would be two actions: make it, then turn Follow on. And a person who turns it on for an earlier batch may not expect that it takes the rows that another batch took since.
-- **A row is added once it can be reduced**, in place of once the source has filled it. A column that the source does not fill would hold the row back for ever, and a parameter that takes `None` would let a row through before its file is listed.
+- **A row is added once it can be reduced**, in place of once it is complete. A column that the source does not fill would hold the row back for ever, and a parameter that takes `None` would let a row through before its file is listed.
 
 ## Consequences
 
-- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `RowSource.source_columns` stays, with a second use: it says when a row is filled.
+- `Scope`, `Row.index`, `Source.index_type`, `Source.index_title`, `Header.scope`, `Header.source` and `manager.change(scope=...)` go. `RowSource.source_columns` stays, with a second use: it says when a row is complete.
 - The rule of a step is "ready and without a record". `RowState.changed_by_hand`, the columns `at` of `Automatic`, and the exception for cells set by hand go.
 - A row that only waits is not in the table. The page says how many rows wait, and a person can add them.
 - A transmission run measured again reaches no earlier row, and a correction of a run changes no row that the table has.
