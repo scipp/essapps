@@ -1247,7 +1247,7 @@ _COMMANDS = {
         'results in, the outputs for a format of chosen outputs, and the name, '
         'description, keywords, owner and contact email of the results. Until '
         'output options are stored, the format is the first that -W gives for '
-        'the spec, else scipp HDF5. With -c, the owner and contact are the '
+        'the spec, else scipp HDF5, and with -c the owner and contact are the '
         'principal investigator of the proposal, as the catalogue lists.',
         arguments=_output_options_arguments,
         output='text',
