@@ -13,10 +13,10 @@ submission was refused there::
              path=['wavelength', 'start'])])
 
 A path is the ``loc`` of an error at that field: names of fields and indices of
-elements, but no way of a choice. So the walk of a path goes into the way
-chosen by itself, and a choice and the field of its way have the same path. A
-page edits a form by sending an :class:`~.models.Edit` (see :func:`apply`), and
-gets the form again.
+elements, but no alternative of a choice. So the walk of a path goes into the
+alternative chosen by itself, and a choice and the field of its alternative have
+the same path. A page edits a form by sending an :class:`~.models.Edit` (see
+:func:`apply`), and gets the form again.
 
 A picker's value travels as the label of its option, so a page never holds a
 file reference: the server maps a label back to its value.
@@ -47,7 +47,7 @@ from ess.apps.fields import (
 )
 from ess.spec.refs import Loc
 
-from .models import Edit, Editor, Node, Way
+from .models import Alternative, Edit, Editor, Node
 
 
 def held(
@@ -105,16 +105,21 @@ def _node(field: Field, loc: Loc, label: str, problems: Mapping[Loc, str]) -> No
     if isinstance(field, ChoiceField):
         chosen = field.chosen
         child = (
-            None if chosen is None else _node(field.ways[chosen], loc, label, problems)
+            None
+            if chosen is None
+            else _node(field.alternatives[chosen], loc, label, problems)
         )
         return node.model_copy(
             update={
                 'kind': 'choice',
-                'ways': [Way(value=w, label=_WAYS.get(w, w)) for w in field.offered],
+                'alternatives': [
+                    Alternative(value=w, label=_ALTERNATIVES.get(w, w))
+                    for w in field.offered
+                ],
                 'chosen': chosen,
                 'selector': field.selector_visible,
                 'child': child,
-                # The field of the way chosen shows a problem at this path.
+                # The field of the alternative chosen shows a problem at this path.
                 'problem': node.problem if child is None else None,
             }
         )
@@ -125,18 +130,21 @@ def _node(field: Field, loc: Loc, label: str, problems: Mapping[Loc, str]) -> No
     raise TypeError(f'no node for {type(field).__name__}')
 
 
-_WAYS = {
+_ALTERNATIVES = {
     ChoiceField.NONE: 'Not used',
     ChoiceField.FILE: 'Use a run',
     ChoiceField.RECORD: 'From a result',
 }
-"""The ways of a choice as a page labels them; ``None`` reads as no such step."""
+"""
+The alternatives of a choice as a page labels them; ``None`` reads as no such
+step.
+"""
 
 _MESSAGES = {'choose a file': 'choose a run', 'choose a record': 'choose a result'}
 
 
 def message(text: str) -> str:
-    """A message of a field in the words of :data:`_WAYS` and of a person."""
+    """A message of a field in the words of :data:`_ALTERNATIVES` and of a person."""
     text = _MESSAGES.get(text, text)
     return re.sub(r"'(.*)' is not of the kind (float|int)", r'\1 is not a number', text)
 
@@ -166,17 +174,17 @@ def label_of(field: Input) -> str | None:
 
 
 def _chosen(field: Field) -> Field:
-    """The field of the way chosen, through choices of choices."""
+    """The field of the alternative chosen, through choices of choices."""
     while isinstance(field, ChoiceField):
         if field.chosen is None:
             raise KeyError('nothing is chosen there')
-        field = field.ways[field.chosen]
+        field = field.alternatives[field.chosen]
     return field
 
 
 def _at(fields: Fields, path: list[str | int], *, choice: bool = False) -> Field:
     """
-    The field at ``path``: through the way chosen of each choice, but the choice
+    The field at ``path``: through the alternative chosen of each choice, but the choice
     itself at the end of the path if ``choice``.
     """
     if not path or str(path[0]) not in fields.fields:
@@ -238,12 +246,13 @@ def _value(field: Input, sent: Any) -> Any:
 def _inner(field: Field) -> tuple[Field, bool]:
     """
     The field that a cell edits, and whether the cell may be ``None``: a
-    choice of one way that gives a value, and of none, is edited as that way.
+    choice of one alternative that gives a value, and of none, is edited as that
+    alternative.
     """
     if isinstance(field, ChoiceField):
         given = [w for w in field.offered if w != ChoiceField.NONE]
         if len(given) == 1:
-            return field.ways[given[0]], ChoiceField.NONE in field.ways
+            return field.alternatives[given[0]], ChoiceField.NONE in field.alternatives
     return field, False
 
 

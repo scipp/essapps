@@ -85,9 +85,9 @@ def widget_in(form: Form, title: str, label: str) -> Any:
     return found
 
 
-def way(form: Form, title: str) -> Any:
+def selector(form: Form, title: str) -> Any:
     """
-    The radio buttons of the ways of the section ``title``, not those of a
+    The radio buttons of the alternatives of the section ``title``, not those of a
     field in it.
     """
     return section(form, title).select(pn.widgets.RadioBoxGroup)[0]
@@ -192,7 +192,9 @@ def test_a_file_set_stays_picked_once_shown_in_a_browser(
     assert form.params_and_missing()[0]['run'] == second
 
 
-def test_the_way_chosen_is_the_way_shown(client: Client, subtract: Form) -> None:
+def test_the_alternative_chosen_is_the_alternative_shown(
+    client: Client, subtract: Form
+) -> None:
     subtract.set(
         {'background': {'scale': 1.0}, 'centre': {'x': 2.0, 'y': 0.0}}, Listing(client)
     )
@@ -200,14 +202,14 @@ def test_the_way_chosen_is_the_way_shown(client: Client, subtract: Form) -> None
     (given,) = (c for c in section(subtract, 'Centre').select(pn.Column) if x in c)
     assert given.visible is True
 
-    way(subtract, 'Centre').value = 'None'
+    selector(subtract, 'Centre').value = 'None'
 
     assert given.visible is False
 
 
-def test_the_selector_of_one_way_is_hidden(subtract: Form) -> None:
-    assert way(subtract, 'Background').visible is False
-    assert way(subtract, 'Centre').visible is True
+def test_the_selector_of_one_alternative_is_hidden(subtract: Form) -> None:
+    assert selector(subtract, 'Background').visible is False
+    assert selector(subtract, 'Centre').visible is True
 
 
 def test_an_input_and_its_field_follow_each_other(
@@ -282,8 +284,10 @@ def test_a_selection_refused_goes_back_in_the_table(
     assert 'holds changes' in message(stack, 'Shots').object
 
 
-def test_a_way_and_its_field_follow_each_other(client: Client, subtract: Form) -> None:
-    centre = way(subtract, 'Centre')
+def test_an_alternative_and_its_field_follow_each_other(
+    client: Client, subtract: Form
+) -> None:
+    centre = selector(subtract, 'Centre')
     assert centre.value is None
 
     centre.value = 'None'

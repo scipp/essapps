@@ -149,19 +149,19 @@ def _group(field: GroupField) -> Any:
 
 def _choice(field: ChoiceField) -> Any:
     selector = pn.widgets.RadioBoxGroup(options=field.offered, inline=True)
-    ways = {label: _view(way) for label, way in field.ways.items()}
+    views = {label: _view(a) for label, a in field.alternatives.items()}
 
     def show() -> None:
         selector.value = field.chosen
         selector.visible = field.selector_visible
-        for label, way in ways.items():
-            way.visible = label == field.chosen
+        for label, view in views.items():
+            view.visible = label == field.chosen
 
     def written(label: str | None) -> None:
         field.chosen = label
 
     _bound(field, selector, show, written)
-    return pn.Column(selector, *ways.values(), sizing_mode='stretch_width')
+    return pn.Column(selector, *views.values(), sizing_mode='stretch_width')
 
 
 def _rows(field: RowsField) -> Any:

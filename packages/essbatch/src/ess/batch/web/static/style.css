@@ -665,11 +665,11 @@ fieldset {
   border-radius: var(--radius);
 }
 legend { padding: 0 4px; color: var(--muted); font-weight: 600; }
-.ways { display: inline-flex; align-self: flex-start; }
-.ways button { height: 26px; border-radius: 0; margin-left: -1px; }
-.ways button:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; }
-.ways button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
-.ways button[aria-checked="true"] {
+.alternatives { display: inline-flex; align-self: flex-start; }
+.alternatives button { height: 26px; border-radius: 0; margin-left: -1px; }
+.alternatives button:first-child { border-radius: var(--radius) 0 0 var(--radius); margin-left: 0; }
+.alternatives button:last-child { border-radius: 0 var(--radius) var(--radius) 0; }
+.alternatives button[aria-checked="true"] {
   position: relative;
   border-color: var(--accent);
   background: var(--accent-soft);

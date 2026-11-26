@@ -52,7 +52,7 @@ function body(node, edit) {
     case 'group':
       return node.children.map((child) => field(child, edit));
     case 'choice':
-      return [node.selector && ways(node, edit), node.child && body(node.child, edit)].flat();
+      return [node.selector && alternatives(node, edit), node.child && body(node.child, edit)].flat();
     case 'input':
       return [problem(node, control(node, edit))];
     case 'scalars':
@@ -85,18 +85,18 @@ function problem(node, element) {
   return h('div', {class: 'field bad'}, element, h('span', {class: 'problem', text: node.problem}));
 }
 
-function ways(node, edit) {
+function alternatives(node, edit) {
   return h(
     'div',
-    {class: 'ways', role: 'radiogroup', 'aria-label': node.label},
-    node.ways.map((way) =>
+    {class: 'alternatives', role: 'radiogroup', 'aria-label': node.label},
+    node.alternatives.map((alternative) =>
       h('button', {
         type: 'button',
         role: 'radio',
-        'aria-checked': String(way.value === node.chosen),
-        'data-path': JSON.stringify([...node.path, `way:${way.value}`]),
-        text: way.label,
-        onclick: () => edit({path: node.path, op: 'choose', value: way.value}),
+        'aria-checked': String(alternative.value === node.chosen),
+        'data-path': JSON.stringify([...node.path, `alternative:${alternative.value}`]),
+        text: alternative.label,
+        onclick: () => edit({path: node.path, op: 'choose', value: alternative.value}),
       }),
     ),
   );
@@ -190,9 +190,9 @@ function text(node) {
     case 'group':
       return node.children.map(labelled).join(', ');
     case 'choice': {
-      const way = node.ways.find((w) => w.value === node.chosen);
+      const alternative = node.alternatives.find((a) => a.value === node.chosen);
       const inner = node.child ? text(node.child) : '';
-      return node.selector ? [way?.label, inner].filter(Boolean).join(': ') : inner;
+      return node.selector ? [alternative?.label, inner].filter(Boolean).join(': ') : inner;
     }
     case 'input':
       return {True: 'yes', False: 'no'}[node.value] ?? String(node.value ?? '—');

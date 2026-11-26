@@ -1671,12 +1671,12 @@ def test_a_form_set_writes_an_input_at_the_path_of_its_errors(form: TestClient) 
     assert (start['path'], start['value']) == (['range', 'start'], 2.0)
 
 
-def test_a_form_choose_picks_a_way_of_a_choice(form: TestClient) -> None:
+def test_a_form_choose_picks_an_alternative_of_a_choice(form: TestClient) -> None:
     nodes = settings(form, {'path': ['offset'], 'op': 'choose', 'value': 'Given'})
 
     offset = nodes['offset',]
     assert offset['chosen'] == 'Given'
-    assert [w['label'] for w in offset['ways']] == ['Given', 'Not used']
+    assert [w['label'] for w in offset['alternatives']] == ['Given', 'Not used']
     assert offset['child']['path'] == ['offset']
 
 

@@ -21,7 +21,7 @@ from pydantic import BaseModel, model_validator
 from ..definition import Form
 
 
-class Way(BaseModel):
+class Alternative(BaseModel):
     value: str
     label: str
 
@@ -31,14 +31,14 @@ class Node(BaseModel):
     One field of a form, with its children. ``path`` is where an edit and an
     error point: the names of fields and the indices of elements, the same as
     the ``loc`` of a :class:`~ess.apps.FieldError`. A choice and the field of
-    the way chosen have the same path. Which keys matter depends on ``kind``:
+    the alternative chosen have the same path. Which keys matter depends on ``kind``:
 
     - ``input``: ``input`` (``float``, ``int``, ``text``, ``time``, ``pick``),
       ``value`` (the label of the option for a ``pick``), ``options``;
     - ``scalars``: ``elements``, inputs;
     - ``group``: ``children``;
-    - ``choice``: ``ways``, ``chosen``, whether to show the ``selector``, and the
-      field of the way chosen as ``child``;
+    - ``choice``: ``alternatives``, ``chosen``, whether to show the
+      ``selector``, and the field of the alternative chosen as ``child``;
     - ``rows``: ``columns`` of text, shown but not edited;
     - ``nothing``: none.
 
@@ -56,7 +56,7 @@ class Node(BaseModel):
     options: list[str] = []
     elements: list[Node] = []
     children: list[Node] = []
-    ways: list[Way] = []
+    alternatives: list[Alternative] = []
     chosen: str | None = None
     selector: bool = False
     child: Node | None = None
@@ -67,7 +67,7 @@ class Node(BaseModel):
 class Edit(BaseModel):
     """
     What a person did to a form at ``path``: ``set`` an input to ``value`` (the
-    label of an option for a picker), ``choose`` the way ``value`` of a choice,
+    label of an option for a picker), ``choose`` the alternative ``value`` of a choice,
     ``add`` or ``remove`` the last element of a list, or ``reset`` a whole
     parameter to its default, or unset if it has none.
     """

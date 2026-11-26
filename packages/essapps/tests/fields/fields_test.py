@@ -116,7 +116,7 @@ def children(field: Fields | Any) -> list[Any]:
     if isinstance(field, Fields | GroupField):
         return list(field.fields.values())
     if isinstance(field, ChoiceField):
-        return list(field.ways.values())
+        return list(field.alternatives.values())
     if isinstance(field, ScalarsField):
         return list(field.elements)
     if isinstance(field, RowsField):
@@ -176,9 +176,9 @@ def widget_in(form: Fields, title: str, label: str) -> Input:
     return found
 
 
-def way(form: Fields, title: str) -> ChoiceField:
+def choice(form: Fields, title: str) -> ChoiceField:
     """
-    The ways of the section ``title``, not those of a field in it.
+    The choice of the section ``title``, not that of a field in it.
     """
     return next(f for f in walk(section(form, title)) if isinstance(f, ChoiceField))
 
@@ -287,7 +287,7 @@ def test_a_file_field_typed_x_or_none_offers_a_file_and_none(
     client: Client,
     options: Fields,
 ) -> None:
-    assert options.ways('direct_beam') == ['A file', 'None']
+    assert options.alternatives('direct_beam') == ['A file', 'None']
     options.set(
         {'settings': {'flag': False, 'count': 1}, 'direct_beam': None}, Listing(client)
     )
@@ -297,8 +297,8 @@ def test_a_file_field_typed_x_or_none_offers_a_file_and_none(
 def test_a_group_typed_x_or_none_without_a_default_starts_unset(
     client: Client, subtract: Fields, subtract_spec: Spec
 ) -> None:
-    assert way(subtract, 'Centre').offered == ['Given', 'From a record', 'None']
-    assert way(subtract, 'Centre').chosen is None
+    assert choice(subtract, 'Centre').offered == ['Given', 'From a record', 'None']
+    assert choice(subtract, 'Centre').chosen is None
     assert subtract.params == {'background': {'scale': 1.0}}
     with pytest.raises(SubmitError) as refused:
         client.submit(subtract_spec, params=subtract.params)
@@ -322,12 +322,12 @@ def test_a_place_written_inline_or_by_reference_without_a_default_starts_unset(
         outputs=Value,
     )
     form = form_of(spec, client)
-    assert form.ways('centre') == ['Given', 'From a record']
-    assert way(form, 'Centre').chosen is None
+    assert form.alternatives('centre') == ['Given', 'From a record']
+    assert choice(form, 'Centre').chosen is None
     assert form.params == {}
 
 
-def test_a_group_typed_x_or_none_is_given_each_way(
+def test_a_group_typed_x_or_none_is_given_each_alternative(
     client: Client,
     subtract: Fields,
     subtract_spec: Spec,
@@ -336,7 +336,7 @@ def test_a_group_typed_x_or_none_is_given_each_way(
 ) -> None:
     found = client.compute(find_spec, params={'run': run})
     subtract.refresh(Listing(client))
-    assert way(subtract, 'Centre').offered == ['Given', 'From a record', 'None']
+    assert choice(subtract, 'Centre').offered == ['Given', 'From a record', 'None']
 
     for centre in (None, {'x': 2.0, 'y': 0.0}, found.ref('centre')):
         params = {'background': {'scale': 1.0}, 'centre': centre}
@@ -352,7 +352,7 @@ def test_a_union_offers_its_alternatives_and_no_record(
 ) -> None:
     client.compute(find_spec, params={'run': run})
     form.refresh(Listing(client))
-    assert form.ways('detector') == ['Front', 'Rear bank']
+    assert form.alternatives('detector') == ['Front', 'Rear bank']
 
 
 def test_a_union_marked_referenced_offers_one_choice_of_alternatives_and_record(
@@ -375,12 +375,12 @@ def test_a_union_marked_referenced_offers_one_choice_of_alternatives_and_record(
     )
     found = client.compute(find_spec, params={'run': run})
     side = form_of(spec, client)
-    assert side.ways('side') == ['Left', 'Right', 'From a record']
+    assert side.alternatives('side') == ['Left', 'Right', 'From a record']
 
-    way(side, 'Side').chosen = 'From a record'
+    choice(side, 'Side').chosen = 'From a record'
     picker(side, 'Side').value = found.ref('centre')
     assert side.params == {'side': found.ref('centre')}
-    way(side, 'Side').chosen = 'Right'
+    choice(side, 'Side').chosen = 'Right'
     assert side.params == {'side': {'kind': 'right'}}
 
 
@@ -420,7 +420,7 @@ def test_set_fitting_shows_what_fits_and_names_each_other_with_its_value(
 def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(
     client: Client, form: Fields, find_spec: Spec, reduce_spec: Spec, run: FileRef
 ) -> None:
-    assert form.ways('beam_centre') == ['Given', 'From a record']
+    assert form.alternatives('beam_centre') == ['Given', 'From a record']
     nothing = {'(choose a record)'}
     assert set(picker(form, 'Beam Centre').options) == nothing
 
@@ -430,7 +430,7 @@ def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(
 
     found = client.compute(find_spec, params={'run': run})
     form.refresh(Listing(client))
-    assert form.ways('beam_centre') == ['Given', 'From a record']
+    assert form.alternatives('beam_centre') == ['Given', 'From a record']
     assert found.ref('centre') in picker(form, 'Beam Centre').options.values()
 
     client.release(found)
@@ -438,12 +438,12 @@ def test_a_record_is_offered_and_lists_each_fitting_output_while_readable(
     assert set(picker(form, 'Beam Centre').options) == nothing
 
 
-def test_the_way_of_a_record_with_no_record_picked_is_not_given_the_default(
+def test_the_alternative_of_a_record_with_no_record_picked_is_not_given_the_default(
     client: Client, form: Fields, find_spec: Spec, run: FileRef
 ) -> None:
     client.compute(find_spec, params={'run': run})
     form.set({'run': run, 'sample': {'thickness': 2.0}}, Listing(client))
-    way(form, 'Beam Centre').chosen = 'From a record'
+    choice(form, 'Beam Centre').chosen = 'From a record'
     assert missing(form) == {(('beam_centre',), 'choose a record')}
 
 
@@ -506,7 +506,7 @@ def test_set_shows_params_as_a_record_holds_them(
     assert client.output(record, 'total').value == 2.0
     form.set(record.request.params, Listing(client))
     assert form.params == record.request.params
-    assert form.ways('beam_centre') == ['Given', 'From a record']
+    assert form.alternatives('beam_centre') == ['Given', 'From a record']
 
 
 def test_the_file_picker_lists_a_file_measured_after_the_form_was_made(
@@ -554,7 +554,7 @@ def test_a_file_picker_lists_the_files_that_fit_its_marker(
 ) -> None:
     files.measure(201, {'counts': 1.0}, kind='mask')
     form.refresh(Listing(client))
-    assert form.ways('mask') == ['A file', 'None']
+    assert form.alternatives('mask') == ['A file', 'None']
     assert list(picker(form, 'Run').options) == [
         '(choose a file)',
         'run 101 (sample)',
@@ -655,12 +655,12 @@ def measured(client: Client, files: FakeFiles, run: FileRef) -> Fields:
 def test_a_file_at_a_field_of_a_group_is_a_picker_and_x_or_none_a_choice(
     measured: Fields, run: FileRef
 ) -> None:
-    assert measured.ways('measured') == ['Given']
+    assert measured.alternatives('measured') == ['Given']
     assert list(widget(measured, 'Run').options) == [
         '(choose a file)',
         'run 101 (sample)',
     ]
-    assert way(measured, 'Mask').offered == ['A file', 'None']
+    assert choice(measured, 'Mask').offered == ['A file', 'None']
     assert list(picker(measured, 'Mask').options) == ['(choose a file)', 'run 202']
     assert missing(measured) == {(('measured', 'run'), 'choose a file')}
     widget(measured, 'Run').value = run
@@ -947,12 +947,12 @@ def test_remove_removes_the_rows_selected(
 def test_a_row_may_be_an_output_of_a_record_that_fits(
     client: Client, stack: Fields, find_spec: Spec, run: FileRef
 ) -> None:
-    assert way(stack, 'Centres').offered == ['Given', 'From a record']
-    with pytest.raises(TypeError, match='centres: not a choice of ways'):
-        stack.ways('centres')
+    assert choice(stack, 'Centres').offered == ['Given', 'From a record']
+    with pytest.raises(TypeError, match='centres: not a choice of alternatives'):
+        stack.alternatives('centres')
     found = client.compute(find_spec, params={'run': run})
     stack.refresh(Listing(client))
-    way(stack, 'Centres').chosen = 'From a record'
+    choice(stack, 'Centres').chosen = 'From a record'
     picker(stack, 'Centres').value = found.ref('centre')
     table(stack, 'Centres').add_row()
     table(stack, 'Runs').remove_rows()
@@ -994,7 +994,7 @@ def test_the_editor_offers_no_record_of_a_row_shown_before(
     found = client.compute(find_spec, params={'run': run})
     centres = [found.ref('centre'), {'x': 2.0, 'y': 0.0}]
     stack.set({'runs': [run], 'shots': [], 'centres': centres}, Listing(client))
-    way(stack, 'Centres').chosen = 'From a record'
+    choice(stack, 'Centres').chosen = 'From a record'
     table(stack, 'Centres').add_row()
     table(stack, 'Centres').discard()
     assert stack.params['centres'] == centres
@@ -1026,10 +1026,10 @@ def test_tables_round_trip_through_a_record(
 
 def test_a_list_of_a_union_has_a_column_for_the_tag(client: Client) -> None:
     sides = form_of(SIDES, client)
-    table(sides, 'Sides').add_row()  # no way chosen: no row
+    table(sides, 'Sides').add_row()  # no alternative chosen: no row
     assert missing(sides) == {(('sides',), 'add a row, or remove for none')}
     for side in ('Right', 'Left'):
-        way(sides, 'Sides').chosen = side
+        choice(sides, 'Sides').chosen = side
         table(sides, 'Sides').add_row()
     assert sides.params == {'sides': [{'kind': 'right'}, {'kind': 'left'}]}
     assert rows(sides, 'Sides') == [{'Kind': 'Right'}, {'Kind': 'Left'}]
@@ -1076,13 +1076,13 @@ def test_fields_at_any_depth_start_at_their_default_or_with_nothing_given(
 def test_a_scalar_parameter_is_an_input_in_its_tab(filled: Fields) -> None:
     widget_in(filled, 'Bins', 'Bins').value = 3
     assert filled.params['bins'] == 3
-    with pytest.raises(TypeError, match='bins: not a choice of ways'):
-        filled.ways('bins')
+    with pytest.raises(TypeError, match='bins: not a choice of alternatives'):
+        filled.alternatives('bins')
 
 
 def test_a_group_at_a_field_is_a_card_of_its_fields(filled: Fields) -> None:
-    assert not way(filled, 'Window').selector_visible
-    assert way(filled, 'Window').offered == ['Given']
+    assert not choice(filled, 'Window').selector_visible
+    assert choice(filled, 'Window').offered == ['Given']
     widget_in(filled, 'Frame', 'Start').value = 2.0
     specimen = filled.params['specimen']
     assert specimen['window'] == {'start': 0.5, 'stop': 1.0}
@@ -1090,17 +1090,17 @@ def test_a_group_at_a_field_is_a_card_of_its_fields(filled: Fields) -> None:
 
 
 def test_a_union_at_a_field_offers_its_alternatives(filled: Fields) -> None:
-    assert way(filled, 'Shape').offered == ['Disc', 'Slab']
+    assert choice(filled, 'Shape').offered == ['Disc', 'Slab']
     assert filled.params['specimen']['shape'] == {'kind': 'disc', 'radius': 1.0}
-    way(filled, 'Shape').chosen = 'Slab'
+    choice(filled, 'Shape').chosen = 'Slab'
     assert filled.params['specimen']['shape'] == {'kind': 'slab', 'width': 1.0}
 
 
 def test_x_or_none_at_a_field_is_a_choice_with_none(filled: Fields) -> None:
     for title in ('Scale', 'Crop'):
-        assert way(filled, title).offered == ['Given', 'None']
-        way(filled, title).chosen = 'Given'
-    assert way(filled, 'Mask').offered == ['A file', 'None']
+        assert choice(filled, title).offered == ['Given', 'None']
+        choice(filled, title).chosen = 'Given'
+    assert choice(filled, 'Mask').offered == ['A file', 'None']
     assert missing(filled) == {
         (('specimen', 'scale'), 'give a value'),
         (('specimen', 'crop', 'start'), 'give a value'),
@@ -1114,7 +1114,7 @@ def test_x_or_none_at_a_field_is_a_choice_with_none(filled: Fields) -> None:
 def test_a_record_at_a_field_is_listed_when_the_form_is_refreshed(
     client: Client, nested: Fields, find_spec: Spec, run: FileRef
 ) -> None:
-    assert way(nested, 'Centre').offered == ['From a record']
+    assert choice(nested, 'Centre').offered == ['From a record']
     assert set(picker(nested, 'Centre').options) == {'(choose a record)'}
     found = client.compute(find_spec, params={'run': run})
     nested.refresh(Listing(client))
@@ -1134,7 +1134,7 @@ def test_a_list_of_a_union_at_a_field_has_a_column_per_field_of_each_alternative
     filled: Fields,
 ) -> None:
     for shape in ('Slab', 'Disc'):
-        way(filled, 'Shapes').chosen = shape
+        choice(filled, 'Shapes').chosen = shape
         table(filled, 'Shapes').add_row()
     assert filled.params['specimen']['shapes'] == [
         {'kind': 'slab', 'width': 1.0},
@@ -1328,7 +1328,7 @@ def test_a_value_a_picker_does_not_list_leaves_it_unset(
     assert (('settings', 'mode'), 'give a value') in missing(options)
 
 
-def test_a_value_that_no_way_writes_is_refused(
+def test_a_value_that_no_alternative_writes_is_refused(
     client: Client, subtract: Fields
 ) -> None:
     with pytest.raises(ValueError, match='not one of'):
