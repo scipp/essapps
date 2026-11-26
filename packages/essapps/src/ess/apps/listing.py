@@ -20,17 +20,17 @@ from .records import Record, SpecId, Status
 
 class Listing:
     """
-    The files, records and outputs that a request of ``client`` may refer to
-    now, each with a label, looked up once for a refresh of any number of views.
+    The records of ``client``, and the files and outputs that a request may
+    refer to now, each with a label, looked up once for a refresh of all views.
 
     Given the ``previous`` listing, it reads only the records that changed
     since, and takes the rest from ``previous``, which stays unchanged.
     ``cursor`` is the position in :meth:`~ess.apps.Client.changes` that the
     listing is up to date with. ``records`` are oldest first. ``status`` holds
-    the status of each record, and ``readable`` its outputs that may be read.
-    ``specs`` holds the spec of each record of the bound spec, by record ID. A
-    record of an unbound spec is labelled by its spec's name and version, its
-    outputs by their names, and none of its outputs is offered.
+    the status of each record, and ``readable`` the names of its outputs that
+    may be read. ``specs`` holds the spec of each record of a bound spec, by
+    record ID. A record of an unbound spec is labelled by its spec's name and
+    version, its outputs by their names, and none of its outputs is offered.
 
     Labels are computed from all records in memory, so a label that depends on
     other records needs no read::
@@ -38,7 +38,8 @@ class Listing:
         Find centre (11:45)                 a record: its spec's title, local time
         BeamCentre (11:45)                  an output: its type's name
         Find centre (11:45, 2f9c01)         a record whose label would repeat
-        BeamCentre (11:45, centre, 2f9c01)  an output whose label would repeat
+        BeamCentre (11:45, centre)          an output whose label would repeat
+        BeamCentre (11:45, centre, 2f9c01)  ... and would still repeat
     """
 
     def __init__(self, client: Client, previous: Listing | None = None) -> None:
