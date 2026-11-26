@@ -98,7 +98,7 @@ Any other table is named with what it is of, such as "the rows of a source".
 
 ### Errors
 
-The batch layer raises `ValueError` for a request it rejects, `KeyError` for a label that no batch has, and `DefinitionWriteError` if the definitions cannot be written.
+The batch layer raises `ValueError` for a request it rejects, `KeyError` for a label that no batch has or a key that no row has, and `DefinitionWriteError` if the definitions cannot be written.
 `Batch.state` and `Batch.reduce` raise `SubmitError` of `ess.apps` when the workspace rejects the settings or a row.
 
 ## One example followed through
@@ -351,7 +351,9 @@ stateDiagram-v2
     result --> incomplete: a problem
 ```
 
-A problem is any of `RowState.problems`: a value missing, such as an empty cell of a source column, a cell that the workspace rejects, or a record referenced by a cell or a setting that failed, was cancelled, or is cleared.
+A problem is any of `RowState.problems`: a value missing, such as an empty cell of a source column, a cell that the workspace rejects, or a record referenced by a cell that failed, was cancelled, or is cleared.
+A cleared record is a problem only of a row that would be reduced (below).
+A setting outside the columns that refers to such a record is a problem of the settings, not of each row: `batch.shown()` returns it once, without a key, and `batch.reduce` refuses with it.
 The workspace rejects a cell that refers to a file that the file source does not know, or cannot read now: it raised `OSError`, as when a mount is gone or a catalogue timed out.
 Only the rows that refer to that file have the problem, and the reason names the file.
 A row with a result resolves only the cells that differ from its result's request, so a `done` row keeps its status while its file cannot be read.
@@ -369,17 +371,41 @@ The page and the command choose with `to_reduce`.
 ### Clearing outputs
 
 Clearing frees the disk space of stored outputs, which a reduction computes again from the raw files.
-`batch.clear(keys=None)` deletes the outputs of every record of the rows `keys`, or of every member of the batch (`ess.apps.Client.clear`):
+`batch.clear(keys=None)` deletes the outputs of every record of the rows `keys`, or of every member of the batch, also of older records and of members no longer rows (`ess.apps.Client.clear`):
 
 ```python
 batch.clear(['60339'])     # the row 60339 gets status cleared
 batch.reduce(left_to_reduce(batch.state()))  # a new record computes its outputs again
+batch.clear(['nope'])      # KeyError: the batch has no row nope
 ```
 
 A cleared record keeps its request, its status and its provenance.
-A cell or a setting that refers to a cleared record is a problem of the row, which names the label of that record: `masks: its outputs are cleared; reduce the batch masks again`.
-The cell still refers to the cleared record after that batch is reduced again: set it to the new record, such as by loading the template with `{'@latest': masks}` again.
-Nothing is cleared while a row of the batch is running, and the error names the row.
+A failed or cancelled row that is cleared keeps its status `failed` or `cancelled`.
+
+A cell that refers to a cleared record keeps referring to it: nothing points it to a new result.
+The problem says what to do, by whether the batch of the record holds a newer result of the row with outputs:
+
+```
+mask: its outputs are cleared; reduce the batch masks again, then set mask to the new result
+mask: its outputs are cleared; the batch masks has a newer result, set mask to it
+```
+
+Loading the template with `{'@latest': masks}` again sets a setting to the newest result.
+The problem is one of a row that would be reduced: without a result, or with one that failed, was cancelled, is cleared, or is `outdated`.
+A `done` row stays `done`: its outputs were computed and are still there.
+So clearing the masks leaves every `done` I(Q) row `done`, and a row that is reduced again has the problem.
+A cell edited to refer to a cleared record makes its row `outdated`, so that row has the problem.
+
+The workspace refuses a clear, and clears nothing, while a record is running or something else reads it.
+The error names rows by key and batches by title:
+
+```
+row 1 of Find is still running
+row 1 of Find is read by row 2 of Reduce, which is still running
+row 1 of Find is read by the open stage of Reduce
+```
+
+A staged batch releases a stage that it opened for a submit the workspace rejected, so that such a stage reads nothing.
 
 ## The batches of a workspace
 
@@ -530,7 +556,7 @@ for key, record in centres.items():
 iofq.set_table(table)
 ```
 
-A cell may refer to a record that still runs. If that record failed or was cancelled, the row has the problem "the record it reads is failed". If its outputs are cleared, the problem names the batch to reduce again ("Clearing outputs").
+A cell may refer to a record that still runs. If that record failed or was cancelled, the row has the problem "the record it reads is failed". If its outputs are cleared, the problem says how to point the cell to a new result ("Clearing outputs").
 
 ## What is stored on disk
 

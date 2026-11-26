@@ -203,6 +203,7 @@ An output value lives while the workspace holds it in memory, a pending request 
 The workspace holds a value until a client releases or clears its record, or the workspace closes.
 The store holds a value until a client clears its record.
 A release or a clear by one client applies to every client of the workspace.
+A clear is refused while the record runs, also after a cancel, or a pending record, a stage or an accumulator reads it: `NotCleared` names the record and what holds it.
 Work whose outputs nothing would hold is cancelled.
 A cleared record keeps its request and status, so its provenance stays.
 A new record of the same request computes the outputs again.
