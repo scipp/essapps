@@ -7,7 +7,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from ess.batch import open_workspace
+from ess.batch import (
+    Header,
+    WorkspaceHeader,
+    create_workspace,
+    file_sources,
+    open_workspace,
+)
+from ess.batch.web import create_app
 from ess.instruments.loki.arrivals import (
     EXPERIMENT,
     Instrument,
@@ -33,11 +40,15 @@ def test_the_experiment_comes_again_with_its_samples_numbered() -> None:
 
 @pytest.fixture
 def page(tmp_path: Path) -> Iterator[tuple[TestClient, Instrument, Client]]:
-    instrument = Instrument(tmp_path)
-    client, files, definitions = open_workspace(tmp_path, BINDINGS)
+    header = WorkspaceHeader(Header('Arrivals'))
+    folder = create_workspace(tmp_path, 'arrivals', header)
+    instrument = Instrument(folder)
+    client, files, definitions = open_workspace(
+        folder, header, BINDINGS, allowed=file_sources(['local'])
+    )
     with client:
         given = settings(client, instrument)
-        app = build(client, files, definitions, settings=given, follow=True)
+        app = create_app(build(client, files, definitions, settings=given, follow=True))
         page = TestClient(app).get('/').url
         yield TestClient(app, base_url=str(page)), instrument, client
 

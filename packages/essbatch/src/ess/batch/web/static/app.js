@@ -6,9 +6,10 @@
 // the list of batches, Back or Forward, happens in place (see `show`). The
 // root without a batch, and the page of a batch that cannot be shown, show
 // the workspace instead (see `showWorkspace`).
-import {h, get, post, query, save} from './dom.js';
+import {h, get, post, query, save, toast} from './dom.js';
 import {Grid, cellColumns, statusClass, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
+import {fillList, headerFields, headerOf, listRow, onChoose} from './list.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -211,15 +212,6 @@ function hideMessage() {
   shownMessage = '';
 }
 
-let toastTimer;
-function toast(text) {
-  const box = $('toast');
-  box.textContent = text;
-  box.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (box.hidden = true), 3500);
-}
-
 // Showing the state
 
 function render(state) {
@@ -355,14 +347,14 @@ function batchesOfRuns() {
 }
 
 // The batches of a run, as links that behave as the titles in the list of
-// batches (see `choose`).
+// batches (see `onChoose` in list.js).
 const batchLinks = (cell) =>
   h(
     'span',
     {class: 'batch-links'},
     cell.getValue().map(({label, title}, i) => [
       i ? ', ' : '',
-      h('a', {href: batchUrl(label), text: title, onclick: (event) => choose(event, label)}),
+      h('a', {href: batchUrl(label), text: title, onclick: onChoose((onTitle) => choose(label, onTitle))}),
     ]),
   );
 const batchTitles = (batches) => batches.map((b) => b.title).join(', ');
@@ -462,34 +454,17 @@ async function countBatches() {
 // that the keyboard focus, a text selection and a click are not lost.
 function drawBatches() {
   if (!view.batchData) return;
-  const body = $('batches').tBodies[0];
-  const listed = JSON.stringify(view.batchData.rows);
-  if (listed !== body.listed) {
-    body.listed = listed;
-    const none = h('tr', {}, h('td', {class: 'hint', colspan: 4, text: 'No batch yet.'}));
-    body.replaceChildren(
-      ...(view.batchData.rows.length ? [] : [none]),
-      ...view.batchData.rows.map((batch) =>
-        h(
-          'tr',
-          {class: 'batch', 'data-label': batch.label, onclick: (event) => choose(event, batch.label)},
-          h(
-            'td',
-            {},
-            h('a', {href: batchUrl(batch.label), text: batch.title}),
-            ' ', // so that a double click selects the label alone
-            h('small', {class: 'text', text: batch.label}),
-            batch.description && h('div', {class: 'hint text description', text: batch.description}),
-          ),
-          h('td', {class: 'n'}),
-          h('td'),
-          h('td', {class: 'follows', text: batch.follows ? 'follows' : ''}),
-        ),
-      ),
+  const rowOf = (batch) =>
+    listRow(
+      {name: batch.label, title: batch.title, description: batch.description},
+      batchUrl(batch.label),
+      (onTitle) => choose(batch.label, onTitle),
+      h('td', {class: 'n'}),
+      h('td'),
+      h('td', {class: 'follows', text: batch.follows ? 'follows' : ''}),
     );
-  }
-  for (const row of body.querySelectorAll('tr.batch')) {
-    const {label} = row.dataset;
+  for (const row of fillList($('batches'), view.batchData.rows, rowOf, 'No batch yet.')) {
+    const {name: label} = row.dataset;
     if (label === shownLabel()) row.setAttribute('aria-current', 'page');
     else row.removeAttribute('aria-current');
     const n = view.counts?.rows[label];
@@ -507,19 +482,12 @@ function drawBatches() {
   }
 }
 
-// A click on a batch in the list shows that batch: a click on its title in
-// the Rows view, a click elsewhere in its row in the view shown. A click on
-// the title with a modifier key is left to the browser, which opens a new tab
-// or window. So is a middle click, which fires no `click`. The label and the
-// description are text to select, so a click on them, or one that ends a text
-// selection, does nothing. The titles in the Batches column of the Runs view
-// behave the same.
-function choose(event, label) {
-  const title = event.target.closest('a');
-  if (title && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
-  if (event.target.closest('.text') || getSelection().toString()) return;
-  event.preventDefault();
-  const page = title ? 'rows' : view.page;
+// A click on a batch in the list (see `onChoose` in list.js) shows that
+// batch: a click on its title in the Rows view, a click elsewhere in its row
+// in the view shown. The titles in the Batches column of the Runs view behave
+// the same.
+function choose(label, onTitle) {
+  const page = onTitle ? 'rows' : view.page;
   if (label === shownLabel()) showPage(page);
   else show(batchUrl(label), page, 'pushState');
 }
@@ -777,8 +745,7 @@ async function makeBatch(event) {
   const {elements} = form;
   const say = (text) => ($('new-problem').textContent = text);
   const header = {
-    title: elements.title.value.trim(),
-    description: elements.description.value.trim(),
+    ...headerOf(form),
     spec: chosenSpec()?.name ?? '',
     ...(!$('new-settings').hidden && elements.like.checked && {settings_from: view.state.label}),
   };
@@ -1007,10 +974,9 @@ function renderBatch(state) {
 
 function saveBatch(event) {
   event.preventDefault();
-  const {elements} = $('batch-form');
   const say = (text) => ($('batch-problem').textContent = text);
   say('');
-  act('batch', {title: elements.title.value.trim(), description: elements.description.value.trim()}, say);
+  act('batch', headerOf($('batch-form')), say);
 }
 
 // Removes this batch, and its outputs if ticked, then shows the root in its
@@ -1462,6 +1428,8 @@ function wire() {
   $('reduce-settings-changed').onclick = reduceSettingsChanged;
   $('relist').onclick = () => act('relist');
   const newBatch = $('new-batch');
+  newBatch.prepend(...headerFields('new'));
+  $('batch-form').querySelector('h3').after(...headerFields('batch'));
   $('new-batch-open').onclick = openNewBatch;
   newBatch.onsubmit = makeBatch;
   newBatch.elements.source.onchange = chooseSource;
@@ -1584,6 +1552,16 @@ async function showWorkspace(why = '') {
   if (runs !== null) loadRuns();
 }
 
+// The link of the header to the page that lists the workspaces, if the
+// server names one.
+async function linkHome() {
+  const {ok, body} = await get('home', root()).catch(() => ({ok: false}));
+  if (!ok || body.url === null) return;
+  $('home').href = new URL(body.url, root()).href;
+  $('home').hidden = false;
+}
+
 wire();
+linkHome();
 if (shownLabel()) poll();
 else showWorkspace();

@@ -18,6 +18,7 @@ The entries, their content and their writers: guide
 from __future__ import annotations
 
 import os
+import re
 import string
 import tempfile
 from collections.abc import Callable, Mapping
@@ -222,14 +223,29 @@ def _checked[T](adapter: TypeAdapter[T], data: Any) -> T:
 
 @dataclass(frozen=True)
 class Header:
-    """The title and description of a batch. ``ValueError`` for an empty title."""
+    """
+    The title and description of a batch or a workspace. ``ValueError`` for an
+    empty title.
+    """
 
     title: str
     description: str = ''
 
     def __post_init__(self) -> None:
         if not self.title.strip():
-            raise ValueError('a batch has a title that is not empty')
+            raise ValueError('give a title that is not empty')
+
+
+def check_label(label: str) -> None:
+    """
+    Raise ``ValueError`` unless ``label``, the label of a batch or the name of a
+    workspace, can be one segment of a URL path and the name of a folder.
+    """
+    if re.fullmatch(r'\w[\w.-]*', label) is None:
+        raise ValueError(
+            f'{label!r}: use letters, digits, "_", "." and "-", '
+            'and start with a letter, a digit or "_"'
+        )
 
 
 @dataclass(frozen=True)

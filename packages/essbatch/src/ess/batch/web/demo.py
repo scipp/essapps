@@ -42,11 +42,17 @@ from .. import (
     CorrectedFiles,
     FileInfo,
     FolderDefinitions,
+    Header,
     Intake,
     RowSource,
+    WorkspaceHeader,
+    file_sources,
     open_workspace,
+    read_workspace_header,
+    write_workspace_header,
 )
 from ..table import KEY, cell_of
+from ..workspaces import WORKSPACE_FILE
 from . import Pages, create_app, plots, serve
 from .api import every
 
@@ -301,12 +307,16 @@ def open_demo(
     """
     A client of the demo's workspace in ``directory``, its file source, and the
     folder's definitions. A folder without ``files.csv`` gets the runs of
-    ``samples`` samples.
+    ``samples`` samples, and one without ``workspace.json`` a local workspace
+    of the proposal ``local``.
     """
     if not (directory / 'files.csv').exists():
         runs = [run for group in measurements(samples) for run in group]
         measure(directory, runs)
-    return open_workspace(directory, BINDINGS)
+    if not (directory / WORKSPACE_FILE).exists():
+        write_workspace_header(directory, WorkspaceHeader(Header('Demo')))
+    header = read_workspace_header(directory)
+    return open_workspace(directory, header, BINDINGS, allowed=file_sources(['local']))
 
 
 def build(

@@ -8,6 +8,7 @@ It needs the extra ``scicat`` (scitacean).
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import time
@@ -60,6 +61,19 @@ class Catalogue:
     client: ScicatClient
     instrument: str
     folder: str = '/ess/data/{proposal}/{instrument}/upload/{record}'
+
+
+@functools.cache
+def login(profile: str) -> ScicatClient:
+    """
+    The client of the SciCat of the scitacean profile ``profile``, such as
+    ``'staging.ess'``, logged in at the first call in this process.
+
+    Later calls return the same client, so a process logs in once per profile.
+    A login that raises is tried again at the next call. A login does not
+    renew itself: once it expires, the client raises.
+    """
+    return ScicatClient.login(profile)
 
 
 def principal_investigator(catalogue: Catalogue, proposal: str) -> Person | None:
@@ -175,9 +189,10 @@ class ScicatFiles:
     """
     A file source over the raw datasets of ``proposal`` in SciCat, one file each.
 
-    The catalogue is read with the login of ``client``::
+    The catalogue is read with the login of ``client``, or with the login that
+    ``client`` returns, called at the first query::
 
-        ScicatFiles(scitacean.Client.login('staging.ess'), '336349')
+        ScicatFiles(lambda: login('staging.ess'), '336349')
 
     A file is identified by the PID of its dataset, ``pid:20.500.12269/<uuid>``,
     and named by it or by its run, ``run:385``. Its metadata come from the
@@ -212,9 +227,14 @@ class ScicatFiles:
     """
 
     def __init__(
-        self, client: ScicatClient, proposal: str, *, max_age: float = 10.0
+        self,
+        client: ScicatClient | Callable[[], ScicatClient],
+        proposal: str,
+        *,
+        max_age: float = 10.0,
     ) -> None:
-        self._client = client
+        self._login = (lambda: client) if isinstance(client, ScicatClient) else client
+        self._client: ScicatClient | None = None
         self._proposal = proposal
         self._max_age = max_age
         self._listing = _Listing(datasets={}, names={}, time=-math.inf)
@@ -235,7 +255,7 @@ class ScicatFiles:
         try:
             path = _nexus_file(
                 self._ask(
-                    lambda: self._client.scicat.get_dataset_model(pid, datablocks=True)
+                    lambda client: client.scicat.get_dataset_model(pid, datablocks=True)
                 )
             )
         except (OSError, ValueError) as error:
@@ -271,7 +291,7 @@ class ScicatFiles:
     def _read(self) -> _Listing:
         """Queries the catalogue for the raw datasets, and holds them as the listing."""
         fields = {'type': 'raw', 'proposalIds': [self._proposal]}
-        found = self._ask(lambda: self._client.scicat.query_datasets(fields))
+        found = self._ask(lambda client: client.scicat.query_datasets(fields))
         found.sort(key=_measured)
         datasets = {FileRef(file=f'{_PID_PREFIX}{d.pid}'): d for d in found}
         runs: dict[FileRef, list[FileRef]] = {}
@@ -315,9 +335,9 @@ class ScicatFiles:
         name = dataset.datasetName
         return None if name is None else name.removesuffix(added)
 
-    def _ask[T](self, query: Callable[[], T]) -> T:
+    def _ask[T](self, query: Callable[[ScicatClient], T]) -> T:
         """
-        The answer to ``query``.
+        The answer to ``query`` of the client, which logs in at the first query.
 
         Raises ``OSError`` if it is not answered, and then for ``max_age``
         without asking.
@@ -325,7 +345,9 @@ class ScicatFiles:
         if (failed := self._unanswered) is not None and self._recent(failed.time):
             raise OSError(failed.reason)
         try:
-            answer = query()
+            if self._client is None:
+                self._client = self._login()
+            answer = query(self._client)
         # scitacean raises RuntimeError once the login expired, and its own
         # errors, such as ScicatCommError, derive from it.
         except (RuntimeError, httpx.HTTPError) as error:

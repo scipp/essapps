@@ -1,25 +1,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""
-A file source that applies corrections to the metadata of files, and a
-workspace folder opened with it (:func:`open_workspace`).
-"""
+"""A file source that applies corrections to the metadata of files."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from ess.apps import Client
 from ess.apps.files import Selector
-from ess.apps.folder import ArrivingFiles, open_folder
 from ess.apps.protocol import FileSource
-from ess.spec import Binding, FileRef
+from ess.spec import FileRef
 
 from . import definition
-from .definition import DefinitionStore, FolderDefinitions
+from .definition import DefinitionStore
 
 
 class _Every(Selector):
@@ -128,31 +123,3 @@ class CorrectedFiles:
             for ref in self._source.list(_Every())
             if selector.matches(self.metadata(ref))
         ]
-
-
-def open_workspace(
-    directory: Path,
-    bind: Sequence[Binding],
-    *,
-    source: FileSource | None = None,
-    proposal: str = 'local',
-) -> tuple[Client, CorrectedFiles, FolderDefinitions]:
-    """
-    A client of the workspace folder ``directory``, its corrected file source,
-    and the folder's definitions.
-
-    The corrections are stored in the folder. The file source corrects
-    ``source``, or by default an :class:`~ess.apps.folder.ArrivingFiles`,
-    which reads ``files.csv`` again when it is replaced: a file that arrives
-    while the client is open is listed.
-
-    Raises as :func:`ess.apps.folder.open_folder` and :class:`CorrectedFiles`
-    do.
-    """
-    definitions = FolderDefinitions(directory)
-    files = CorrectedFiles(
-        ArrivingFiles(directory) if source is None else source,
-        definitions=definitions,
-    )
-    client = open_folder(directory, bind, files=files, proposal=proposal)
-    return client, files, definitions

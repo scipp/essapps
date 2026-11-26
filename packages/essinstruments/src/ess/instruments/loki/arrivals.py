@@ -25,8 +25,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ess.batch import open_workspace
-from ess.batch.web.api import STATIC, every
+from ess.batch import (
+    Header,
+    WorkspaceHeader,
+    file_sources,
+    open_workspace,
+    write_workspace_header,
+)
+from ess.batch.web.api import STATIC, create_app, every
 from ess.loki import data
 
 from ess.apps import Client, file
@@ -218,7 +224,11 @@ def main() -> None:
     if directory.exists() and any(directory.iterdir()):
         parser.exit(1, f'{directory} is not empty\n')
     instrument = Instrument(directory)
-    client, files, definitions = open_workspace(directory, BINDINGS)
+    header = WorkspaceHeader(Header(directory.name))
+    write_workspace_header(directory, header)
+    client, files, definitions = open_workspace(
+        directory, header, BINDINGS, allowed=file_sources(['local'])
+    )
     _say(f'folder {directory}; reducing the detector and the masks')
     with client:
         given = settings(client, instrument)
@@ -231,7 +241,7 @@ def main() -> None:
         plan = arrivals(args.count)
         for arrival in plan[: args.start]:
             arrive(*arrival)
-        app = build(
+        pages = build(
             client,
             files,
             definitions,
@@ -244,7 +254,9 @@ def main() -> None:
         later = [functools.partial(arrive, *a) for a in plan[args.start :]]
         _say(f'serving http://localhost:{args.port}/; Ctrl-C stops')
         with every(args.arrive, later):
-            uvicorn.run(app, host='localhost', port=args.port, log_level='warning')
+            uvicorn.run(
+                create_app(pages), host='localhost', port=args.port, log_level='warning'
+            )
 
 
 if __name__ == '__main__':

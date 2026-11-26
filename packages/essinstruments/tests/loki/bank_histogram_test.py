@@ -10,7 +10,15 @@ from pathlib import Path
 import h5py
 import pytest
 import scipp as sc
-from ess.batch import FileInfo, open_workspace
+from ess.batch import (
+    FileInfo,
+    Header,
+    WorkspaceHeader,
+    create_workspace,
+    file_sources,
+    open_workspace,
+)
+from ess.batch.web import create_app
 from ess.instruments.loki.batch import per_run
 from ess.instruments.loki.bindings import BINDINGS, bank_histogram_binding
 from ess.instruments.loki.specs import BANK_HISTOGRAM, BankHistogramParams
@@ -90,16 +98,21 @@ def test_a_run_of_two_files_is_a_row_per_file_keyed_by_its_identity() -> None:
 
 
 def test_the_page_of_raw_runs_draws_a_histogram_per_run(tmp_path: Path) -> None:
-    (tmp_path / 'raw').mkdir()
+    header = WorkspaceHeader(Header('Raw runs'))
+    folder = create_workspace(tmp_path, 'raw-runs', header)
+    (folder / 'raw').mkdir()
     for r in (1, 2):
-        write_run(tmp_path / 'raw' / f'{r}.hdf', {0: [1.0, 2.0, 3.0 * r]})
+        write_run(folder / 'raw' / f'{r}.hdf', {0: [1.0, 2.0, 3.0 * r]})
     write_files_table(
-        tmp_path, [{'file': f'raw/{r}.hdf', 'run': r, 'kind': 'raw'} for r in (1, 2)]
+        folder, [{'file': f'raw/{r}.hdf', 'run': r, 'kind': 'raw'} for r in (1, 2)]
     )
-    client, files, definitions = open_workspace(tmp_path, BINDINGS)
+    client, files, definitions = open_workspace(
+        folder, header, BINDINGS, allowed=file_sources(['local'])
+    )
     with client:
-        app = build(client, files, definitions, first='raw-runs')
-        manager = app.state.pages.intake.manager
+        pages = build(client, files, definitions, first='raw-runs')
+        app = create_app(pages)
+        manager = pages.intake.manager
         (label,) = manager.headers()
         spec = manager.batch(label).spec
         http = TestClient(app, base_url=str(TestClient(app).get('/').url))

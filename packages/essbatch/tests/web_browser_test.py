@@ -25,9 +25,19 @@ from typing import Any, NoReturn
 import pandas as pd
 import pytest
 import uvicorn
-from ess.batch import Batch, BatchManager, CorrectedFiles, Header, Intake
+from ess.batch import (
+    Batch,
+    BatchManager,
+    CorrectedFiles,
+    Header,
+    Intake,
+    WorkspaceHeader,
+    create_workspace,
+    file_sources,
+    workspaces,
+)
 from ess.batch.definition import TABLE
-from ess.batch.web import Pages, Shown, create_app
+from ess.batch.web import Launcher, Pages, Shown, create_app, create_launch_app
 from ess.batch.web.api import STATIC
 from ess.batch.writing import Writing
 from fastapi import FastAPI
@@ -2147,3 +2157,157 @@ def test_publish_is_disabled_while_a_publication_runs(publishing: Any) -> None:
         '[tabulator-field=published]'
     ).filter(has_text='pid:').wait_for()
     assert hint == 'Publishing…'
+
+
+# The launch page
+
+
+CATALOGUED = WorkspaceHeader(Header('Commissioning', 'Day 1'), 'p1', 'scicat:fake')
+
+
+@pytest.fixture
+def launch(browser: Any, launcher: Launcher, gate: Gate) -> Iterator[Any]:
+    """The launch page, loaded; it fails on an error in the browser's console."""
+    with serve(create_launch_app(launcher)) as root:
+        page = watched(browser)
+        page.root = root
+        try:
+            yield page
+        finally:
+            gate.open()
+            page.close()
+    assert page.errors == []
+
+
+def test_the_launch_page_lists_the_workspaces_of_the_root(
+    launch: Any, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    create_workspace(launcher.root, 'test', WorkspaceHeader(Header('Test')))
+
+    launch.goto(launch.root)
+    launch.wait_for_selector('#workspaces tr.item')
+
+    rows = launch.locator('#workspaces tr.item')
+    assert rows.locator('a').all_inner_texts() == ['Commissioning', 'Test']
+    assert rows.locator('td:nth-child(3)').all_inner_texts() == [
+        'SciCat fake',
+        'files.csv of the folder',
+    ]
+    assert launch.inner_text('#workspaces .description') == 'Day 1'
+
+
+def test_the_open_form_of_a_new_workspace_leaves_no_empty_toolbar(
+    launch: Any, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'test', WorkspaceHeader(Header('Test')))
+    launch.goto(launch.root)
+    launch.wait_for_selector('#workspaces tr.item')
+    assert launch.is_visible('.toolbar')
+
+    launch.click('#new-workspace-open')
+
+    assert launch.is_visible('#new-workspace')
+    assert not launch.is_visible('.toolbar')
+
+
+def test_a_workspace_made_on_the_launch_page_opens_at_its_batch_page(
+    launch: Any, launcher: Launcher
+) -> None:
+    launch.goto(launch.root)
+    launch.fill('#new-name', 'test')
+    launch.fill('#new-title', 'Test')
+    launch.fill('#new-proposal', 'local')
+    launch.select_option('#new-files', 'local')
+
+    launch.click('#new-workspace button[type=submit]')
+    launch.wait_for_url(f'{launch.root}workspaces/test/batches/*/')
+
+    assert launch.input_value('#batch-title') == 'Pairs'
+    assert workspaces(launcher.root) == ['test']
+
+
+def test_a_click_on_a_workspace_opens_its_batch_page(
+    launch: Any, launcher: Launcher, sample: Measure
+) -> None:
+    sample(1, 'water')
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    launch.goto(launch.root)
+
+    launch.click('#workspaces a:text-is("Commissioning")')
+
+    launch.wait_for_url(f'{launch.root}workspaces/commissioning/batches/*/')
+    launch.wait_for_selector('#rows .tabulator-row:has-text("water")')
+
+
+def test_a_workspace_is_removed_after_a_confirmation_that_says_what_goes(
+    launch: Any, launcher: Launcher
+) -> None:
+    folder = create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    launch.goto(launch.root)
+    asked: list[str] = []
+
+    def answer(dialog: Any) -> None:
+        asked.append(dialog.message)
+        dialog.accept() if len(asked) > 1 else dialog.dismiss()
+
+    launch.on('dialog', answer)
+    launch.click('#workspaces tr:has-text("Commissioning") button.remove')
+    launch.evaluate('0')  # once the page runs again, the dismissal sent nothing
+    kept = (launch.locator('#workspaces tr.item').count(), folder.exists())
+    launch.click('#workspaces tr:has-text("Commissioning") button.remove')
+    launch.wait_for_selector('#workspaces td.hint:text-is("No workspace yet.")')
+
+    assert kept == (1, True)
+    assert not folder.exists()
+    assert 'the batches, the history and the stored outputs' in asked[0]
+
+
+def test_the_outputs_of_a_workspace_are_cleared_after_a_confirmation(
+    launch: Any, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    launch.goto(launch.root)
+    asked: list[str] = []
+
+    def answer(dialog: Any) -> None:
+        asked.append(dialog.message)
+        dialog.accept()
+
+    launch.on('dialog', answer)
+    row = launch.locator('#workspaces tr:has-text("Commissioning")')
+    row.locator('button.clear').click()
+    launch.wait_for_selector('#toast:has-text("Cleared the outputs of Commissioning.")')
+
+    assert 'The batches, their settings and the history stay' in asked[0]
+    assert row.locator('button').all_inner_texts() == ['Clear outputs', 'Remove']
+
+
+def test_the_batch_page_of_a_workspace_links_back_to_the_launch_page(
+    launch: Any, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    launch.goto(f'{launch.root}workspaces/commissioning/')
+    launch.wait_for_url(f'{launch.root}workspaces/commissioning/batches/*/')
+
+    launch.click('#home')
+
+    launch.wait_for_url(launch.root)
+    launch.wait_for_selector('#workspaces tr.item')
+
+
+def test_the_form_hides_the_file_source_if_one_is_allowed(
+    browser: Any, tmp_path: Path
+) -> None:
+    def build(*_: object) -> NoReturn:
+        raise AssertionError('no workspace is opened')
+
+    one = Launcher(tmp_path, build, bind=[], allowed=file_sources(['local']))
+    with serve(create_launch_app(one)) as root:
+        page = watched(browser)
+        page.goto(root)
+        page.wait_for_selector('#new-workspace:not([hidden])')  # no workspace yet
+
+        assert page.locator('#new-files-field').is_hidden()
+        page.close()
+    assert page.errors == []

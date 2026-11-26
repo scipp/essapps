@@ -2639,8 +2639,8 @@ def test_a_misspelt_column_of_a_table_file_is_a_note_and_its_setting_is_asked_fo
 @pytest.mark.parametrize(
     ('given', 'said'),
     [
-        ({'title': ''}, 'a batch has a title that is not empty'),
-        ({'title': '  '}, 'a batch has a title that is not empty'),
+        ({'title': ''}, 'give a title that is not empty'),
+        ({'title': '  '}, 'give a title that is not empty'),
         ({'source': 'other'}, 'the source other is not registered; registered: pairs'),
         ({'spec': 'other'}, 'the workspace binds no spec other'),
     ],
@@ -2833,7 +2833,7 @@ def test_a_header_the_manager_refuses_answers_422_and_changes_nothing(
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (
-        'The batch was not changed: a batch has a title that is not empty.'
+        'The batch was not changed: give a title that is not empty.'
     )
     assert manager.headers() == before
 
@@ -2923,6 +2923,27 @@ def test_a_page_handed_out_before_its_batch_is_removed_answers_missing(
         page.poll(0)
     with pytest.raises(NotFound):
         page.relist()
+
+
+def test_a_page_handed_out_before_the_pages_closed_is_rejected(
+    http: TestClient, pages: Pages
+) -> None:
+    # As a request does that found the batch, then waited for the lock while
+    # the workspace closed: it submits nothing and writes no definition.
+    page = pages.page('scan')
+
+    pages.close()
+
+    requests = [
+        page.relist,
+        lambda: page.clear([]),
+        lambda: pages.remove('scan'),
+        pages.clear,
+        pages.batches,
+    ]
+    for request in requests:
+        with pytest.raises(Rejected, match='The workspace is closed'):
+            request()
 
 
 def test_a_batch_made_again_under_a_removed_label_gets_a_new_page(

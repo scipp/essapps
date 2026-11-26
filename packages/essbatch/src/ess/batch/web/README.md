@@ -4,7 +4,8 @@ For a maintainer of `ess.batch.web`.
 After reading you know which object holds which state, how a request reaches the batch layer, how the browser learns of changes, and what to keep in mind when you change the page.
 
 `ess.batch.web` serves each batch of a workspace (`ess.batch.BatchManager`) as a web page at `/batches/<label>/`.
-One Python process holds the workspace, the batches and the server.
+The launch page lists the workspaces of a root folder and serves the pages of each at `/workspaces/<name>/` ([The launch page](#the-launch-page)).
+One Python process holds the workspaces, the batches and the server.
 The browser holds only what it shows.
 How to work with batches in code: [the batch guide](../../../../docs/batch.md).
 
@@ -14,13 +15,14 @@ How to work with batches in code: [the batch guide](../../../../docs/batch.md).
 sh packages/essbatch/src/ess/batch/web/static/vendor.sh   # once: the page's libraries into static/vendor/ (needs npm)
 
 python -m ess.batch.web.demo [FOLDER] --port 8000              # fake runs, fake I(Q); needs essbatch[web]
-python -m ess.instruments.loki.web FOLDER --port 8000           # LoKI's I(Q); needs essinstruments[loki-app]
+python -m ess.instruments.loki.web ROOT --port 8000             # LoKI's I(Q) on the workspaces of ROOT; needs essinstruments[loki-app]
 python -m ess.instruments.loki.arrivals [FOLDER] --arrive 15    # LoKI's I(Q), runs arriving in a new folder
 ```
 
 Each command lists its options with `--help`.
 Open `http://localhost:8000/`.
 `FOLDER` is a workspace folder (`ess.apps.folder`); without it, the demos create a temporary folder and print its path.
+`ROOT` is a folder of workspace folders ([the batch guide](../../../../docs/batch.md), "Workspaces of a root folder").
 The LoKI page reads the masks from a record. Reduce the detector and the masks first, with the two `essbatch` commands in [the docstring of `ess.instruments.loki.web`](../../../../../essinstruments/src/ess/instruments/loki/web.py). `loki.arrivals` does this itself.
 
 ## The objects and their state
@@ -116,6 +118,7 @@ The app's lifespan runs one more thread, which calls `Pages.tick`, one step of F
 One reentrant lock, `Pages.lock`, serializes every request, every step of Follow and every count of rows.
 Each public method of `Pages`, `Page` and `Runs` takes it.
 `LastStep` is used only under it.
+Once `Pages.close` has run, taking the lock raises `Rejected`, so that a request that waited for it submits nothing and writes nothing.
 
 A step of Follow runs whether a page is open or not.
 `Pages.tick` catches every exception, so that the timer never ends; the page of the batch that follows shows the error, and the next step tries again.
@@ -170,7 +173,8 @@ The page without a batch polls no state; it reloads the list of batches with eac
 
 ## The browser
 
-`static/` holds the page as ES modules, with no build step: `app.js`, `tables.js` (Tabulator grids), `form.js`, `dom.js`.
+`static/` holds the page as ES modules, with no build step: `app.js`, `tables.js` (Tabulator grids), `form.js`, `list.js` (the row of a list and the fields Title and Description), `dom.js` (the element helper, the calls of the API and the toast).
+The launch page is `launch.html` with `launch.js`, which shares `list.js` and `dom.js`.
 `vendor.sh` fetches Tabulator and Plotly into `static/vendor/`.
 
 The document loads once.
@@ -203,13 +207,77 @@ parent = FastAPI(lifespan=lambda _: batch.router.lifespan_context(batch))
 parent.mount('/batch', batch)
 ```
 
+A parent that mounts batch apps while it runs, as the launch app does, enters the lifespan of each when it mounts it and leaves it when it unmounts it.
+
+## The launch page
+
+`create_launch_app(Launcher(root, build, bind=..., allowed=...))` serves at `/` the list of the workspaces of `root` and the form "New workspace".
+The application gives the bindings, the file sources it allows (`ess.batch.file_sources`), and `build`, which makes the `Pages` of a workspace once the launcher opened it:
+
+```python
+def build(client, files, definitions, header) -> Pages: ...
+```
+
+So the launch page knows no instrument: `ess.instruments.loki.web.launch` is an example.
+The header of each batch page links back to the launch page (`create_app(pages, home=...)`).
+
+Opening a workspace, from a click in the list:
+
+```mermaid
+sequenceDiagram
+    participant browser
+    participant launch as launch app
+    participant batch as batch app of NAME
+    browser->>launch: POST api/workspaces/NAME/open
+    launch->>launch: read workspace.json, open_workspace, build, create_app(pages)
+    launch->>batch: enter its lifespan: the timer of Follow starts
+    launch->>launch: mount it at workspaces/NAME/
+    launch-->>browser: Notice
+    browser->>batch: GET workspaces/NAME/, and every request of its pages
+```
+
+| Request | What the launch app does |
+|---|---|
+| `GET api/workspaces` | lists the workspaces; a workspace that cannot be opened, or whose `workspace.json` cannot be read, with the reason |
+| `POST api/workspaces` | makes a workspace (`ess.batch.create_workspace`) |
+| `POST api/workspaces/NAME/open` | opens it, unless it is open |
+| any request under `workspaces/NAME/` while it is not open | opens it, then redirects to the same URL (307); refused if it was closed |
+| `POST api/workspaces/NAME/close` | closes it, see below; the page has no button for it |
+| `POST api/workspaces/NAME/clear` | opens it unless it is open, then clears the outputs of all its records (`Pages.clear`) |
+| `POST api/workspaces/NAME/remove` | closes it if it is open, then deletes the folder |
+
+Close runs these steps, and stops at the first that fails:
+
+1. Refuse while a record of the workspace is pending. Nothing has changed then.
+2. Refuse every later request and step of Follow of its pages (`Pages.close`).
+3. Unmount the batch app, and leave its lifespan: the timer of Follow ends.
+4. Close the workspace: the client waits for its records and releases the folder.
+
+Close is for whoever runs the server: it releases the folder, so that `essbatch` can work on it.
+A person of the page has no use for it, so the page does not show it: `curl -X POST SERVER/api/workspaces/NAME/close`.
+A closed workspace does not follow until it is opened again; then the batch that followed follows again, as after a stop and start of the server.
+A batch page still open in a browser then gets an answer that the workspace is closed; a click in the list opens it again.
+
+Remove of a workspace closes it as Close does if it is open, then deletes the folder with all its outputs (`ess.batch.remove_workspace`).
+**Clear outputs** in the row of a workspace frees the disk space of its outputs and keeps the workspace, as **Clear all outputs** on its batch page does.
+It does not open a workspace that is not open, so that one that cannot be opened, such as one of a file source this server does not allow, can be removed.
+It refuses a folder that another process holds, such as one of `essbatch follow`, and a folder that is a symbolic link, before anything is closed.
+The folder is renamed to a hidden name while it is held, then deleted, so a deletion that fails halfway leaves no workspace in the list.
+
+A workspace stays open until it is closed or removed, or the server stops, so that its reductions and Follow go on while another is shown.
+At the stop, the lifespan of the launch app closes every open workspace, steps 3 and 4 only: the stop waits for pending records.
+A close that raises does not keep the others open; the stop raises what each raised, at the end.
+Each open, close, clear and remove runs in the event loop under one `asyncio.Lock`, and the mounts change only there.
+What blocks, opening a workspace, the end of the timer and the close of the client, runs in a thread.
+
 ## Limits
 
-- One process holds the folder. `essbatch` opens it only while the server is stopped. What its commands write, such as the rows that `essbatch add` adds, the page shows at its next start.
+- One process holds the folder. `essbatch` opens it only while no server has it open: close it first (`POST api/workspaces/NAME/close`). What its commands write, such as the rows that `essbatch add` adds, the page shows when the server opens it next.
+- A server logs in to SciCat once, when it starts. Once the login expires, the file source of a SciCat workspace raises, and its pages say so, until the server starts again.
 - One `Batch` object per label. Another `Batch` of the page's label writes its whole batch table at each change, over that of the page.
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages. A request waits while a step of Follow runs on another batch, and while results are published, uploads included.
-- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so the page cannot remove it. `essbatch remove` can, while the server is stopped.
+- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so the page cannot remove it. `essbatch remove` can, once the workspace is closed or the server is stopped.
 - The confirmations are the browser's dialogs (`confirm`).
 
 ## Browser tests

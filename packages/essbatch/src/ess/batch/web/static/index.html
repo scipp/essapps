@@ -13,6 +13,7 @@
 <body>
   <div class="offline" id="offline" role="alert" hidden></div>
   <header class="top">
+    <a class="home" id="home" hidden>Workspaces</a>
     <h1 id="title">Batch reduction</h1>
     <nav class="views" aria-label="View">
       <button type="button" data-view="batches" aria-pressed="false">Batches <span class="n" id="n-batches"></span></button>
@@ -88,9 +89,8 @@
           <span class="spacer"></span>
           <button type="button" class="quiet" id="clear-all" title="Delete the outputs of every batch, removed ones too, to free disk space.">Clear all outputs</button>
         </div>
+        <!-- The fields Title and Description of both forms: headerFields of list.js -->
         <form class="new-batch header-form" id="new-batch" hidden>
-          <div class="field"><label for="new-title">Title</label><input type="text" id="new-title" name="title"></div>
-          <div class="field"><label for="new-description">Description</label><textarea id="new-description" name="description" rows="3"></textarea></div>
           <div class="field"><label for="new-source">Rows</label><select id="new-source" name="source"></select><small id="new-rows"></small></div>
           <div class="field" id="new-range">
             <span>Range</span>
@@ -175,8 +175,6 @@
         </section>
         <form class="param header-form" id="batch-form">
           <h3>Title and description</h3>
-          <div class="field"><label for="batch-title">Title</label><input type="text" id="batch-title" name="title"></div>
-          <div class="field"><label for="batch-description">Description</label><textarea id="batch-description" name="description" rows="3"></textarea></div>
           <p class="problem" id="batch-problem"></p>
           <div class="buttons"><button type="submit" class="primary">Save</button></div>
         </form>

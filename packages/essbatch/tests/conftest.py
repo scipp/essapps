@@ -13,11 +13,17 @@ from ess.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    FileSources,
     FolderDefinitions,
+    Header,
     Intake,
+    WorkspaceHeader,
+    file_sources,
+    write_workspace_header,
 )
 from ess.batch.cli import main
 from ess.batch.table import KEY
+from ess.batch.web import Launcher, Pages
 
 from ess.apps import Client, Template, Workspace
 from ess.apps.folder import folder_files, open_folder
@@ -98,6 +104,39 @@ def client(workspace: Workspace) -> Client:
 def other(workspace: Workspace) -> Client:
     """Another client of the proposal of ``client``."""
     return Client(workspace, submitter='bob')
+
+
+@pytest.fixture
+def launcher(tmp_path: Path, gate: toys.Gate, fake: FakeFiles) -> Launcher:
+    """
+    The workspaces of ``tmp_path / 'root'``: local ones, and those of a fake
+    SciCat, ``scicat:fake``, that lists the runs of ``fake``. A workspace opens
+    with a batch of the pairs that follows, with a step every 0.01 s.
+    """
+
+    def reduce(params: toys.Params) -> toys.Outputs:
+        gate.wait()
+        return toys.Outputs(total=read_file(params.sample))
+
+    bind = [function_binding(toys.PLAIN, reduce)]
+    allowed: FileSources = {
+        **file_sources(['local']),
+        'scicat:fake': lambda folder, proposal: fake,
+    }
+
+    def build(
+        client: Client,
+        files: CorrectedFiles,
+        definitions: FolderDefinitions,
+        header: WorkspaceHeader,
+    ) -> Pages:
+        manager = BatchManager(client, definitions=definitions)
+        intake = Intake(manager, sources=toys.SOURCES)
+        if not manager.headers():
+            intake.create(toys.PLAIN.name, title='Pairs', source='pairs', follow=True)
+        return Pages(intake, interval=0.01, files=files)
+
+    return Launcher(tmp_path / 'root', build, bind=bind, allowed=allowed, title='Toy')
 
 
 @pytest.fixture
@@ -192,7 +231,11 @@ def _find(params: toys.FindParams) -> toys.FindOutputs:
 
 @pytest.fixture
 def folder(tmp_path: Path) -> Path:
-    """Samples 1, 2, 3 holding their numbers, BAD holding -1, and transmissions."""
+    """
+    A local workspace of the proposal ``local``: samples 1, 2, 3 holding their
+    numbers, BAD holding -1, and transmissions.
+    """
+    write_workspace_header(tmp_path, WorkspaceHeader(Header('Toys')))
     runs = {1: (1, 'sample'), 2: (2, 'sample'), 3: (3, 'sample')}
     runs |= {BAD: (-1, 'bad'), 1001: (1, 'transmission'), 1002: (1, 'transmission')}
     lines = ['file,run,role']

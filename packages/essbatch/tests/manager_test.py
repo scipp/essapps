@@ -278,7 +278,7 @@ def test_a_label_that_has_definitions_or_records_is_refused(
 def test_a_label_with_a_slash_or_a_leading_dot_is_refused(
     manager: BatchManager, label: str
 ) -> None:
-    with pytest.raises(ValueError, match='a label is'):
+    with pytest.raises(ValueError, match='use letters'):
         manager.create('plain', title='Morning', label=label)
     assert manager.headers() == {}
 

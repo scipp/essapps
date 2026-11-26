@@ -31,7 +31,7 @@ class Rejected(Exception):
 
 
 class NotFound(Exception):
-    """No batch has the label asked for."""
+    """No batch has the label asked for, or no workspace the name."""
 
 
 def titled_field_error(title: str, message: str) -> str:

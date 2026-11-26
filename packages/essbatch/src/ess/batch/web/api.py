@@ -16,11 +16,12 @@ How the page and the server interact: ``README.md`` in this folder.
 import itertools
 import threading
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
+from anyio import to_thread
 from fastapi import APIRouter, Body, Depends, FastAPI, Request
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import (
@@ -39,6 +40,7 @@ from .models import (
     Cells,
     Edit,
     HeaderEdit,
+    Home,
     Key,
     Keys,
     Made,
@@ -107,25 +109,8 @@ def serve(app: FastAPI, *, port: int) -> None:
     uvicorn.run(app, host='localhost', port=port)
 
 
-def create_app(pages: Pages) -> FastAPI:
-    """
-    The app that serves the page of each batch of ``pages`` and its JSON API.
-
-    The app's lifespan runs a thread that calls
-    :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.interval`` seconds.
-    A parent app that mounts this app must run its lifespan, since Starlette
-    does not (see ``README.md``).
-    """
-
-    @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        with every(pages.interval, itertools.repeat(pages.tick)):
-            yield
-
-    app = FastAPI(title=pages.title or 'Batches', lifespan=lifespan)
-    app.state.pages = pages
-    # The state is about 0.6 kB per row and repeats much.
-    app.add_middleware(GZipMiddleware)
+def answer_errors(app: FastAPI) -> None:
+    """Answer a :class:`Rejected` with 422 and a :class:`NotFound` with 404."""
 
     @app.exception_handler(Rejected)
     def problem(_: Request, error: Rejected) -> JSONResponse:
@@ -135,8 +120,38 @@ def create_app(pages: Pages) -> FastAPI:
     def missing(_: Request, error: NotFound) -> JSONResponse:
         return JSONResponse({'message': str(error)}, status_code=404)
 
+
+def create_app(pages: Pages, *, home: str | None = None) -> FastAPI:
+    """
+    The app that serves the page of each batch of ``pages`` and its JSON API.
+
+    The app's lifespan runs a thread that calls
+    :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.interval`` seconds.
+    A parent app that mounts this app must run its lifespan, since Starlette
+    does not (see ``README.md``).
+
+    With ``home``, a URL relative to the app's root, the header of each page
+    links to it, such as to a launch page.
+    """
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        timer = ExitStack()
+        timer.enter_context(every(pages.interval, itertools.repeat(pages.tick)))
+        try:
+            yield
+        finally:  # waits for a step of Follow, so not in the event loop
+            await to_thread.run_sync(timer.close)
+
+    app = FastAPI(title=pages.title or 'Batches', lifespan=lifespan)
+    app.state.pages = pages
+    # The state is about 0.6 kB per row and repeats much.
+    app.add_middleware(GZipMiddleware)
+
+    answer_errors(app)
+
     @app.get('/', include_in_schema=False)
-    def home() -> Response:
+    def landing() -> Response:
         # The answer depends on the batches, so the browser must not cache it,
         # not even for Back.
         label, kept = pages.home(), {'Cache-Control': 'no-store'}
@@ -311,6 +326,11 @@ def create_app(pages: Pages) -> FastAPI:
     @workspace.get('/api/batches')
     def batches() -> Batches:
         return pages.batches()
+
+    @workspace.get('/api/home')
+    def linked_home() -> Home:
+        """The URL that the header links to, relative to the app's root."""
+        return Home(url=home)
 
     @workspace.get('/api/batches/counts')
     def counts() -> BatchCounts:

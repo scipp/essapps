@@ -558,6 +558,52 @@ iofq.set_table(table)
 
 A cell may refer to a record that still runs. If that record failed or was cancelled, the row has the problem "the record it reads is failed". If its outputs are cleared, the problem says how to point the cell to a new result ("Clearing outputs").
 
+## Workspaces of a root folder
+
+A workspace folder states in `workspace.json` the proposal and the file source it is opened with.
+A root folder holds workspaces:
+
+```
+ROOT/
+  336349/
+    workspace.json   {"proposal": "336349", "files": "scicat:staging.ess",
+                      "title": "LoKI commissioning", "description": "..."}
+    log.jsonl  store/  definitions/
+  local-test/
+    workspace.json   {"proposal": "local", "files": "local", ...}
+    files.csv  log.jsonl  store/  definitions/
+```
+
+| `files` | The file source |
+|---|---|
+| `local` | `files.csv` of the folder, as `essbatch files` writes it; while the folder has no `files.csv`, it lists no file |
+| `scicat:PROFILE` | the raw datasets of the proposal in the SciCat of the scitacean profile `PROFILE` |
+
+Every workspace folder has a `workspace.json`: `open_workspace` and `essbatch` refuse a folder without one.
+`create_workspace` writes it, and `essbatch files` writes it if it is missing.
+The proposal and the file source belong to the workspace, not to a batch.
+Cells such as `run:385`, `seen_keys` and the corrections refer to files by names that only this file source resolves.
+So another proposal is another workspace.
+Several workspaces may share a proposal: the name of the folder identifies a workspace.
+
+```python
+header = WorkspaceHeader(Header('LoKI commissioning'), proposal='336349',
+                         files='scicat:staging.ess')
+folder = create_workspace(root, '336349', header)   # ROOT/336349/workspace.json
+workspaces(root)                                    # ['336349', ...], sorted
+header = read_workspace_header(folder)
+allowed = file_sources(['local', 'scicat:staging.ess'])
+client, files, definitions = open_workspace(folder, header, BINDINGS, allowed=allowed)
+remove_workspace(root, '336349')                    # deletes the folder
+```
+
+An application states the file sources it allows, and `open_workspace` raises `ValueError` for a workspace of another one.
+A file source of SciCat logs in at its first query, with `ess.apps.scicat.login`: once per profile and process, shared with the catalogue of `essbatch -c`.
+`essbatch` allows the file source of the folder it opens.
+A test passes its own `FileSources`, such as a fake of SciCat, and needs no network.
+The name of a workspace follows the rule of a label of a batch (`definition.check_label`).
+The launch page of [`web/README.md`](../src/ess/batch/web/README.md) lists the workspaces of a root folder, makes, closes and removes them, and opens each at its own URL.
+
 ## What is stored on disk
 
 | File | Content | Writer |
@@ -571,9 +617,11 @@ A cell may refer to a record that still runs. If that record failed or was cance
 | `definitions/corrections.json` | metadata of files set by hand | `CorrectedFiles` |
 | `definitions/format.json` | `{"format": 2}`: the format of the files above | `FolderDefinitions`, before its first write |
 | `store/`, the log | the records | the workspace |
+| `workspace.json` | `{"proposal": ..., "files": ..., "title": ..., "description": ...}` | `create_workspace`, `essbatch files` if it is missing |
 
 `source.json` exists only for a batch made from a row source, `output_options.json` once output options are set, and `publish.json` once a result is published.
-Each file has one writer, and `FolderDefinitions` writes it whole through a temporary file.
+Each file of `definitions/` has one writer, and `FolderDefinitions` writes it whole through a temporary file.
+`write_workspace_header` writes `workspace.json` whole through a temporary file; nothing changes it once it is written.
 `settings.json` has the shape of a template file of the client, and `table.json` that of pandas' `to_json(orient='table')`.
 
 A label is a batch if and only if `header.json` exists.

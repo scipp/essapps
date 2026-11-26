@@ -116,6 +116,8 @@ header.top {
   background: var(--panel);
 }
 header.top h1 { font-size: 15px; }
+.home { color: var(--accent-dark); text-decoration: none; }
+.home::before { content: "\2190  "; }
 .views { display: flex; gap: 0; }
 .views button {
   height: 30px;
@@ -208,6 +210,8 @@ main {
   min-height: 48px;
   padding: 8px 12px;
 }
+/* A toolbar whose every action is hidden leaves no empty band. */
+.toolbar:not(:has(> :not([hidden]))) { display: none; }
 .split { display: flex; }
 #reduce {
   position: relative;
@@ -419,7 +423,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .add-form { display: flex; gap: 4px; }
 .add-form input { width: 220px; }
 
-/* The list of batches: a plain table, styled as the grids */
+/* The lists of batches and of workspaces: plain tables, styled as the grids */
 
 .list { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--line); }
 .list table { width: 100%; border-collapse: collapse; }
@@ -437,14 +441,14 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .list a:hover, .batch-links a:hover { text-decoration: underline; }
 .list td small { margin-left: 8px; }
 .list td .pill { margin: 0 4px 2px 0; }
-.list tr.batch { cursor: pointer; }
-.list tr.batch:not([aria-current]):hover { background: #f5f8fc; }
-.list tr.batch .text { cursor: text; }
+.list tr.item { cursor: pointer; }
+.list tr.item:not([aria-current]):hover { background: #f5f8fc; }
+.list tr.item .text { cursor: text; }
 .list tr[aria-current="page"] { background: var(--accent-soft); }
 .list tr[aria-current="page"] a { font-weight: 600; }
 .list .follows { color: var(--done); font-weight: 600; }
 .list .bad { color: var(--bad); }
-.new-batch {
+.new-batch, .new-workspace {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -452,8 +456,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
   border-top: 1px solid var(--line);
   background: #f7f8fa;
 }
-.new-batch .field > input, .new-batch .field > select, .new-batch .field > textarea { max-width: 420px; }
-/* The forms "New batch" and of the tab "Batch" */
+:is(.new-batch, .new-workspace) .field > :is(input, select, textarea) { max-width: 420px; }
+/* The forms "New batch", "New workspace" and of the tab "Batch" */
 .header-form .field > :first-child { color: var(--muted); }
 .header-form .field > small { grid-column: 2; }
 .header-form .problem { margin: 0 0 0 162px; color: var(--bad); }
@@ -503,6 +507,10 @@ body[inert] main { opacity: 0.6; transition: opacity 0.1s 0.3s; }
 
 .no-batch [data-view="rows"], .no-batch #files, .no-batch main .right { display: none; }
 .no-batch main { grid-template-columns: minmax(0, 1fr); }
+
+/* The launch page: the list of workspaces only */
+
+.launch main { grid-template-columns: minmax(0, 1fr); }
 
 /* The right region */
 

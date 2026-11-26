@@ -456,7 +456,7 @@ def _broken(files: Any) -> pd.DataFrame:
     [
         ('iofq', 'A', None, 'no spec iofq'),
         ('plain', ' ', None, 'a title that is not empty'),
-        ('plain', 'A', 'a/b', 'a label is'),
+        ('plain', 'A', 'a/b', 'use letters'),
     ],
 )
 def test_a_spec_title_or_label_is_refused_before_the_source_is_looked_up(

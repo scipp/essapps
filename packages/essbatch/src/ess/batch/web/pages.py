@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from ess.apps.fields import Fields
 from ess.apps.listing import Listing
+from ess.apps.records import Status
 from ess.spec import WorkflowSpec
 
 from ..corrections import CorrectedFiles
@@ -58,6 +59,27 @@ if TYPE_CHECKING:
     from .page import Draw
 
 
+class _Lock:
+    """
+    A reentrant lock that refuses to be taken once :attr:`closed` is set.
+
+    Raises :class:`~.errors.Rejected` then.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self.closed = False
+
+    def __enter__(self) -> None:
+        self._lock.acquire()
+        if self.closed:
+            self._lock.release()
+            raise Rejected('The workspace is closed. Open it on the launch page.')
+
+    def __exit__(self, *exc: object) -> None:
+        self._lock.release()
+
+
 class Pages:
     """
     What the pages of the batches of ``intake.manager`` share.
@@ -94,7 +116,9 @@ class Pages:
     Attributes
     ----------
     lock:
-        The reentrant lock of every request, step of Follow and count.
+        The reentrant lock of every request, step of Follow and count. Once
+        the pages are closed (:meth:`close`), taking it raises
+        :class:`~.errors.Rejected`, so every later request is rejected.
     runs:
         The files listed, for the pickers and the Runs view of every page.
     last_step:
@@ -134,7 +158,7 @@ class Pages:
         self.title = title
         self.draw = {} if draw is None else draw
         self.folder = folder
-        self.lock = threading.RLock()
+        self.lock = _Lock()
         self.runs = Runs(intake.manager.client, self.lock, marks=marks, corrected=files)
         self.last_step = LastStep(intake, interval)
         self._pages: dict[str, Page] = {}
@@ -193,9 +217,9 @@ class Pages:
         shows the error, and the next step tries again.
         """
         # Under the lock, so that a tick that waited for a request sees its
-        # effect: no step after "Stop following". No exception, not even one
-        # whose message raises, may end the timer.
-        with self.lock, suppress(Exception):
+        # effect: no step after "Stop following" or after the pages closed. No
+        # exception, not even one whose message raises, may end the timer.
+        with suppress(Exception), self.lock:
             if (label := self.intake.following) is None:
                 return
             try:
@@ -372,6 +396,30 @@ class Pages:
         return Notice(
             notice='Cleared the outputs of every batch. Reduce computes them again.'
         )
+
+    def close(self) -> None:
+        """
+        Reject every later request and step of Follow, so that the workspace
+        can be closed: no reduction is submitted and no definition written
+        after. Whether a batch follows stays stored, so that it follows again
+        once the workspace is opened again.
+
+        Raises :class:`~.errors.Rejected`, and changes nothing, if a record of
+        the workspace is pending.
+        """
+        with self.lock:
+            client = self.intake.manager.client
+            pending = client.status(client.records()).count(Status.PENDING)
+            if pending == 1:
+                raise Rejected(
+                    'A reduction has not ended. Cancel it, or wait until it ends.'
+                )
+            if pending:
+                raise Rejected(
+                    f'{pending} reductions have not ended. Cancel them, or wait '
+                    'until they end.'
+                )
+            self.lock.closed = True
 
     def counts(self) -> BatchCounts:
         """

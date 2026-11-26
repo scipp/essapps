@@ -1,4 +1,4 @@
-// The element helper `h`, and the calls of the API.
+// The element helper `h`, the calls of the API, and the toast.
 
 // h('button', {class: 'primary', onclick: f}, 'Reduce') returns a button.
 // A prop that starts with "on" adds an event handler. `class` and `text` set
@@ -52,4 +52,14 @@ export function save(blob, name) {
   const url = URL.createObjectURL(blob);
   h('a', {href: url, download: name}).click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Shows `text` in the element #toast for a few seconds.
+let toastTimer;
+export function toast(text) {
+  const box = document.getElementById('toast');
+  box.textContent = text;
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (box.hidden = true), 3500);
 }

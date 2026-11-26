@@ -15,7 +15,6 @@ Guide: "The batches of a workspace". Decisions: ``docs/developer/adr/0011``,
 
 from __future__ import annotations
 
-import re
 import time
 from collections.abc import Collection, Mapping
 from contextlib import suppress
@@ -35,18 +34,10 @@ from .definition import (
     DefinitionStore,
     DefinitionWriteError,
     Header,
+    check_label,
 )
 from .reduction import Batch, clear_records
 from .table import typed
-
-
-def _check_label(label: str) -> None:
-    """Raise ``ValueError`` unless ``label`` can be one segment of a URL path."""
-    if re.fullmatch(r'\w[\w.-]*', label) is None:
-        raise ValueError(
-            f'{label!r}: a label is letters, digits, "_", "." and "-", '
-            'and starts with a letter, a digit or "_"'
-        )
 
 
 class BatchManager:
@@ -182,7 +173,7 @@ class BatchManager:
         raises in the same order as :meth:`create`.
         """
         if label is not None:
-            _check_label(label)
+            check_label(label)
             if self._taken(label):
                 raise ValueError(f'{label}: the label has definitions or records')
         Header(title)

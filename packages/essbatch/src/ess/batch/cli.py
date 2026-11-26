@@ -45,13 +45,13 @@ from ess.apps.client import Client
 from ess.apps.errors import Stopped, SubmitError, error_text
 from ess.apps.files import replace_at_once
 from ess.apps.folder import described, folder_files, scan_folder
+from ess.apps.log import Log, Opened, Submitted
 from ess.apps.records import Record, Status
 from ess.apps.writers import Writer
 from ess.spec import Binding
 
 from . import frames
-from .corrections import open_workspace
-from .definition import DefinitionWriteError, FolderDefinitions
+from .definition import DefinitionWriteError, FolderDefinitions, Header
 from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
 from .manager import BatchManager
@@ -59,6 +59,14 @@ from .reduction import Batch
 from .source import Range, RowSource
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template, settings_text, template_to_fill
+from .workspaces import (
+    WORKSPACE_FILE,
+    WorkspaceHeader,
+    file_sources,
+    open_workspace,
+    read_workspace_header,
+    write_workspace_header,
+)
 from .writing import Writing, load_options
 
 if TYPE_CHECKING:
@@ -77,7 +85,7 @@ The options before the command give the folder, the bindings (the reductions
 that the folder runs), the row sources (which make rows from the files) and
 the writers of the specs (the file formats of the results, besides scipp
 HDF5). publish also needs the catalogue (-c), a function from the proposal
-(--proposal) to the catalogue, which needs the extra scicat:
+of the folder to the catalogue, which needs the extra scicat:
 
     B="essbatch -w FOLDER -b package.module:BINDINGS -s package.module:SOURCES
        -W package.module:WRITERS"
@@ -87,8 +95,9 @@ A first session, in this order. Each command has its own --help:
     cd FOLDER; essbatch files package.module:read --with runs.xlsx -o files.csv
                                   # the files of the folder; --with adds the role
                                   # and sample of each run from a run table
-    essbatch -c package.module:CATALOGUE --proposal P files -o files.csv
-                                  # or the raw files of proposal P in SciCat
+    essbatch -c package.module:CATALOGUE files --proposal P -o files.csv
+                                  # or the raw files of proposal P in SciCat;
+                                  # files writes workspace.json if missing
     $B specs                      # the reductions: name, version, title, outputs
     $B template SPEC -o t.yaml    # a template of SPEC: what each parameter accepts
     $B sources                    # the row sources: what each fills, and how
@@ -149,6 +158,13 @@ one of two ways:
                   later by hand. Suits a set of runs that is complete.
 A run corrected on the page (its Runs view) stores the correction in the
 folder, not in files.csv. The commands see it too, either way.
+
+workspace.json of the folder holds its proposal and its file source: "local",
+the files of files.csv, or "scicat:PROFILE", the raw datasets of the proposal
+in SciCat, with a login to the scitacean profile PROFILE at the first query.
+Every command but files needs it. files writes it if it is missing, with the
+proposal of --proposal, else "local", and the file source "local"; so does a
+launch page when it makes a folder.
 
 The status of a row:
     ready             no result yet; it can be reduced, unless the settings are invalid
@@ -288,10 +304,11 @@ def _catalogue(name: str) -> Callable[[str], Any]:
     return make
 
 
-def _the_catalogue(given: _Context) -> Catalogue | None:
+def _the_catalogue(given: _Context, proposal: str) -> Catalogue | None:
     """
-    The catalogue that the function of ``--catalogue`` returns for the
-    proposal, ``None`` without one; ``_UsageError`` if it returns another thing.
+    The catalogue that the function of ``--catalogue`` returns for
+    ``proposal``, ``None`` without one; ``_UsageError`` if it returns another
+    thing.
     """
     args = given.args
     if args.catalogue is None:
@@ -299,7 +316,7 @@ def _the_catalogue(given: _Context) -> Catalogue | None:
     from ess.apps.scicat import Catalogue  # the extra scicat
 
     try:
-        catalogue = _catalogue(args.catalogue)(args.proposal)
+        catalogue = _catalogue(args.catalogue)(proposal)
     except Exception as error:  # a real catalogue logs in, and may fail to
         raise _CommandError(f'{args.catalogue}: {error_text(error)}') from None
     if not isinstance(catalogue, Catalogue):
@@ -328,7 +345,7 @@ def _publisher(given: _Context) -> Publisher:
     """The publisher of the folder, to the catalogue of ``--catalogue``."""
     from .publish import Publisher
 
-    catalogue = _the_catalogue(given)
+    catalogue = _the_catalogue(given, given.client.proposal)
     if catalogue is None:
         raise _UsageError('publish needs -c/--catalogue')
     return Publisher(_writing(given, catalogue), catalogue)
@@ -406,12 +423,28 @@ def _files(given: _Context) -> pd.DataFrame:
     The files table of the folder (``files.csv``): of the files of the folder
     that READ knows, or, without READ, of the raw files of the proposal in the
     catalogue of ``-c``.
+
+    Writes the folder's ``workspace.json`` if it is missing, with the proposal
+    of ``--proposal``, else ``local``. That proposal must be the one of
+    ``workspace.json`` if there is one, else of the history in ``log.jsonl``.
     """
     args = given.args
+    folder = args.workspace
     if args.run_table is None and args.output is not None and args.output.exists():
         raise _UsageError(f'{args.output} exists, and may hold what a person added')
+    written = (folder / WORKSPACE_FILE).is_file()
+    if written:
+        proposal = read_workspace_header(folder).proposal
+        if args.proposal not in (None, proposal):
+            raise _UsageError(
+                f'{folder / WORKSPACE_FILE} holds the proposal {proposal}, '
+                f'not {args.proposal}'
+            )
+    else:
+        proposal = 'local' if args.proposal is None else args.proposal
+        _check_history(folder / 'log.jsonl', proposal)
     if args.read is None:
-        rows = _catalogue_files(given)
+        rows = _catalogue_files(given, proposal)
     else:
         read = _named(args.read)
         if not callable(read):
@@ -421,23 +454,42 @@ def _files(given: _Context) -> pd.DataFrame:
             )
         rows = scan_folder(args.workspace, read)
     files = pd.DataFrame(rows, dtype=str).fillna('')
-    if args.run_table is None:
-        return files
-    return described(files, read_text(args.run_table))
+    if args.run_table is not None:
+        files = described(files, read_text(args.run_table))
+    if not written:
+        header = Header(folder.resolve().name)
+        write_workspace_header(folder, WorkspaceHeader(header, proposal))
+    return files
 
 
-def _catalogue_files(given: _Context) -> list[dict[str, Any]]:
-    """The rows of the raw files of ``--proposal`` in the catalogue of ``-c``."""
+def _check_history(log: Path, proposal: str) -> None:
+    """
+    ``_UsageError`` if the log file ``log`` holds history of another proposal
+    than ``proposal``. Reads the file without holding it.
+    """
+    if not log.is_file():
+        return
+    events = Log.read(log)
+    logged = {e.proposal for e in events if isinstance(e, Submitted | Opened)}
+    if other := sorted(logged - {proposal}):
+        raise _UsageError(
+            f'{log} holds history of the proposal {", ".join(other)}, not '
+            f'{proposal}; give that one with --proposal'
+        )
+
+
+def _catalogue_files(given: _Context, proposal: str) -> list[dict[str, Any]]:
+    """The rows of the raw files of ``proposal`` in the catalogue of ``-c``."""
     args = given.args
     if args.catalogue is None:
         raise _UsageError('give READ, or the catalogue with -c to list its files')
-    if args.proposal == 'local':
+    if proposal == 'local':
         raise _UsageError('give --proposal, whose files the catalogue lists')
-    catalogue = _the_catalogue(given)
+    catalogue = _the_catalogue(given, proposal)
     from ess.apps.scicat import ScicatFiles, scan_catalogue  # the extra scicat
 
     try:
-        return scan_catalogue(ScicatFiles(catalogue.client, args.proposal))
+        return scan_catalogue(ScicatFiles(catalogue.client, proposal))
     except OSError as error:
         raise _CommandError(f'{args.catalogue}: {error_text(error)}') from None
 
@@ -639,7 +691,7 @@ def _export(given: _Context) -> pd.DataFrame:
 def _output_options(given: _Context) -> str:
     """Store the output options of a file, if given; those of the batch, as YAML."""
     args = given.args
-    writing = _writing(given, _the_catalogue(given))
+    writing = _writing(given, _the_catalogue(given, given.client.proposal))
     label = _known(writing.manager, args.label)
     if args.file is not None:
         writing.set_options(label, load_options(args.file))
@@ -979,7 +1031,14 @@ def _files_arguments(command: argparse.ArgumentParser) -> None:
         metavar='READ',
         nargs='?',
         help='package.module:NAME of a function from the path of a file to its '
-        'metadata; without it, the raw files of --proposal in the catalogue of -c',
+        'metadata; without it, the raw files of the proposal in the catalogue of -c',
+    )
+    command.add_argument(
+        '--proposal',
+        help='the proposal of the folder, written to its workspace.json if that '
+        'is missing; the later commands on the folder read it from there. It '
+        'must be that of workspace.json if there is one, else of the history '
+        'in log.jsonl (default: that of workspace.json, else local)',
     )
     command.add_argument(
         '--with',
@@ -1233,13 +1292,15 @@ _COMMANDS = {
     'files': _Command(
         _files,
         description='Write the files table of the folder (files.csv): a row '
-        'per file that READ knows, or, without READ, per raw file of --proposal '
-        'in the catalogue of -c (SciCat), at the path of its dataset, such as '
-        '/ess/raw/... The folder then opens only where that path is mounted, '
-        'and every command on it needs the same --proposal. Without --with, it '
-        'does not overwrite an -o that exists, since a person may have added to '
-        'it. It replaces -o at once and does not open the folder, so it runs '
-        'while follow holds the folder, and follow then sees the runs it adds.',
+        'per file that READ knows, or, without READ, per raw file of the '
+        'proposal in the catalogue of -c (SciCat), at the path of its dataset, '
+        'such as /ess/raw/... The folder then opens only where that path is '
+        'mounted. If workspace.json of the folder is missing, it writes it, '
+        'with the proposal of --proposal, else local, and the file source local; '
+        'every later command reads it. Without --with, it does not overwrite an -o '
+        'that exists, since a person may have added to it. It replaces -o at '
+        'once and does not open the folder, so it runs while follow holds the '
+        'folder, and follow then sees the runs it adds.',
         arguments=_files_arguments,
         folder=False,
     ),
@@ -1451,9 +1512,6 @@ def _parser() -> argparse.ArgumentParser:
         help='write tables as JSON: a list of objects, one per row, with the '
         'key as a field and null for an empty cell; follow: an object per line',
     )
-    parser.add_argument(
-        '--proposal', default='local', help='the proposal of the files (default: local)'
-    )
     commands = parser.add_subparsers(
         dest='command',
         required=True,
@@ -1514,22 +1572,22 @@ def _opened(given: _Context, command: _Command) -> _Result:
         # a workspace goes on with pending records, which need their bindings
         raise _UsageError('--bind is required: the bindings of the workspace')
     bind = _bindings(args.bind)
-    if not (args.workspace / 'files.csv').is_file():
-        raise _UsageError(
-            f'{args.workspace}: no files.csv; the command files writes it'
-        )
-    try:  # as read once, so that a files table in error is rejected
-        folder_files(args.workspace)
-    except FileNotFoundError as error:
-        raise ValueError(f'files.csv lists {error}, which does not exist') from None
-    except ValueError as error:
-        raise ValueError(f'files.csv: {error}') from None
-    # Read again when files.csv is replaced, so that follow finds the files
-    # that arrive.
+    folder = args.workspace
+    table = folder / 'files.csv'
     try:
-        client, _, definitions = open_workspace(
-            args.workspace, bind, proposal=args.proposal
-        )
+        header = read_workspace_header(folder)
+    except ValueError as error:  # such as none: names the command that writes it
+        raise _UsageError(str(error)) from None
+    if header.files == 'local' and table.is_file():
+        try:  # as read once, so that a files table in error is rejected
+            folder_files(folder)
+        except FileNotFoundError as error:
+            raise ValueError(f'files.csv lists {error}, which does not exist') from None
+        except ValueError as error:
+            raise ValueError(f'files.csv: {error}') from None
+    allowed = file_sources([header.files])  # logs in at the first query
+    try:
+        client, _, definitions = open_workspace(folder, header, bind, allowed=allowed)
     except RuntimeError as error:  # another process holds the folder
         raise _CommandError(str(error)) from None
     with client:
