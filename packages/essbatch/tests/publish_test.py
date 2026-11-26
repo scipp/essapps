@@ -4,7 +4,7 @@
 
 import pytest
 from ess.batch import Batch, BatchManager, FolderDefinitions
-from ess.batch.definition import Form
+from ess.batch.definition import Form, published
 from ess.batch.publish import Publisher, UploadFailed
 from ess.batch.writing import Writing
 from scitacean import model
@@ -91,7 +91,7 @@ def test_what_is_published_is_kept_with_the_batch(
 
     record = batch.state(['1'])['1'].record
     assert record is not None
-    assert again.batch(batch.label).published() == {record.id: pids['1']}
+    assert published(again.definitions, batch.label) == {record.id: pids['1']}
 
 
 def test_a_result_is_published_once(
@@ -187,4 +187,5 @@ def test_an_upload_that_fails_names_and_keeps_the_rows_published_before_it(
     with pytest.raises(UploadFailed, match=r'published 1 as pid:.*; then 2 failed'):
         publisher.publish(batch.label, ['1', '2'])
 
-    assert list(batch.published().values()) == [f'pid:{next(iter(scicat.datasets))}']
+    kept = published(publisher.writing.manager.definitions, batch.label)
+    assert list(kept.values()) == [f'pid:{next(iter(scicat.datasets))}']

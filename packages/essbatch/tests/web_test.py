@@ -27,7 +27,12 @@ from ess.batch import (
     Intake,
     RowSource,
 )
-from ess.batch.definition import Key, NotKept, rows_key, settings_key
+from ess.batch.definition import (
+    ROWS,
+    SETTINGS,
+    Key,
+    NotKept,
+)
 from ess.batch.web import Pages, Shown, create_app, demo, plots
 from ess.batch.web.models import NewBatch
 from ess.batch.web.refusals import Missing, Problem
@@ -845,8 +850,8 @@ def test_a_table_the_batch_refuses_is_not_loaded_and_the_rows_stay(
 def kept_settings(store: DefinitionStore, params: dict[str, Any]) -> None:
     """Keep ``params`` as the settings of the one batch in ``store``."""
     (label,) = store.labels()
-    kept = store.load(settings_key(label), dict)
-    store.save(settings_key(label), {**kept, 'params': params})
+    kept = store.load(SETTINGS.key(label), dict)
+    store.save(SETTINGS.key(label), {**kept, 'params': params})
 
 
 def test_a_page_on_settings_kept_for_another_version_starts_and_names_them(
@@ -877,7 +882,7 @@ def test_settings_kept_that_the_form_cannot_show_are_named_and_kept_until_apply(
         page = home(demo.build(client, files, definitions))
         shown = state(page)
         (label,) = definitions.labels()
-        still = definitions.load(settings_key(label), lambda d: d['params'])
+        still = definitions.load(SETTINGS.key(label), lambda d: d['params'])
         after = page.post('/api/settings/apply').json()
 
     assert shown['settings_changed'] is False
@@ -966,7 +971,7 @@ def test_settings_not_kept_stay_in_the_form_to_apply_again(
     kept.post('/api/settings/apply')
 
     assert (form_bins(shown), shown['settings_changed']) == (7, True)
-    assert flaky.kept[settings_key('kept')]['params']['binning'] == {'bins': 7}
+    assert flaky.kept[SETTINGS.key('kept')]['params']['binning'] == {'bins': 7}
 
 
 def test_a_correction_of_several_runs_is_one_write_and_all_or_none(
@@ -2009,7 +2014,7 @@ def test_a_batch_that_cannot_be_counted_has_its_reason(
     first = BatchManager(client, definitions=definitions)
     first.create('plain', title='Fine', rows=toys.rows(client), label='a')
     first.create('plain', title='Broken', rows=toys.rows(client), label='b')
-    definitions.save(rows_key('b'), {'nonsense': 1})
+    definitions.save(ROWS.key('b'), {'nonsense': 1})
 
     counted = restarted(client, definitions).counts()
 
@@ -2576,7 +2581,7 @@ def test_a_batch_whose_rows_cannot_be_read_answers_422_and_the_list_stays(
 ) -> None:
     first = BatchManager(client, definitions=definitions)
     label = first.create(STAGED.name, title='Odd').label
-    definitions.save(rows_key(label), {'nonsense': 1})
+    definitions.save(ROWS.key(label), {'nonsense': 1})
     pages = restarted(client, definitions)
 
     shown = opened(pages, label).get('/api/state')

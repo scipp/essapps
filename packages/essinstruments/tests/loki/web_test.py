@@ -5,7 +5,9 @@
 from pathlib import Path
 from typing import Any
 
-from ess.instruments.loki.web import build, open_loki
+from ess.batch import open_workspace
+from ess.instruments.loki.bindings import BINDINGS
+from ess.instruments.loki.web import build
 from fastapi.testclient import TestClient
 
 from ess.apps.folder import write_files_table
@@ -31,7 +33,7 @@ def register(folder: Path, *runs: tuple[int, str, str]) -> None:
 
 def test_the_first_batch_follows_only_if_asked(tmp_path: Path) -> None:
     register(tmp_path, (1, 'sample', 'a'), (2, 'transmission', 'a'))
-    client, files, definitions = open_loki(tmp_path)
+    client, files, definitions = open_workspace(tmp_path, BINDINGS)
     with client:
         intake = build(client, files, definitions).state.pages.intake
         assert intake.following is None
@@ -49,7 +51,7 @@ def test_a_run_registered_while_the_page_runs_is_added_by_a_step_of_follow(
 
     first = [(1, 'sample', 'a'), (2, 'transmission', 'a')]
     register(tmp_path, *first)
-    client, files, definitions = open_loki(tmp_path)
+    client, files, definitions = open_workspace(tmp_path, BINDINGS)
     with client:
         app = build(client, files, definitions, follow=True)
         http = TestClient(app, base_url=str(TestClient(app).get('/').url))
@@ -64,7 +66,7 @@ def test_a_run_registered_while_the_page_runs_is_added_by_a_step_of_follow(
 
 def test_the_output_tab_offers_nxcansas_first(tmp_path: Path) -> None:
     register(tmp_path, (1, 'sample', 'a'), (2, 'transmission', 'a'))
-    client, files, definitions = open_loki(tmp_path)
+    client, files, definitions = open_workspace(tmp_path, BINDINGS)
     with client:
         app = build(client, files, definitions)
         http = TestClient(app, base_url=str(TestClient(app).get('/').url))

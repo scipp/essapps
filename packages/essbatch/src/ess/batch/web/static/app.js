@@ -1196,20 +1196,18 @@ function renderDraft(bar, changed, said, idle) {
 }
 
 // The selected rows that the button "Publish" publishes: those whose result
-// may be published (`ess.batch.publish.PUBLISHABLE`) and is not.
+// may be published and is not, as the server says.
 function toPublish() {
-  return selectedRows().filter((row) => ['done', 'earlier'].includes(row.status) && !row.published);
+  return selectedRows().filter((row) => row.publishable);
 }
 
 // What the button "Publish" waits for, in words; nothing if it may publish.
 function publishBlocked() {
-  const {form} = view.state.output;
+  const {problem, unpublishable} = view.state.output;
   if (view.publishing) return 'Publishing…';
   if (outputChanged()) return 'Apply or discard the changes of the form first.';
-  if (view.state.output.problem) return view.state.output.problem;
-  const fields = [['owner', form.owner], ['contact email', form.contact_email]];
-  const lacking = fields.filter(([, given]) => !given).map(([what]) => what);
-  if (lacking.length) return `The form names no ${lacking.join(', no ')}: fill it in and apply it.`;
+  if (problem) return problem;
+  if (unpublishable) return unpublishable;
   if (!toPublish().length) return 'Select rows that are done or earlier and not published.';
   return '';
 }

@@ -22,8 +22,9 @@ rows of a batch are written by its ``Batch``, which the manager makes:
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
 one entry of them. The others are of a label, so removing a label removes
-them all, also whether its batch follows. A :class:`DefinitionStore`, *the
-definitions*, keeps each entry as plain data under a key::
+them all (:data:`LABEL_ENTRIES`), also whether its batch follows. A
+:class:`DefinitionStore`, *the definitions*, keeps each entry as plain data
+under a key::
 
     ('corrections',)
     ('labels', label, 'header')
@@ -38,7 +39,9 @@ and its writer saves it whole at each change. It can forget an entry
 :class:`FolderDefinitions` knows that the definitions are files. A batch and a
 file source without definitions keep their entries in memory.
 
-The plain data of each entry, as the functions below give and read it::
+The plain data of each entry, as its :class:`Entry` below writes and reads it
+(:data:`CORRECTIONS` with :func:`corrections_data` and
+:func:`corrections_of`)::
 
     corrections   {'pid:20.500.12269/abc': {'role': 'sample'}}
     header        {'title': 'Sample runs', 'description': ''}
@@ -69,7 +72,8 @@ import string
 import tempfile
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
 from urllib.parse import quote, unquote
@@ -86,46 +90,12 @@ from pydantic_core import from_json, to_json
 from ess.apps.records import Template
 from ess.spec import FileRef
 
+from .table import data_of, frame_of
+
 type Key = tuple[str, ...]
 """Names an entry: ``('corrections',)``, or ``('labels', label, part)``."""
 
 CORRECTIONS: Key = ('corrections',)
-
-
-def header_key(label: str) -> Key:
-    return ('labels', label, 'header')
-
-
-def settings_key(label: str) -> Key:
-    return ('labels', label, 'settings')
-
-
-def rows_key(label: str) -> Key:
-    return ('labels', label, 'rows')
-
-
-def source_key(label: str) -> Key:
-    return ('labels', label, 'source')
-
-
-def form_key(label: str) -> Key:
-    return ('labels', label, 'form')
-
-
-def publish_key(label: str) -> Key:
-    return ('labels', label, 'publish')
-
-
-def label_keys(label: str) -> tuple[Key, ...]:
-    """Every entry of ``label``: the header first, then the others."""
-    return (
-        header_key(label),
-        source_key(label),
-        rows_key(label),
-        settings_key(label),
-        form_key(label),
-        publish_key(label),
-    )
 
 
 class NotKept(OSError):
@@ -391,6 +361,15 @@ class Form(BaseModel, frozen=True):
             raise ValueError('a name is not empty')
         return name
 
+    @property
+    def lacking(self) -> list[str]:
+        """
+        What publishing by this form needs that it does not name: ``'owner'``,
+        ``'contact email'``, or neither.
+        """
+        given = [('owner', self.owner), ('contact email', self.contact_email)]
+        return [what for what, text in given if not text]
+
 
 _NAME_FIELDS = frozenset({'title', 'name', 'key'})
 
@@ -413,12 +392,41 @@ class Publishing(BaseModel, frozen=True):
     published: tuple[Published, ...] = ()
 
 
-_HEADER = TypeAdapter(Header)
-_FORM = TypeAdapter(Form)
-_PUBLISHING = TypeAdapter(Publishing)
-_FROM_SOURCE = TypeAdapter(FromSource)
-_CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
+@dataclass(frozen=True)
+class Entry[T]:
+    """
+    An entry of a label, kept under ``('labels', label, part)``: how its value
+    is written as plain data (``dump``) and read from it (``read``, which
+    raises ``ValueError`` naming the field of data of another shape).
+    """
+
+    part: str
+    dump: Callable[[T], Any]
+    read: Callable[[Any], T]
+
+    def key(self, label: str) -> Key:
+        """The key of the entry of ``label``."""
+        return ('labels', label, self.part)
+
+    def load(self, definitions: DefinitionStore, label: str) -> T | None:
+        """The value kept of ``label``; ``None`` if none, as the store loads it."""
+        return definitions.load(self.key(label), self.read)
+
+    def save(self, definitions: DefinitionStore, label: str, value: T) -> None:
+        """Keep ``value`` as the entry of ``label``; :class:`NotKept` if refused."""
+        definitions.save(self.key(label), self.dump(value))
+
+
+def _adapted[T](part: str, kind: type[T]) -> Entry[T]:
+    """The entry ``part`` of a value of ``kind``, as pydantic writes it as JSON."""
+    adapter = TypeAdapter(kind)
+    return Entry(
+        part, partial(adapter.dump_python, mode='json'), partial(_checked, adapter)
+    )
+
+
 _TEMPLATE = TypeAdapter(Template)
+_CORRECTIONS = TypeAdapter(dict[str, dict[str, Any]])
 
 
 def template_data(template: Template) -> Any:
@@ -429,6 +437,37 @@ def template_data(template: Template) -> Any:
 def template_of(data: Any) -> Template:
     """The template of :func:`template_data`; ``ValueError`` names a field."""
     return _checked(_TEMPLATE, data)
+
+
+def _source_data(made: FromSource) -> dict[str, Any]:
+    """What a batch keeps of its source, as plain data; the keys sorted."""
+    return {
+        'source': made.source,
+        'considered': sorted(made.considered),
+        'follows': made.follows,
+    }
+
+
+HEADER = _adapted('header', Header)
+SETTINGS = Entry('settings', template_data, template_of)
+ROWS = Entry('rows', data_of, frame_of)
+"""Read as the rows are kept; :meth:`.manager.BatchManager.batch` types them."""
+SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(FromSource)))
+FORM = _adapted('form', Form)
+PUBLISH = _adapted('publish', Publishing)
+
+LABEL_ENTRIES = (HEADER, SOURCE, ROWS, SETTINGS, FORM, PUBLISH)
+"""Every entry of a label: the header first, then the others."""
+
+
+def published(definitions: DefinitionStore, label: str) -> dict[str, str]:
+    """
+    The catalogue identifier of each result of ``label`` published, by record
+    ID; empty if none. Here, not in :mod:`.publish`, so that reading it needs
+    no catalogue; only :class:`~.publish.Publisher` writes it.
+    """
+    kept = PUBLISH.load(definitions, label)
+    return {} if kept is None else {p.record: p.pid for p in kept.published}
 
 
 def corrections_data(
@@ -446,47 +485,3 @@ def corrections_of(data: Any) -> dict[FileRef, dict[str, Any]]:
     return {
         FileRef(file=f): fields for f, fields in _checked(_CORRECTIONS, data).items()
     }
-
-
-def header_data(header: Header) -> dict[str, Any]:
-    """The header, as plain data."""
-    return asdict(header)
-
-
-def header_of(data: Any) -> Header:
-    """The header of :func:`header_data`; ``ValueError`` names a field."""
-    return _checked(_HEADER, data)
-
-
-def source_data(made: FromSource) -> dict[str, Any]:
-    """What a batch keeps of its source, as plain data; the keys sorted."""
-    return {
-        'source': made.source,
-        'considered': sorted(made.considered),
-        'follows': made.follows,
-    }
-
-
-def source_of(data: Any) -> FromSource:
-    """The source of :func:`source_data`; ``ValueError`` names a field."""
-    return _checked(_FROM_SOURCE, data)
-
-
-def form_data(form: Form) -> dict[str, Any]:
-    """The form, as plain data."""
-    return _FORM.dump_python(form, mode='json')
-
-
-def form_of(data: Any) -> Form:
-    """The form of :func:`form_data`; ``ValueError`` names a field."""
-    return _checked(_FORM, data)
-
-
-def publishing_data(publishing: Publishing) -> dict[str, Any]:
-    """What a batch keeps of the catalogue, as plain data."""
-    return _PUBLISHING.dump_python(publishing, mode='json')
-
-
-def publishing_of(data: Any) -> Publishing:
-    """The publishing of :func:`publishing_data`; ``ValueError`` names a field."""
-    return _checked(_PUBLISHING, data)

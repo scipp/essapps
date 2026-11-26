@@ -67,7 +67,9 @@ class RowState:
     request changed; ``None`` if that is not known, since the requests were not
     compared. ``earlier`` is true if the row is ready and its completed result
     differs from its request only at settings: not at a column where the
-    row's cell holds a value, and of the same spec.
+    row's cell holds a value, and of the same spec. ``own`` names the
+    parameter columns at which the row's cell holds a value: those where the
+    row gives itself its value, not the setting or the default.
     """
 
     key: str
@@ -78,6 +80,7 @@ class RowState:
     spec_changed: bool = False
     outdated: bool | None = False
     earlier: bool = False
+    own: frozenset[str] = frozenset()
 
     @property
     def text(self) -> str:
@@ -203,6 +206,7 @@ def row_states(
             and bool(names)
             and names.isdisjoint(own[key])
             and key not in spec_changed,
+            own=frozenset(own[key]),
         )
     return states
 
@@ -266,3 +270,15 @@ def not_reduced(states: Mapping[str, RowState]) -> list[str]:
     cancelled. ``changed`` is not read, so ``states`` may be compared or not.
     """
     return [k for k in ready(states) if states[k].record is None]
+
+
+def publishable(states: Mapping[str, RowState]) -> list[str]:
+    """
+    The rows whose result may be published: those that read ``done`` or
+    ``earlier``, completed and not outdated.
+    """
+    return [
+        k
+        for k, s in states.items()
+        if s.text in ('done', 'earlier') and s.record is not None
+    ]

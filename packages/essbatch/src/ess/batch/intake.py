@@ -26,7 +26,7 @@ until :meth:`Intake.stop`, its removal, or another batch that starts to
 follow. :meth:`Intake.step` is one step of Follow on the batch that
 follows::
 
-    made = source_of(label)                                  # source.json
+    made = SOURCE.load(definitions, label)                   # source.json
     done = step(batch(label), sources[made.source], made.considered)  # put, reduce
     source.json = replace(made, considered=done.considered)  # after rows.json;
     # if the step raised: made.considered | the keys of the batch table
@@ -49,13 +49,7 @@ from ess.spec import WorkflowSpec
 
 from . import auto
 from .auto import SourceError, Step
-from .definition import (
-    FromSource,
-    NotKept,
-    source_data,
-    source_key,
-    source_of,
-)
+from .definition import SOURCE, FromSource, NotKept
 from .manager import BatchManager
 from .reduction import Batch
 from .source import Range, RowSource, filled, rows_of
@@ -116,11 +110,6 @@ class Intake:
     Anything else is an error of the code of the application, such as a
     source that raises.
 
-    :attr:`version` moves whenever :attr:`following` may give something else
-    by a call of this object. A change through the manager, such as a
-    removal, moves :attr:`.manager.BatchManager.version` instead, and
-    :attr:`following` is read again from the definitions after it.
-
     Parameters
     ----------
     manager:
@@ -134,14 +123,8 @@ class Intake:
     ) -> None:
         self.manager = manager
         self.sources = sources
-        self._version = 0
         # The batch that follows, as read when the manager had this version.
         self._read: tuple[int, str | None] | None = None
-
-    @property
-    def version(self) -> int:
-        """Counts the changes of which batch follows, made through this object."""
-        return self._version
 
     @property
     def following(self) -> str | None:
@@ -175,12 +158,11 @@ class Intake:
     def _set_following(self, label: str | None) -> None:
         """Hold ``label`` as the batch that follows, as now written."""
         self._read = (self.manager.version, label)
-        self._version += 1
 
     def _write_follows(self, label: str, follows: bool) -> None:
         """Write whether the batch of ``label`` follows."""
         made = replace(self._made(label), follows=follows)
-        self.manager.definitions.save(source_key(label), source_data(made))
+        SOURCE.save(self.manager.definitions, label, made)
 
     def stop(self) -> None:
         """
@@ -253,15 +235,6 @@ class Intake:
         """
         return rows_of(self.manager.client, self._source(source))
 
-    def _given(self, source: RowSource, fills: Collection[str]) -> pd.DataFrame:
-        """
-        What ``source`` makes now, with a column ``waits``: whether a cell of
-        ``fills`` is empty (:func:`~.source.filled`). A column of the source
-        named ``waits`` is replaced by it.
-        """
-        given = rows_of(self.manager.client, source)
-        return given.assign(waits=~filled(given, fills))
-
     def marked(
         self,
         source: str,
@@ -276,10 +249,11 @@ class Intake:
         registered so, and what ``choose`` raises.
         """
         found = self._source(source)
-        given = self._given(found, found.fills)
-        arrived = given[~given['waits']].drop(columns='waits')
+        given = rows_of(self.manager.client, found)
+        waits = ~filled(given, found.fills)
+        arrived = given[~waits]
         taken = arrived.index if choose is None else choose(arrived).index
-        return given.assign(taken=given.index.isin(taken))
+        return given.assign(waits=waits, taken=given.index.isin(taken))
 
     def create(
         self,
@@ -372,8 +346,8 @@ class Intake:
                 f'the spec {spec} has no {named}{", ".join(lacked)}, which the '
                 f'source {source} fills'
             )
-        given = self._given(found, found.fills)
-        arrived = given[~given['waits']].drop(columns='waits')
+        given = rows_of(self.manager.client, found)
+        arrived = given[filled(given, found.fills)]
         rows = arrived if choose is None else choose(arrived)
         _check_chosen(rows, arrived)
         before = self.following
@@ -391,9 +365,7 @@ class Intake:
         try:
             self._follow_instead(
                 before if follow else None,
-                lambda: self.manager.definitions.save(
-                    source_key(batch.label), source_data(made)
-                ),
+                lambda: SOURCE.save(self.manager.definitions, batch.label, made),
             )
         except NotKept:
             with suppress(NotKept):  # the first error is what to say
@@ -410,7 +382,7 @@ class Intake:
         """
         if label not in self.manager.headers():
             raise KeyError(label)
-        return self.manager.definitions.load(source_key(label), source_of)
+        return SOURCE.load(self.manager.definitions, label)
 
     def _made(self, label: str) -> FromSource:
         """
@@ -488,10 +460,11 @@ class Intake:
         source = self._source(made.source)
         batch = self.manager.batch(label)
         try:
-            given = self._given(source, batch.fills)
+            given = rows_of(self.manager.client, source)
+            waits = ~filled(given, batch.fills)
         except ValueError as error:  # as step says it
             raise ValueError(f'the source {made.source}: {said(error)}') from error
-        return given[~given.index.isin(batch.frame().index)]
+        return given.assign(waits=waits)[~given.index.isin(batch.frame().index)]
 
     def take(self, label: str, keys: Iterable[str]) -> None:
         """
@@ -521,4 +494,4 @@ class Intake:
         """Keep ``considered`` as the keys of the source of ``label``, if changed."""
         if considered != made.considered:
             kept = replace(made, considered=considered)
-            self.manager.definitions.save(source_key(label), source_data(kept))
+            SOURCE.save(self.manager.definitions, label, kept)

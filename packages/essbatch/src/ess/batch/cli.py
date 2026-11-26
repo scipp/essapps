@@ -142,6 +142,7 @@ another process holds, such as a page or a follow. Messages go to stderr.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -163,19 +164,13 @@ import pandas as pd
 from ess.apps.client import Client
 from ess.apps.errors import Stopped, SubmitError, said
 from ess.apps.files import replace_at_once
-from ess.apps.folder import (
-    ArrivingFiles,
-    described,
-    folder_files,
-    open_folder,
-    scan_folder,
-)
+from ess.apps.folder import described, folder_files, scan_folder
 from ess.apps.records import Record, Status
 from ess.apps.writers import Writer
 from ess.spec import Binding
 
 from . import frames
-from .corrections import CorrectedFiles
+from .corrections import open_workspace
 from .definition import FolderDefinitions, NotKept
 from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
@@ -304,7 +299,7 @@ def _writing(given: _Given, catalogue: Catalogue | None) -> Writing:
         from ess.apps.scicat import principal_investigator
 
         contact = principal_investigator(catalogue, given.client.proposal)
-    return Writing(given.manager(), given.writers, contact)
+    return Writing(given.manager, given.writers, contact)
 
 
 def _publisher(given: _Given) -> Publisher:
@@ -344,11 +339,17 @@ class _Given:
             raise RuntimeError('the command does not open the folder')
         return self.folder[0]
 
-    def manager(self, *, staged: bool = False) -> BatchManager:
-        """The batches of the folder; their rows run through a stage if ``staged``."""
+    @functools.cached_property
+    def manager(self) -> BatchManager:
+        """
+        The batches of the folder, made at the first use, so that a command
+        has one ``Batch`` of each label; their rows run through a stage if the
+        command is given ``--staged``.
+        """
         if self.folder is None:
             raise RuntimeError('the command does not open the folder')
         client, definitions = self.folder
+        staged = getattr(self.args, 'staged', False)
         return BatchManager(
             client,
             definitions=definitions,
@@ -357,12 +358,11 @@ class _Given:
 
     def batch(self, label: str) -> Batch:
         """The batch of ``label``; ``ValueError`` if the label has none."""
-        manager = self.manager()
-        return manager.batch(_known(manager, label))
+        return self.manager.batch(_known(self.manager, label))
 
     def intake(self) -> Intake:
         """The batches of the folder, with the row sources."""
-        return Intake(self.manager(), sources=self.sources)
+        return Intake(self.manager, sources=self.sources)
 
 
 def _known(manager: BatchManager, label: str) -> str:
@@ -492,7 +492,7 @@ def _batches(given: _Given) -> pd.DataFrame:
     )
 
 
-def _table(client: Client, batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
+def _table(batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
     """
     The rows of ``keys`` of ``batch``, or all, with what came of each; why the
     settings are refused, if they are, on stderr.
@@ -500,18 +500,12 @@ def _table(client: Client, batch: Batch, keys: list[str] | None = None) -> pd.Da
     states, refused = batch.shown(keys)
     if refused:
         sys.stderr.write(f'the settings are refused: {SubmitError(refused)}\n')
-    frame = batch.frame()
-    return frames.with_results(
-        client,
-        states,
-        frame if keys is None else frame.loc[keys],
-        published=batch.published(),
-    )
+    return frames.with_results(batch, states, keys)
 
 
 def _show(given: _Given) -> pd.DataFrame:
     """The batch table of the label, with what came of each row."""
-    return _table(given.client, given.batch(given.args.label))
+    return _table(given.batch(given.args.label))
 
 
 def _reduce(given: _Given) -> pd.DataFrame:
@@ -549,7 +543,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
     args, client = given.args, given.client
     label = args.label
     template = None if args.template is None else load_template(args.template)
-    manager = given.manager(staged=args.staged)
+    manager = given.manager
     batch = manager.batch(label) if label in manager.headers() else None
     if batch is not None and args.source is not None:
         raise ValueError(f'{label}: the batch exists; --source makes a new batch')
@@ -630,7 +624,7 @@ def _export(given: _Given) -> pd.DataFrame:
     args = given.args
     if args.label is not None:
         table = _show(given)
-        write, _ = Writing(given.manager(), given.writers).by_form(args.label)
+        write, _ = Writing(given.manager, given.writers).by_form(args.label)
     else:
         table = read_text(args.table)
         if KEY not in table.columns:
@@ -665,7 +659,7 @@ def _publish(given: _Given) -> pd.DataFrame:
         publisher.publish(label, args.keys)
     except UploadFailed as error:
         raise _Failed(f'not published: {error}') from None
-    return _table(given.client, manager.batch(label), args.keys)
+    return _table(manager.batch(label), args.keys)
 
 
 def _offered(given: _Given) -> pd.DataFrame:
@@ -679,14 +673,14 @@ def _take(given: _Given) -> pd.DataFrame:
     args = given.args
     intake = given.intake()
     intake.take(_known(intake.manager, args.label), args.keys)
-    return _table(given.client, intake.manager.batch(args.label), args.keys)
+    return _table(intake.manager.batch(args.label), args.keys)
 
 
 def _remove(given: _Given) -> int:
     """Remove a batch, saying that its records stay; a removal cut off too."""
     label = given.args.label
     try:
-        given.manager().remove(label)
+        given.manager.remove(label)
     except KeyError:
         raise ValueError(
             f'{label}: no batch has the label; batches lists them'
@@ -850,7 +844,6 @@ def follow(
             sys.stderr.write('stopping after the reductions that run\n')
             break
         done += 1
-        before = set(batch.frame().index)
         error = None  # why the step raised, for the line
         told = ''  # what stderr says of it
         try:
@@ -868,7 +861,7 @@ def follow(
             reducing: list[str] = []
             refused, waiting = shown
         else:
-            added = [k for k in batch.frame().index if k not in before]
+            added = list(stepped.added)
             reducing = list(stepped.records)
             refused, waiting = dict(stepped.refused), list(stepped.waiting)
             running |= stepped.records
@@ -1448,12 +1441,12 @@ def _opened(given: _Given, command: _Command) -> _Result:
         raise ValueError(f'files.csv lists {error}, which does not exist') from None
     except ValueError as error:
         raise ValueError(f'files.csv: {error}') from None
-    definitions = FolderDefinitions(args.workspace)
     # Read again when files.csv is replaced, so that follow finds the files
     # that arrive.
-    files = CorrectedFiles(ArrivingFiles(args.workspace), definitions=definitions)
     try:
-        client = open_folder(args.workspace, bind, files=files, proposal=args.proposal)
+        client, _, definitions = open_workspace(
+            args.workspace, bind, proposal=args.proposal
+        )
     except RuntimeError as error:  # another process holds the folder
         raise _Failed(str(error)) from None
     with client:

@@ -34,11 +34,11 @@ every column::
 A row's state is read from the records, not from what this object submitted,
 so every ``Batch`` on the label, and this one after a restart, sees the same,
 but for how it resolved a file name, which it keeps until its next ``put``.
-What a ``Batch`` keeps of them can be rebuilt from the records at any time:
-the newest record of each member under the label, the IDs of the records under
-the label it has read, and which of them are not of the bound spec
-(:meth:`~ess.apps.Client.bound`), all read from ``client.changes``, so that the
-state of chosen rows does not read every record under the label.
+What a ``Batch`` keeps of them (:class:`LabelRecords`) can be rebuilt from the
+records at any time: the newest record of each member under the label, the IDs
+of the records under the label it has read, and which of them are not of the
+bound spec (:meth:`~ess.apps.Client.bound`), all read from ``client.changes``,
+so that the state of chosen rows does not read every record under the label.
 
 The settings are the batch's own (:attr:`Batch.settings`), so each state is
 read with them, and each reduction submits them. A state that resolves
@@ -92,7 +92,7 @@ from ess.spec.refs import iter_refs
 from . import definition, state
 from .definition import DefinitionStore
 from .state import RowState
-from .table import as_request, cell_of, data_of, typed
+from .table import as_request, cell_of, data_of, names, typed
 
 _NONE = object()
 
@@ -129,6 +129,60 @@ def _running(row: RowState) -> list[FieldError]:
     if row.status is Status.PENDING:
         return [FieldError(row.key, (), 'still running')]
     return []
+
+
+class LabelRecords:
+    """
+    The records under ``label``, read from the proposal's changes: the result
+    of each member (:attr:`found`), and the IDs of those that are not of the
+    bound spec (:attr:`unbound`). Up to date after :meth:`poll`.
+    """
+
+    def __init__(self, client: Client, label: str) -> None:
+        self.client = client
+        self.label = label
+        self.found: dict[str, Record] = {}
+        self.unbound: set[str] = set()
+        self._cursor: int | None = None
+        self._seen: set[str] = set()
+
+    def poll(self) -> None:
+        """
+        Bring the result of each member under the label up to date, from the
+        proposal's changes; the first call reads every record under the label.
+        """
+        if self._cursor is None:
+            self._cursor = self.client.changes().cursor
+            records = self.client.records(label=self.label)
+        else:
+            changes = self.client.changes(after=self._cursor)
+            self._cursor = changes.cursor
+            # A record is in the changes when submitted and when it finishes,
+            # so one seen before is not newer than the result held.
+            new = [i for i in changes.records if i not in self._seen]
+            records = [r for r in self.known(new) if r.label == self.label]
+        self._seen.update(r.id for r in records)
+        self.found |= state.results(records)
+        bound = self.client.bound(records) if records else []
+        self.unbound.update(r.id for r, b in zip(records, bound, strict=True) if not b)
+
+    def known(self, ids: list[str]) -> list[Record]:
+        """
+        The records of ``ids`` that the client knows, of any label. If one is
+        unknown, the others are read one by one, so that it touches only the
+        rows that reference it, whose submission it refuses.
+        """
+        try:
+            return self.client.records(ids=ids) if ids else []
+        except KeyError:
+            if len(ids) == 1:
+                return []
+            return [r for i in ids for r in self.known([i])]
+
+    def status(self, records: list[Record]) -> dict[str, Status]:
+        """The status of each of ``records``, by record ID."""
+        statuses = self.client.status(records)
+        return {r.id: s for r, s in zip(records, statuses, strict=True)}
 
 
 class Batch:
@@ -177,16 +231,17 @@ class Batch:
         template.
     settings_fields:
         The other parameters of the spec, which no row gives itself.
+    definitions:
+        As given: where the entries of the label are kept, if anywhere.
     version:
-        A number that moves whenever :meth:`frame`, :meth:`template` or
-        :meth:`shown` may give something else: while it is the same, they
-        give the same, but for the files. A :meth:`put` that writes, an
-        assignment of :attr:`settings`, :meth:`make_column`,
-        :meth:`make_setting`, and any change of the proposal's records, which
-        reading it brings in (``client.changes``), move it; a :meth:`put` of
-        an equal table does not. A file that arrives, or that gains a
-        catalogue identifier, can change the state of a row and does not
-        move it.
+        A number that moves whenever :meth:`frame` or :meth:`template` may
+        give something else: while it is the same, they give the same. A
+        :meth:`put` that writes, an assignment of :attr:`settings`,
+        :meth:`make_column` and :meth:`make_setting` move it; a :meth:`put`
+        of an equal table does not. It counts no record and no file: a
+        record that changes is in ``client.changes``, and a file that
+        arrives, or that gains a catalogue identifier, can change the state
+        of a row without a signal.
 
     Raises
     ------
@@ -213,7 +268,7 @@ class Batch:
         self.spec = spec
         self.label = label
         self.fills = frozenset(fills)
-        self._definitions = definitions
+        self.definitions = definitions
         self._version = 0
         # A setting at fills, as definitions may hold, is never read: dropped.
         self._settings = copy.deepcopy(self.settable(settings or {}))
@@ -226,11 +281,7 @@ class Batch:
         self._staged = staged
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
-        # The records under the label, read from the proposal's changes.
-        self._cursor: int | None = None
-        self._seen: set[str] = set()
-        self._found: dict[str, Record] = {}
-        self._unbound: set[str] = set()
+        self._records = LabelRecords(client, label)
         # A cell's value as a record holds it, by its column and value as given;
         # also a setting's, for :meth:`files`.
         # A state of 1000 toy rows without results takes 21 ms with it, and
@@ -251,7 +302,6 @@ class Batch:
 
     @property
     def version(self) -> int:
-        self._poll()
         return self._version
 
     @property
@@ -317,8 +367,8 @@ class Batch:
         data = data_of(rows)
         if to_json(data) == to_json(data_of(self._rows)):
             return
-        if self._definitions is not None:
-            self._definitions.save(definition.rows_key(self.label), data)
+        if self.definitions is not None:
+            self.definitions.save(definition.ROWS.key(self.label), data)
         self._set(rows)
 
     @property
@@ -431,31 +481,14 @@ class Batch:
             first.setdefault(to_json(cell), key)
         return {key: cells[key] for key in first.values()}
 
-    def publishing(self) -> definition.Publishing:
-        """
-        What the batch keeps of the catalogue: each upload; empty if not
-        kept. Only :class:`~.publish.Publisher` writes it.
-        """
-        kept = None
-        if self._definitions is not None:
-            key = definition.publish_key(self.label)
-            kept = self._definitions.load(key, definition.publishing_of)
-        return definition.Publishing() if kept is None else kept
-
-    def published(self) -> dict[str, str]:
-        """The catalogue identifier of each result published, by record ID."""
-        return {p.record: p.pid for p in self.publishing().published}
-
     def _save(self, settings: Mapping[str, Any]) -> None:
         """
         Write ``settings`` as the settings of the label, if kept, with
         :attr:`fills` as the blanks of the template.
         """
-        if self._definitions is not None:
-            key = definition.settings_key(self.label)
+        if self.definitions is not None:
             kept = Template(self.spec, params=settings, blanks=sorted(self.fills))
-            data = definition.template_data(kept)
-            self._definitions.save(key, data)
+            definition.SETTINGS.save(self.definitions, self.label, kept)
 
     def template(self) -> Template:
         """
@@ -579,13 +612,36 @@ class Batch:
         except SubmitError as error:
             return self.state(keys, compare=False), error.errors
 
+    def settings_of(self, key: str) -> dict[str, Any]:
+        """
+        The settings that the result of row ``key`` was reduced with: at a
+        column where the row gives its own value, the batch's setting, and
+        where its cell is empty, the value that the row took. Raises
+        ``ValueError`` naming the row (:func:`~.table.names`) if it has no
+        result, or one of another spec, whose settings this one does not take;
+        ``KeyError`` if the table has no row ``key``.
+        """
+        row = self.shown([key])[0][key]
+        name = names(self._rows, self.parameter_columns)[key]
+        if row.record is None:
+            raise ValueError(f'{name} has no result')
+        if row.spec_changed:
+            raise ValueError(
+                f'{name} was reduced by another version of the workflow, '
+                'whose settings this one does not take'
+            )
+        kept = {n: v for n, v in self.settings.items() if n in row.own}
+        took = {n: v for n, v in row.record.request.params.items() if n not in row.own}
+        return {**took, **kept}
+
     def _cells_and_results(
         self, keys: Sequence[str] | None
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Record]]:
         """The cells of ``keys``, or of all, and the result of each that has one."""
-        self._poll()
+        self._records.poll()
         cells = self.cells(keys)
-        return cells, {k: self._found[k] for k in cells if k in self._found}
+        found = self._records.found
+        return cells, {k: found[k] for k in cells if k in found}
 
     def _states(
         self,
@@ -594,8 +650,8 @@ class Batch:
         changed: Mapping[str, frozenset[str]] | None,
         refused: Mapping[str, tuple[FieldError, ...]],
     ) -> dict[str, RowState]:
-        upstream = self._known(sorted(state.references(cells.values())))
-        status = self._status([*found.values(), *upstream])
+        upstream = self._records.known(sorted(state.references(cells.values())))
+        status = self._records.status([*found.values(), *upstream])
         given = self._rows.loc[list(cells), list(self.parameter_columns)].notna()
         own = {
             key: frozenset(c for c, filled in row.items() if filled)
@@ -612,50 +668,13 @@ class Batch:
             own=own,
         )
 
-    def _poll(self) -> None:
-        """
-        Bring the result of each member under the label up to date, from the
-        proposal's changes; the first call reads every record under the label.
-        """
-        if self._cursor is None:
-            self._cursor = self.client.changes().cursor
-            records = self.client.records(label=self.label)
-        else:
-            changes = self.client.changes(after=self._cursor)
-            self._cursor = changes.cursor
-            # Any record, since a cell may reference a record under another label.
-            self._version += bool(changes.records)
-            # A record is in the changes when submitted and when it finishes,
-            # so one seen before is not newer than the result held.
-            new = [i for i in changes.records if i not in self._seen]
-            records = [r for r in self._known(new) if r.label == self.label]
-        self._seen.update(r.id for r in records)
-        self._found |= state.results(records)
-        bound = self.client.bound(records) if records else []
-        self._unbound.update(r.id for r, b in zip(records, bound, strict=True) if not b)
-
-    def _known(self, ids: list[str]) -> list[Record]:
-        """
-        The records of ``ids`` that the client knows. If one is unknown, the
-        others are read one by one, so that it touches only the rows that
-        reference it, whose submission it refuses.
-        """
-        try:
-            return self.client.records(ids=ids) if ids else []
-        except KeyError:
-            if len(ids) == 1:
-                return []
-            return [r for i in ids for r in self._known([i])]
-
-    def _status(self, records: list[Record]) -> dict[str, Status]:
-        statuses = self.client.status(records)
-        return {r.id: s for r, s in zip(records, statuses, strict=True)}
-
     def _spec_changed(self, found: Mapping[str, Record]) -> set[str]:
         """The keys whose result is of another spec than the bound one."""
         spec = SpecId.of(self.spec)
         return {
-            key for key, r in found.items() if r.spec != spec or r.id in self._unbound
+            key
+            for key, r in found.items()
+            if r.spec != spec or r.id in self._records.unbound
         }
 
     def _compare(
@@ -799,9 +818,10 @@ class Batch:
         for their member, of the members ``keys`` if given, or of every member,
         whether or not it is a row now.
         """
-        self._poll()
-        chosen = [r for k, r in self._found.items() if keys is None or k in keys]
-        status = self._status(chosen)
+        self._records.poll()
+        found = self._records.found
+        chosen = [r for k, r in found.items() if keys is None or k in keys]
+        status = self._records.status(chosen)
         self.client.cancel([r for r in chosen if status[r.id] is Status.PENDING])
 
     def close(self) -> None:

@@ -29,7 +29,8 @@ shows the batch table, the results and the plots all the same: the pickers offer
 no file, the Runs view is empty, and the state says why
 (:attr:`~.models.State.files_problem`).
 
-The form of the settings is a draft of the batch's settings. An edit changes
+The form of the settings is a draft of the batch's settings
+(:class:`~.draft.Draft`). An edit changes
 the form only; :meth:`Page.apply_settings` writes it to the batch, and is
 refused while something is missing; :meth:`Page.discard_settings` shows the
 batch's settings again. "Load settings" and "Put these settings in the form"
@@ -114,7 +115,8 @@ not follow has no action of Follow. While a batch follows, :meth:`Pages.tick
 source that are new and filled, and reduces the rows that
 :func:`~ess.batch.not_reduced` gives, the rows that are ready and have
 no result, under the lock of all pages, with the batch's settings, whatever
-the form holds; then :meth:`Page.stepped` shows what the step changed. The
+the form holds; then :meth:`Page.stepped` shows what the step changed, if
+the page is open; a page made later shows the batch as it is then. The
 page of the batch that follows says what the last step raised, why rows were
 not reduced, at each such row, whose status stays that of its state, and how
 many rows of the source wait to be filled; the next step runs all the same. A
@@ -129,21 +131,11 @@ from __future__ import annotations
 
 import functools
 import io
-import re
-import tempfile
 import uuid
 import zipfile
-from collections.abc import (
-    Callable,
-    Collection,
-    Iterable,
-    Iterator,
-    Mapping,
-    Sequence,
-)
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -152,42 +144,33 @@ from ess.apps.errors import FieldError, SubmitError, said
 from ess.apps.fields import UNSET, Fields
 from ess.apps.records import Record, Status
 
-from .. import frames
+from .. import definition, frames
 from ..definition import Form
 from ..export import export_table
 from ..reduction import Batch
-from ..state import (
-    RowState,
-    left_to_reduce,
-    ready,
-    to_reduce,
-)
-from ..table import KEY, NAME, as_request, cell_of, names, read_table, write_table
+from ..state import RowState, publishable, to_reduce
+from ..table import KEY, NAME, cell_of, names, read_table, write_table
 from ..templates import checked_settings, load_template, settings_text
-from . import forms, plots
+from . import forms, plots, view
+from .draft import Draft
 from .models import (
-    Action,
     Cell,
     CellEdit,
     Column,
     Edit,
-    Format,
     HeaderEdit,
     HeaderShown,
     MakeSetting,
-    Output,
-    OutputShown,
     Plot,
     Reduce,
-    Refused,
     Row,
     RowDetail,
-    SourceRow,
     SourceRows,
     State,
     Value,
 )
-from .refusals import Problem, kept, refused, say, why
+from .refusals import Problem, kept, refused, why
+from .tempfiles import named_file, read_file
 
 if TYPE_CHECKING:
     from .pages import Pages
@@ -207,104 +190,13 @@ class Shown:
 type Draw = Callable[[Sequence[Shown]], dict[str, Any]]
 """Draws results as a Plotly figure."""
 
-_ORDER = (
-    'ready',
-    'running',
-    'done',
-    'earlier',
-    'outdated',
-    'failed',
-    'cancelled',
-    'incomplete',
-)
 _ENDED = (Status.FAILED, Status.CANCELLED)
 _DRAWN = 12
 """How many results the plot shows when no row is selected."""
 
 
-def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
-    """
-    The rows of ``given``, the rows of a source with a column
-    ``waits``, and maybe a column ``taken``, as a dialog lists them: each
-    named as :func:`names` names it, with the text of each note, the columns
-    but ``fills``, and its mark.
-    """
-    named = names(given, ())
-    marks = {'waits', 'taken'}
-    shown = [c for c in given.columns if c not in {NAME, *fills, *marks}]
-
-    def text(value: Any) -> str:
-        return '' if pd.api.types.is_scalar(value) and pd.isna(value) else str(value)
-
-    def mark(row: Mapping[str, Any]) -> str:
-        if row['waits']:
-            return 'waits'
-        if 'taken' not in row:
-            return ''
-        return 'taken' if row['taken'] else 'left out'
-
-    return SourceRows(
-        columns=[note(c) for c in shown],
-        rows=[
-            SourceRow(
-                key=key,
-                name=named[key],
-                cells={c: text(row[c]) for c in shown},
-                mark=mark(row),
-            )
-            for key, row in given.to_dict('index').items()
-        ],
-    )
-
-
-def read(fields: Fields, edit: CellEdit) -> Any:
-    """The value of ``edit`` as the field of its column reads it."""
-    if edit.column not in fields.fields:
-        raise Problem(f'There is no column {edit.column}.')
-    try:
-        return forms.read(fields.fields[edit.column], edit.value)
-    except (KeyError, ValueError) as error:
-        raise Problem(say(fields.titles[edit.column], why(error))) from None
-
-
-def _failure(text: str) -> str:
-    """A failure reason without the name of the exception that made it."""
-    return re.sub(r'^\w+(Error|Exception): ', '', text)
-
-
 def _rows(n: int) -> str:
     return f'{n} row{"s" * (n != 1)}'
-
-
-@contextmanager
-def named_file(name: str, content: bytes | None = None) -> Iterator[Path]:
-    """A path named ``name`` in a folder of its own, holding ``content`` if given."""
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / Path(name).name
-        if content is not None:
-            path.write_bytes(content)
-        yield path
-
-
-def read_file[T](name: str, content: bytes, read: Callable[[Path], T]) -> T:
-    """
-    What ``read`` gives for the file ``name`` that a person chose, holding
-    ``content``. Raises ``ValueError`` for an empty file, and for what
-    ``read`` raises, with ``name`` in place of the path read.
-    """
-    if not content:
-        raise ValueError('the file is empty')
-    with named_file(name, content) as path:
-        try:
-            return read(path)
-        except (OSError, ValueError, KeyError) as error:
-            said = why(error).replace(f'{path}: ', '').replace(str(path), name)
-            raise ValueError(said) from None
-
-
-def note(name: str) -> Column:
-    """The column of the note ``name``, titled as the page shows it."""
-    return Column(name=name, title=name.replace('_', ' ').capitalize())
 
 
 def _locked[**P, T](method: Callable[P, T]) -> Callable[P, T]:
@@ -355,10 +247,11 @@ class Page:
     def __init__(self, pages: Pages, label: str) -> None:
         self.pages = pages
         self.label = label
-        pages.list_again()
+        pages.runs.list_again()
         self._columns: tuple[str, ...] | None = None
         self._fit()
-        self.refused: list[FieldError] = []
+        # The reasons of the last reduction refused that a cell or a setting shows.
+        self._refusals: list[FieldError] = []
         self.version = 1
         self.start = uuid.uuid4().hex[:8]
         # What :meth:`_live` gave at the last change of the version.
@@ -399,10 +292,10 @@ class Page:
             return
         self._columns = batch.parameter_columns
         self._cells = Fields(
-            batch.spec.params, self.pages.listing, fields=batch.parameter_columns
+            batch.spec.params, self.pages.runs.listing, fields=batch.parameter_columns
         )
-        self.settings = self._form()
-        self._show_settings()
+        self.draft = Draft(batch, self.pages.runs.listing)
+        self._titles = view.titles(batch.spec.params)
 
     def _follows(self) -> bool:
         """Whether this batch is the one that follows."""
@@ -413,21 +306,22 @@ class Page:
     def _live(self) -> tuple[object, ...]:
         """
         What the page shows that changes without an action, each by what
-        counts its changes: the batch (its table, its template and the
-        records), the records listed, the files listed and why they cannot
-        be (:attr:`Pages.files_version <.pages.Pages.files_version>`), the
-        headers of the batches and which batch follows, and what Follow
-        said of this batch (:meth:`Pages.follow_token
-        <.pages.Pages.follow_token>`).
+        counts its changes or as its value: the batch (its table and its
+        template), the records listed, the files listed and why they cannot
+        be (:attr:`SafeListing.version <.runs.SafeListing.version>`), the
+        headers of the batches, which batch follows, and what Follow said of
+        this batch (:meth:`LastStep.token <.last_step.LastStep.token>`).
+        A record that changed since the records listed is in the feed that
+        :meth:`poll` reads.
         """
         pages = self.pages
         return (
             self.batch.version,
-            pages.listing.cursor,
-            pages.files_version,
+            pages.runs.listing.cursor,
+            pages.runs.listing.version,
             pages.intake.manager.version,
-            pages.intake.version,
-            pages.follow_token(self.label),
+            pages.intake.following,
+            pages.last_step.token(self.label),
         )
 
     def _new_version(self) -> None:
@@ -436,47 +330,16 @@ class Page:
 
     def _list_again(self) -> None:
         """
-        List again (:meth:`Pages.list_again <.pages.Pages.list_again>`), and
+        List again (:meth:`Runs.list_again <.runs.Runs.list_again>`), and
         give the pickers and the forms what is listed now.
         """
-        self.pages.list_again()
-        for fields in (self.settings, self._cells):
-            fields.refresh(self.pages.listing)
-
-    def _form(self) -> Fields:
-        """
-        A form of the settings, at the fields' defaults: a field per
-        parameter, but the columns that the source fills, which take no
-        setting (:attr:`~ess.batch.Batch.fills`).
-        """
-        batch = self.batch
-        fields = [n for n in batch.spec.params.model_fields if n not in batch.fills]
-        return Fields(batch.spec.params, self.pages.listing, fields=fields)
-
-    def _form_held(self) -> tuple[dict[str, Any], list[FieldError]]:
-        """
-        What the form holds; a column left unset has no setting
-        (:func:`.forms.held`).
-        """
-        return forms.held(self.settings, self.batch.parameter_columns)
+        self.pages.runs.list_again()
+        self.draft.refresh(self.pages.runs.listing)
+        self._cells.refresh(self.pages.runs.listing)
 
     def _show_settings(self) -> None:
         """Show the batch's settings in the form, which then holds no change."""
-        # Settings kept for another version of the spec may not fit the form;
-        # the batch keeps them, and the page names them, until Apply.
-        self._unfit = self.settings.set_fitting(self.batch.settings, self.pages.listing)
-        # What the form holds while it shows the batch's settings.
-        self._shown = self._form_held()
-
-    def _unapplied(self) -> str | None:
-        """
-        What a person does first while the form holds a change, since a
-        reduction would use settings other than those shown; else ``None``.
-        """
-        held = self._form_held()
-        if held == self._shown:
-            return None
-        return f'{"Fill in" if held[1] else "Apply"} or discard the settings'
+        self.draft.reset(self.batch.settings, self.pages.runs.listing)
 
     def _states(
         self, keys: Sequence[str] | None = None
@@ -493,7 +356,7 @@ class Page:
         """The state, or ``None`` if it is still that of version ``after``."""
         # The feed catches a record that ended after the last relist but before
         # ``_seen`` was read, which ``_live`` holds already and the listing lacks.
-        changes = self.batch.client.changes(after=self.pages.listing.cursor)
+        changes = self.batch.client.changes(after=self.pages.runs.listing.cursor)
         # A table changed by another caller may name files that the listing lacks.
         if changes.records or self._live() != self._seen:
             self._list_again()
@@ -520,22 +383,23 @@ class Page:
         except ValueError as error:
             raise Problem(f'{why(error)}.') from None
 
-    def _setting_title(self, error: FieldError) -> str:
-        return self.settings.titles.get(str(error.loc[0]), str(error.loc[0]))
-
     @_locked
     def state(self, notice: str = '') -> State:
         """Everything the page shows but a row's details, the plot, and the runs."""
         batch = self.batch
         columns = batch.parameter_columns
         states, unusable = self._states()
-        unsubmitted = self.pages.unsubmitted(self.label, states)
+        unsubmitted = self.pages.last_step.unsubmitted(self.label, states)
         failures = self._failures(states)
         frame = batch.frame()
         requested = batch.cells()
         named = names(frame, columns)
         notes = [n for n in frame.columns if n not in columns and n != NAME]
-        published = batch.published()
+        titles = self._titles
+        published = definition.published(
+            self.pages.intake.manager.definitions, self.label
+        )
+        may = set(publishable(states))
         rows = [
             self._row(
                 key,
@@ -547,33 +411,25 @@ class Page:
                 unsubmitted.get(key, ''),
                 failures,
                 published,
+                key in may,
             )
             for key, cells in frame.to_dict('index').items()
         ]
-        counts = dict.fromkeys(_ORDER, 0)
-        for s in states.values():
-            counts[s.text] += 1
-        given, missing = self._form_held()
-
+        missing = self.draft.held()[1]
         # A refusal of the batch's settings is said, and marked at its field,
         # while the form shows the value refused.
-        def shown(error: FieldError) -> bool:
-            name = str(error.loc[0]) if error.loc else ''
-            return not name or given.get(name) == self._shown[0].get(name)
-
-        errors = [*missing, *filter(shown, unusable)]
-        said = [self._said(errors)] if errors else []
-        if self._unfit:
-            said.insert(0, f'Settings that this form cannot show: {_join(self._unfit)}')
-        problem = '; '.join(said) or None
-        unapplied = self._unapplied()
-        marks = [e for e in (*unusable, *self.refused) if not e.entry and shown(e)]
+        errors = [*missing, *self.draft.at_applied(unusable)]
+        problem = view.settings_problem(errors, self.draft.unfit, titles)
+        unapplied = self.draft.unapplied()
+        marks = self.draft.at_applied(
+            e for e in (*unusable, *self._refusals) if not e.entry
+        )
         empty = batch.empty()
         header = self.pages.intake.manager.headers()[self.label]
         return State(
             version=self.version,
             start=self.start,
-            runs=self.pages.runs_version,
+            runs=self.pages.runs.version,
             batches=self.pages.batches().rows,
             label=self.label,
             title=header.title,
@@ -584,11 +440,11 @@ class Page:
             ),
             application=self.pages.title,
             folder=self.pages.folder,
-            notes=[note(n) for n in notes],
+            notes=[view.note(n) for n in notes],
             columns=[
                 Column(
                     name=c,
-                    title=self._cells.titles[c],
+                    title=titles[c],
                     editor=forms.editor(self._cells.fields[c]),
                     waits=c in batch.fills,
                     # as a cell that holds it shows it
@@ -597,50 +453,24 @@ class Page:
                 for c in columns
             ],
             rows=rows,
-            counts={'all': len(states), **counts},
-            action=self._primary(states, unapplied or problem, unapplied),
-            settings=forms.tree(self.settings, marks, columns),
+            counts=view.counts(states),
+            action=view.action(states, unapplied or problem, unapplied),
+            settings=forms.tree(self.draft.fields, marks, columns),
             settings_problem=problem,
             settings_changed=unapplied is not None,
-            may_be_columns=[n for n in forms.edited(self.settings) if n not in columns],
-            refused=[self._refused(e, named) for e in self.refused],
-            follow=self.pages.follow_shown(self.label),
-            files_problem=self.pages.listing.failure,
-            output=self._output_shown(),
+            may_be_columns=[
+                n for n in forms.edited(self.draft.fields) if n not in columns
+            ],
+            refused=[view.refusal(e, named, titles) for e in self._refusals],
+            follow=self.pages.last_step.shown(self.label),
+            files_problem=self.pages.runs.listing.failure,
+            output=view.output(
+                self.pages.writing.form(self.label),
+                self.pages.writing.writers(self.label),
+                batch.spec,
+                self.pages.publisher is not None,
+            ),
             notice=notice,
-        )
-
-    def _output_shown(self) -> OutputShown:
-        writing = self.pages.writing
-        outputs = self.batch.spec.outputs.model_fields
-        form = writing.form(self.label)
-        formats = [
-            Format(
-                name=w.name,
-                title=w.title,
-                description=w.description,
-                outputs=None if w.outputs is None else list(w.outputs),
-            )
-            for w in writing.writers(self.label)
-        ]
-        problem = (
-            ''
-            if any(f.name == form.format for f in formats)
-            else f'This application has no writer of the format {form.format} '
-            'that the form names: pick a format and apply.'
-        )
-        return OutputShown(
-            form=form,
-            formats=formats,
-            outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
-            catalogue=self.pages.publisher is not None,
-            problem=problem,
-        )
-
-    def _said(self, errors: Sequence[FieldError]) -> str:
-        """Errors of the settings in words, each with its setting's title."""
-        return '; '.join(
-            say(self._setting_title(e), e.msg) if e.loc else e.msg for e in errors
         )
 
     def _failures(self, states: Mapping[str, RowState]) -> dict[str, str]:
@@ -650,37 +480,12 @@ class Page:
             if s.record is not None and s.status in _ENDED
         ]
         reasons = self.batch.client.failure(ended)
-        return {
-            r.id: _failure(why) if why else 'Cancelled.'
-            for r, why in zip(ended, reasons, strict=True)
-        }
-
-    def _text(self, value: Any) -> str:
-        """
-        What a cell shows (:meth:`~ess.apps.listing.Listing.text`); nothing if
-        it is unset.
-        """
-        return '' if value is UNSET else self.pages.listing.text(value)
+        return {r.id: view.failure(why) for r, why in zip(ended, reasons, strict=True)}
 
     def _cell_text(self, name: str, cell: Any) -> str:
         """What a cell of the column ``name`` that holds ``cell`` shows."""
-        if cell is None:
-            return ''
-        return self._text(as_request(self.batch.spec.params, {name: cell})[name])
-
-    def _outdated(self, state: RowState) -> str:
-        """Why the result of a row is outdated: what changed since."""
-        said = []
-        if changed := self._changed(state, self.batch.spec.params.model_fields):
-            said.append(f'{changed} changed.')
-        if state.spec_changed:
-            said.append('It was reduced by another version of the workflow.')
-        return ' '.join(said)
-
-    def _changed(self, state: RowState, names: Iterable[str]) -> str:
-        """The titles of the parameters of ``names`` that changed, in words."""
-        titles = {**self.settings.titles, **self._cells.titles}
-        return _join([titles.get(n, n) for n in names if n in (state.changed or ())])
+        listing = self.pages.runs.listing
+        return view.cell_text(listing, self.batch.spec.params, name, cell)
 
     def _row(
         self,
@@ -693,91 +498,36 @@ class Page:
         unsubmitted: str,
         failures: Mapping[str, str],
         published: Mapping[str, str],
+        may_publish: bool,
     ) -> Row:
-        titles = {**self.settings.titles, **self._cells.titles}
-        problems = {
-            str(e.loc[0]): say(titles.get(str(e.loc[0]), str(e.loc[0])), e.msg)
-            for e in (*state.problems, *self.refused)
-            if e.entry == key and e.loc
-        }
+        titles = self._titles
+        problems = view.problems(key, (*state.problems, *self._refusals), titles)
         record = state.record
-        status = state.text
-        reason = changed = ''
-        if unsubmitted:
-            reason = unsubmitted
-        elif status in ('failed', 'cancelled') and record is not None:
-            reason = failures.get(record.id, '')
-        elif problems:
-            reason = '; '.join(problems.values())
-        elif status == 'earlier':
-            if named := self._changed(state, self.batch.spec.params.model_fields):
-                changed = f'{named} changed'
-            since = f': {changed} since' if changed else ''
-            reason = (
-                f'Reduced with earlier settings{since}. "Reduce" leaves such rows;'
-                ' "Reduce rows of earlier settings" reduces them with the settings now.'
-            )
-        elif status == 'outdated' and state.outdated:
-            reason = self._outdated(state)
-        elif status == 'outdated':
-            reason = 'The settings cannot be used, so this result may not match them.'
+        failure = '' if record is None else failures.get(record.id, '')
+        reason, changed = view.reason(state, problems, unsubmitted, failure, titles)
         # An empty cell is shown empty, not as the setting or the default that
         # a request takes.
-        given = {c: requested[c] for c in requested if cells[c] is not None}
-        result = None
-        if record is not None and state.status is Status.COMPLETED:
-            result = 'outdated' if status == 'outdated' else 'current'
+        given = {c: requested[c] for c in requested if c in state.own}
+        pid = '' if record is None else published.get(record.id, '')
         return Row(
             key=key,
             name=name,
             notes={n: '' if cells[n] is None else str(cells[n]) for n in notes},
-            status=status,
+            status=state.text,
             reason=reason,
             changed=changed,
             record=None if record is None else record.id,
-            result=result,
-            published='' if record is None else published.get(record.id, ''),
+            result=view.result(state),
+            published=pid,
+            publishable=may_publish and not pid,
             cells={
                 c: Cell(
                     value=forms.cell(self._cells.fields[c], given.get(c, UNSET)),
-                    text=self._text(given.get(c, UNSET)),
+                    text=view.text(self.pages.runs.listing, given.get(c, UNSET)),
                     problem=problems.get(c),
                 )
                 for c in self.batch.parameter_columns
             },
-        )
-
-    def _primary(
-        self,
-        states: Mapping[str, RowState],
-        blocked: str | None,
-        label: str | None = None,
-    ) -> Action:
-        """What the button does now, or ``label`` if blocked; how far rows run."""
-        left = [] if blocked else left_to_reduce(states)
-        kinds = {states[k].text for k in left}
-        n = len(left)
-        if blocked:
-            label = label or 'Check the settings'
-        elif not left:
-            label = 'Nothing left to reduce'
-        elif kinds == {'failed'}:
-            label = f'Retry {n} failed'
-        elif kinds == {'cancelled'}:
-            label = f'Retry {n} cancelled'
-        elif kinds <= {'failed', 'cancelled'}:
-            label = f'Retry {n}'
-        elif kinds == {'outdated'}:
-            label = f'Reduce {n} outdated'
-        else:
-            label = f'Reduce {n} remaining'
-        return Action(
-            label=label,
-            blocked=blocked,
-            remaining=n,
-            again=len(ready(states)),
-            running=sum(s.status is Status.PENDING for s in states.values()),
-            progress=_progress(states),
         )
 
     def _placed(self, error: FieldError, keys: Iterable[str]) -> bool:
@@ -785,25 +535,8 @@ class Page:
         if not error.loc:
             return False
         if error.entry is None:
-            return str(error.loc[0]) in self.settings.fields
+            return str(error.loc[0]) in self.draft.fields.fields
         return error.entry in keys and str(error.loc[0]) in self.batch.parameter_columns
-
-    def _refused(self, error: FieldError, named: Mapping[str, str]) -> Refused:
-        if error.entry is None:
-            text = (
-                say(self._setting_title(error), error.msg) if error.loc else error.msg
-            )
-        else:
-            column = str(error.loc[0]) if error.loc else ''
-            said = say(self._cells.titles.get(column, column), error.msg)
-            name = named.get(error.entry, error.entry)
-            text = f'{name}: {said if error.loc else error.msg}'
-        return Refused(
-            entry=error.entry,
-            loc=list(error.loc),
-            message=error.msg,
-            text=text,
-        )
 
     # The rows
 
@@ -816,7 +549,7 @@ class Page:
     @_action
     def edit(self, edit: CellEdit) -> str:
         """Set one column of rows, as its field reads the value sent."""
-        value = read(self._cells, edit)
+        value = view.read(self._cells, edit)
         frame = self._frame(edit.keys)
         # As objects, so that the batch, not pandas, refuses a cell.
         column = frame[edit.column].astype(object)
@@ -832,9 +565,9 @@ class Page:
 
     def _forget(self, keys: Sequence[str], column: str) -> None:
         """Forget the reasons of a refusal at ``column`` of rows ``keys``."""
-        self.refused = [
+        self._refusals = [
             e
-            for e in self.refused
+            for e in self._refusals
             if not (e.entry in keys and e.loc and str(e.loc[0]) == column)
         ]
 
@@ -864,7 +597,7 @@ class Page:
         """
         with refused('The rows of the source cannot be listed'):
             given = self.pages.intake.offered(self.label)
-        return listed(given, self.batch.fills)
+        return view.listed(given, self.batch.fills)
 
     @_action
     def take(self, keys: Sequence[str]) -> str:
@@ -904,7 +637,7 @@ class Page:
         change of which parameters are columns builds the form again, which
         would drop it.
         """
-        if unapplied := self._unapplied():
+        if unapplied := self.draft.unapplied():
             raise Problem(f'Nothing was changed: {unapplied.lower()} first.')
 
     def _reshape(self, name: str, change: Callable[[], None]) -> None:
@@ -918,7 +651,7 @@ class Page:
             change()
         except ValueError as error:
             raise Problem(f'Nothing was changed: {why(error)}.') from None
-        self.refused = [e for e in self.refused if not (e.loc and e.loc[0] == name)]
+        self._refusals = [e for e in self._refusals if not (e.loc and e.loc[0] == name)]
 
     @_action
     def make_column(self, name: str) -> str:
@@ -926,7 +659,7 @@ class Page:
         Make the parameter ``name`` a column with empty cells, which take the
         setting (:meth:`~ess.batch.Batch.make_column`).
         """
-        title = self.settings.titles.get(name, name)
+        title = self._titles.get(name, name)
         self._reshape(name, lambda: self.batch.make_column(name))
         taken = 'the setting' if name in self.batch.settings else 'the default'
         return f'{title} is a column: a row takes {taken} until its cell is set.'
@@ -937,7 +670,7 @@ class Page:
         Make a column a setting, of the value that a row takes, or that every
         row takes (:meth:`~ess.batch.Batch.make_setting`).
         """
-        title = self._cells.titles.get(made.name, made.name)
+        title = self._titles.get(made.name, made.name)
         self._reshape(made.name, lambda: self.batch.make_setting(made.name, made.key))
         return f'{title} is a setting: one value for every row.'
 
@@ -947,7 +680,7 @@ class Page:
     def reduce(self, request: Reduce) -> str:
         """Submit the rows asked for, all or none."""
         frame = self._frame(request.keys)
-        if unapplied := self._unapplied():
+        if unapplied := self.draft.unapplied():
             raise Problem(f'Nothing was reduced: {unapplied.lower()}.')
         try:
             keys = (
@@ -957,13 +690,14 @@ class Page:
             )
             records = self.batch.reduce(keys)
         except SubmitError as error:
-            self.refused = [e for e in error.errors if self._placed(e, frame.index)]
-            unplaced = [e for e in error.errors if e not in self.refused]
+            self._refusals = [e for e in error.errors if self._placed(e, frame.index)]
+            unplaced = [e for e in error.errors if e not in self._refusals]
             named = names(frame, self.batch.parameter_columns)
-            raise _Refusal(
-                [self._refused(e, named).text for e in unplaced], len(self.refused)
+            raise _NotReduced(
+                [view.refusal(e, named, self._titles).text for e in unplaced],
+                len(self._refusals),
             ) from None
-        self.refused = []
+        self._refusals = []
         self._list_again()
         n = len(records)
         return f'Reducing {_rows(n)}.' if n else ''
@@ -1008,22 +742,22 @@ class Page:
     def edit_settings(self, edit: Edit) -> None:
         """Change the form of the settings; the batch's stay until Apply."""
         try:
-            forms.apply(self.settings, edit)
+            self.draft.edit(edit)
         except (KeyError, ValueError) as error:
             raise Problem(why(error)) from None
 
     @_action
     def apply_settings(self) -> str:
         """Give the batch the settings of the form, unless one is missing."""
-        given, missing = self._form_held()
+        given, missing = self.draft.held()
         if missing:
-            raise Problem(f'Not applied: {self._said(missing)}.')
+            raise Problem(f'Not applied: {view.said(missing, self._titles)}.')
         self.batch.settings = given
         self._show_settings()
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
-        self.refused = [e for e in self.refused if e.entry]
-        self.pages.applied(self.label)
+        self._refusals = [e for e in self._refusals if e.entry]
+        self.pages.last_step.applied(self.label)
         return 'Applied the settings.'
 
     @_action
@@ -1037,37 +771,21 @@ class Page:
         refuses (:meth:`~ess.batch.Batch.settable`); raises as
         :meth:`Fields.set`.
         """
-        form = self._form()
-        form.set(self.batch.settable(params), self.pages.listing)
-        self.settings = form
+        self.draft.fill(self.batch.settable(params), self.pages.runs.listing)
 
     @_action
     def use_settings(self, key: str) -> str:
         """
-        Show the settings that the result of row ``key`` was reduced with: at
-        a column where the row gives its own value, the batch's setting, and
-        where its cell is empty, the value that the row took.
+        Show the settings that the result of row ``key`` was reduced with
+        (:meth:`~ess.batch.Batch.settings_of`).
         """
         frame = self._frame([key])
         name = names(frame, self.batch.parameter_columns)[key]
-        row = self._states([key])[0][key]
-        if row.record is None:
-            raise Problem(f'{name} has no result.')
-        if row.spec_changed:
-            raise Problem(
-                f'{name} was reduced by another version of the workflow, '
-                'whose settings this one does not take.'
-            )
-        batch = self.batch
-        given = (
-            frame.loc[[key], list(batch.parameter_columns)]
-            .notna()
-            .to_dict('index')[key]
-        )
-        own = {c for c, filled in given.items() if filled}
-        kept = {n: v for n, v in batch.settings.items() if n in own}
-        took = {n: v for n, v in row.record.request.params.items() if n not in own}
-        self._fill({**took, **kept})
+        try:
+            settings = self.batch.settings_of(key)
+        except ValueError as error:
+            raise Problem(f'{why(error)}.') from None
+        self._fill(settings)
         return (
             f'The form shows the settings {name} was reduced with. Apply to use them.'
         )
@@ -1132,8 +850,8 @@ class Page:
         if record is None or state.spec_changed:
             # another spec's params are not this one's
             return RowDetail(key=key, reduced_with=None, created=None, differs=[])
-        given = Fields(self.batch.spec.params, self.pages.listing)
-        given.set(record.request.params, self.pages.listing)
+        given = Fields(self.batch.spec.params, self.pages.runs.listing)
+        given.set(record.request.params, self.pages.runs.listing)
         return RowDetail(
             key=key,
             reduced_with=forms.tree(given),
@@ -1194,12 +912,7 @@ class Page:
     def table_file(self, suffix: str) -> bytes:
         """The batch table with what came of each row, as ``.csv`` or ``.xlsx``."""
         batch = self.batch
-        table = frames.with_results(
-            batch.client,
-            self._states()[0],
-            batch.frame(),
-            published=batch.published(),
-        )
+        table = frames.with_results(batch, self._states()[0])
         with named_file(f'rows{suffix}') as path:
             write_table(table, path)
             return path.read_bytes()
@@ -1227,9 +940,9 @@ class Page:
     @_locked
     def settings_file(self) -> bytes:
         """The batch's settings as a YAML template, those at the columns included."""
-        if unapplied := self._unapplied():
+        if unapplied := self.draft.unapplied():
             raise Problem(f'{unapplied} first.')
-        if missing := self._form_held()[1]:
+        if missing := self.draft.held()[1]:
             raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
         return settings_text(self.batch).encode()
 
@@ -1268,9 +981,7 @@ class Page:
             raise Problem('None of these rows has a result.')
         buffer = io.BytesIO()
         with named_file('results') as folder:
-            table = frames.with_results(
-                batch.client, states, frame.loc[done], published=batch.published()
-            )
+            table = frames.with_results(batch, states, done)
             with refused('Not downloaded'):
                 write, _ = self.pages.writing.by_form(self.label)
                 export_table(batch.client, table, folder, write)
@@ -1282,7 +993,7 @@ class Page:
         return buffer.getvalue()
 
 
-class _Refusal(Problem):
+class _NotReduced(Problem):
     """
     A reduction refused. It says the reasons that no cell or setting shows,
     such as a row still running; those that one shows are in the state.
@@ -1296,25 +1007,3 @@ class _Refusal(Problem):
                 else f'{placed} values are refused.'
             )
         super().__init__(f'Nothing was reduced: {"; ".join(said)}')
-
-
-def _join(words: Sequence[str]) -> str:
-    """``['a', 'b', 'c']`` as ``'a, b and c'``."""
-    return ' and '.join([', '.join(words[:-1]), words[-1]] if len(words) > 1 else words)
-
-
-def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
-    """
-    Of the rows whose results were submitted since the first still running,
-    how many are finished and how many there are; ``None`` if none is running.
-    """
-    pending = [
-        s.record for s in states.values() if s.status is Status.PENDING and s.record
-    ]
-    if not pending:
-        return None
-    since = min(r.created for r in pending)
-    started = [
-        s for s in states.values() if s.record is not None and s.record.created >= since
-    ]
-    return sum(s.status is not Status.PENDING for s in started), len(started)

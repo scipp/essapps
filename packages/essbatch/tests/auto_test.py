@@ -26,7 +26,7 @@ from ess.batch import (
     rows_of,
 )
 from ess.batch.auto import Step, added, step
-from ess.batch.definition import source_key, source_of
+from ess.batch.definition import SOURCE
 from ess.batch.table import KEY, cell_of
 
 from ess.apps import Client, Record, Workspace
@@ -561,7 +561,7 @@ def following(intake: Intake, client: Client, sample: Measure) -> Intake:
 
 
 def considered(definitions: FolderDefinitions) -> frozenset[str]:
-    return definitions.load(source_key('a'), source_of).considered
+    return SOURCE.load(definitions, 'a').considered
 
 
 def test_a_batch_made_from_a_source_considers_every_row_it_gave(

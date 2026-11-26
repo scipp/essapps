@@ -8,7 +8,7 @@ imports no widget library. The page is in :mod:`ess.batch.web`. The guide
 for application developers is ``packages/essbatch/docs/batch.md``.
 """
 
-from .corrections import CorrectedFiles
+from .corrections import CorrectedFiles, open_workspace
 from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
 from .intake import Intake
 from .manager import BatchManager
@@ -19,6 +19,7 @@ from .state import (
     earlier_settings,
     left_to_reduce,
     not_reduced,
+    publishable,
     ready,
     to_reduce,
 )
@@ -40,6 +41,8 @@ __all__ = [
     'earlier_settings',
     'left_to_reduce',
     'not_reduced',
+    'open_workspace',
+    'publishable',
     'ready',
     'rows_of',
     'to_reduce',

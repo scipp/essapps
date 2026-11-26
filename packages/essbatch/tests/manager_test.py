@@ -21,11 +21,10 @@ from ess.batch import (
     NotKept,
 )
 from ess.batch.definition import (
+    HEADER,
+    ROWS,
+    SETTINGS,
     Key,
-    header_key,
-    rows_key,
-    settings_key,
-    template_of,
 )
 
 from ess.apps import Client, Stage, Workspace
@@ -183,7 +182,7 @@ def test_the_fills_of_a_batch_are_kept_as_the_blanks_of_its_settings(
     fills = ('transmission', 'sample')
     manager.create('plain', title='Morning', rows=rows(client), fills=fills, label='b')
 
-    kept = definitions.load(settings_key('b'), template_of)
+    kept = SETTINGS.load(definitions, 'b')
 
     assert kept.blanks == ('sample', 'transmission')
     assert _again(client, definitions).batch('b').fills == {'sample', 'transmission'}
@@ -395,7 +394,7 @@ def test_the_header_of_a_batch_is_written_after_its_tables(
     sample(1, 'water')
     manager.create('plain', title='Morning', rows=rows(client), label='b')
 
-    assert refusing.saved == [rows_key('b'), settings_key('b'), header_key('b')]
+    assert refusing.saved == [ROWS.key('b'), SETTINGS.key('b'), HEADER.key('b')]
 
 
 def test_a_setting_keeps_its_value_if_the_table_that_makes_it_a_column_is_refused(

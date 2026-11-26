@@ -12,9 +12,10 @@ the publisher writes (:class:`~.definition.Publishing`): each upload::
     {'published': [{'key': '60339', 'record': '7f3a...', 'pid': 'pid:...'}]}
 
 A result is published if its row reads ``done`` or ``earlier``: completed,
-and not outdated. A record is published at most once; a newer result of the
-row is published as a new dataset. Each upload is kept as soon as it
-succeeds, so that one that fails after others keeps them. Removing the batch
+and not outdated (:func:`~.state.publishable`). A record is published at
+most once; a newer result of the row is published as a new dataset. Each
+upload is kept as soon as it succeeds, so that one that fails after others
+keeps them. Removing the batch
 removes the entry, not the datasets in the catalogue.
 
 Publishing runs in the caller's thread, uploads included: a page holds its
@@ -32,17 +33,14 @@ from ess.apps.records import Record
 from ess.apps.scicat import Catalogue, publish
 from ess.apps.writers import About
 
-from .definition import NotKept, Published, Publishing, publish_key, publishing_data
+from .definition import PUBLISH, NotKept, Published, Publishing, published
 from .export import RowWriter
+from .state import publishable
 from .writing import Writing
 
 
 class UploadFailed(RuntimeError):
     """An upload failed; the rows published before it stay published."""
-
-
-PUBLISHABLE = ('done', 'earlier')
-"""What the row of a result that may be published reads (``RowState.text``)."""
 
 
 class Publisher:
@@ -69,17 +67,15 @@ class Publisher:
         published before it, which are kept.
         """
         write, abouts = self.writing.by_form(label)
-        format = self.writing.form(label).format
+        form = self.writing.form(label)
         records = self._results(label, keys)
-        for about in (abouts[key] for key in records):
-            given = [('owner', about.owner), ('contact email', about.contact_email)]
-            if missing := [what for what, text in given if not text]:
-                raise ValueError(f'the form names no {", no ".join(missing)}')
+        if missing := form.lacking:
+            raise ValueError(f'the form names no {", no ".join(missing)}')
         pids: dict[str, str] = {}
         for key, record in records.items():
             try:
                 pids[key] = self._publish(
-                    label, key, record, write, abouts[key], format
+                    label, key, record, write, abouts[key], form.format
                 )
             except NotKept:  # noqa: PERF203
                 raise
@@ -98,16 +94,13 @@ class Publisher:
         if unknown := sorted(set(keys) - set(batch.frame().index)):
             raise ValueError(f'the batch has no row {", ".join(unknown)}')
         states, _ = batch.shown(list(keys))
-        records = {
-            k: s.record
-            for k, s in states.items()
-            if s.text in PUBLISHABLE and s.record is not None
-        }
-        if lacking := [k for k in keys if k not in records]:
+        may = set(publishable(states))
+        if lacking := [k for k in keys if k not in may]:
             raise ValueError(
                 f'no result to publish, done and not outdated: {", ".join(lacking)}'
             )
-        done = batch.published()
+        records = {k: s.record for k, s in states.items() if s.record is not None}
+        done = published(self.writing.manager.definitions, label)
         if again := [k for k, r in records.items() if r.id in done]:
             raise ValueError(f'the result is published already: {", ".join(again)}')
         return records
@@ -141,9 +134,8 @@ class Publisher:
         return pid
 
     def _kept(self, label: str) -> Publishing:
-        return self.writing.manager.batch(label).publishing()
+        kept = PUBLISH.load(self.writing.manager.definitions, label)
+        return Publishing() if kept is None else kept
 
     def _keep(self, label: str, publishing: Publishing) -> None:
-        self.writing.manager.definitions.save(
-            publish_key(label), publishing_data(publishing)
-        )
+        PUBLISH.save(self.writing.manager.definitions, label, publishing)

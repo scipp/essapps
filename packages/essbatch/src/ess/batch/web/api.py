@@ -107,6 +107,18 @@ def _download(content: bytes, name: str, media: str) -> Response:
     )
 
 
+def serve(app: FastAPI, *, port: int) -> None:
+    """
+    Serve ``app`` on ``http://localhost:port`` until interrupted; exit with
+    what to run first if the page lacks its libraries (``static/vendor.sh``).
+    """
+    import uvicorn
+
+    if not (STATIC / 'vendor').is_dir():
+        raise SystemExit(f'The page needs its libraries: sh {STATIC / "vendor.sh"}')
+    uvicorn.run(app, host='localhost', port=port)
+
+
 def create_app(pages: Pages) -> FastAPI:
     """
     The JSON API of the batches of ``pages`` and the page that uses it, at
@@ -359,16 +371,16 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.get('/api/runs')
     def runs() -> Runs:
-        return pages.runs()
+        return pages.runs.shown()
 
     @workspace.post('/api/runs/cells')
     def correct(body: CellEdit) -> Notice:
         """Correct runs; no row of a batch changes."""
-        return pages.correct(body)
+        return pages.runs.correct(body)
 
     @workspace.post('/api/runs/cells/revert')
     def revert_run(body: Cells) -> Notice:
-        return pages.revert_run(body)
+        return pages.runs.revert(body)
 
     app.include_router(batch)
     app.include_router(workspace)

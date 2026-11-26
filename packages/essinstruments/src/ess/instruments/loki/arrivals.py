@@ -40,6 +40,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ess.batch import open_workspace
 from ess.batch.web.api import STATIC, every
 from ess.loki import data
 
@@ -47,8 +48,9 @@ from ess.apps import Client, file
 from ess.apps.folder import write_files_table
 from ess.spec import FileRef
 
+from .bindings import BINDINGS
 from .specs import CALIBRATED_DETECTOR, MASKS
-from .web import build, open_loki
+from .web import build
 
 FIRST_RUN = 70001
 
@@ -229,7 +231,7 @@ def main() -> None:
     if directory.exists() and any(directory.iterdir()):
         parser.exit(1, f'{directory} is not empty\n')
     instrument = Instrument(directory)
-    client, files, definitions = open_loki(directory)
+    client, files, definitions = open_workspace(directory, BINDINGS)
     _say(f'folder {directory}; reducing the detector and the masks')
     with client:
         given = settings(client, instrument)

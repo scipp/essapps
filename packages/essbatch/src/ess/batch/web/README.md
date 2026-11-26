@@ -63,7 +63,7 @@ While a person has changed the form and not applied the change, the bar above it
 Apply is refused while the form misses something, and the bar says what; it also names the settings kept that the form cannot show, which Apply replaces.
 While the form holds a change, **Reduce**, the ways of its menu, **Reduce them again** and **Download settings** are refused, so that nothing is reduced or saved with settings other than those shown.
 **Load settings** and "Put these settings in the form" in the row tab fill the form, after a confirmation if it holds a change; a file that cannot be read whole leaves the form as it was. A value at a parameter column that the row source fills is left out (`Batch.settable`).
-"Put these settings in the form" puts the value that the row was reduced with at each column where its cell is empty, and leaves the batch's setting where the row gives its own value, which is no setting of the batch.
+"Put these settings in the form" puts the value that the row was reduced with at each column where its cell is empty, and leaves the batch's setting where the row gives its own value, which is no setting of the batch (`Batch.settings_of`).
 **Download settings** writes every setting, those at the parameter columns too, as a template without blanks.
 A change of the settings applies to the rows not reduced yet.
 A row reduced before that takes the setting changed reads `earlier`, reduced with earlier settings, and **Reduce** leaves it (`ess.batch.left_to_reduce`); a row that gives its own value in the column of the setting stays `done`.
@@ -107,7 +107,7 @@ Whatever a step raises, from the files, the workflow or the workspace, is the st
 
 ## The runs
 
-The view **Runs** lists the runs of the workspace (`Pages.runs`), with the fields of a run that a person corrects, and the column **Batches**.
+The view **Runs** lists the runs of the workspace (`Runs.shown`), with the fields of a run that a person corrects, and the column **Batches**.
 The column **Batches** names each batch that uses the run, by its title, in the order of the list of batches, and its tooltip adds the label of each, since two batches may share a title; it is empty for a run in no batch.
 A batch uses a run if a cell of its batch table names it, such as a sample run or an element of a list of runs, or one of its settings does, such as the run of the can (`Batch.files`).
 A reference to a file not listed is ignored alone, also in a list of runs; only in a group of fields, such as a setting of several fields, does it hide the other files of the group.
@@ -242,7 +242,7 @@ An application given a catalogue (`Pages(..., catalogue=Catalogue(...))`, `ess.a
 The result of a row is published as one derived dataset of SciCat (`ess.batch.publish.Publisher`, `ess.apps.scicat.publish`), with the files that the download writes.
 The rest is read from the result: the files it read with a catalogue identifier are its inputs, the proposal is the workspace's, and the software is that of the server now.
 **Publish N selected** publishes the selected rows that read `done` or `earlier` and are not published, with the form in force (`POST api/publish`, `Publisher.publish`); the column **Published** then shows the identifier of each dataset.
-The publisher decides which results may be published (`PUBLISHABLE`); the button only mirrors it, and waits, with a hint, while the form holds a change, names no owner or contact email, or a publication runs.
+The batch layer decides which results may be published (`ess.batch.publishable`, `Form.lacking`), and the server sends it, as `Row.publishable` and `OutputShown.unpublishable`; the button only mirrors it, and waits, with a hint, while the form holds a change, names no owner or contact email, or a publication runs.
 A result is published once; a row reduced again may be published again, as a new dataset.
 What the publisher refuses, such as a row whose result is outdated, publishes nothing; an upload that fails keeps those before it, which its message names.
 Which SciCat, and whether files are copied on a shared file system or sent over SFTP, is the `scitacean.Client` and its file transfer that the application gives (`ess.apps.scicat.Catalogue`); the transfer must have no `source_folder` of its own, so that each dataset has the folder of its record.
@@ -253,17 +253,17 @@ There is no login yet.
 The web layer follows eight rules. Each says where a reader finds a kind of thing, so a change that breaks one needs a reason.
 
 1. **The batch layer decides.** Every rule of rows, settings, sources, reduction and Follow is in `ess.batch`. The web layer says what the batch layer refuses in words for a person and copies no rule of the batch layer. It refuses only a request that no call of the batch layer can express, such as Follow without a row source (`NewBatch`). The form in the browser may know a rule to be helpful, such as that a batch that follows has no last row, but the server does not decide it here.
-2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` takes it, and a caller may hold it already; a property of `Pages` (`listing`, `files_version`, `runs_version`, `corrects_runs`) reads one value without it.
+2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` and of its `Runs` takes it, and a caller may hold it already; a property of `Runs` (`listing`, `version`, `corrects`) reads one value without it. `LastStep` is used only under it.
 3. **Each piece of state has one owner, which alone writes it.**
 
    | Owner | State |
    |---|---|
    | the batch layer | the batches: batch table, settings, header, which batch follows, the output form and what was published |
-   | `Pages` | the listing of the files and its version, the corrections of runs, what the last step of Follow said |
+   | `Pages` | which pages are open; through `Runs`, the listing of the files and the corrections of runs; through `LastStep`, what the last step of Follow said |
    | `Page` | the draft of the settings form, the refusals of the last reduction, its version |
    | the browser | what is shown: selection, filter, view, tab, sort, axes; the draft of the output form ([Output](#output)) |
 
-   A `Page` changes its batch through the batch layer, and asks `Pages` for the listing and for what to show of Follow.
+   A `Page` changes its batch through the batch layer, and asks `Pages.files` for the listing and `Pages.follow` for what to show of Follow.
 4. **A request answers what the page needs next.** An action that changes a batch answers the `State` after it. A request that reads answers what it reads, also when it is a POST because its body is long (`api/plot`, `api/results.zip`). An action of the workspace answers what the page shows next, since the page without a batch has no state: a `Notice` for correcting a run or removing a batch, `Made` for a new batch. Any request may answer 422 with a message, or 404 for a label that is no batch.
 5. **A change is noticed by counters.** At each poll the server compares versions and answers 204 until one moved ([How the page learns of changes](#how-the-page-learns-of-changes)). No signal says that a file arrived, so nothing read from the files is kept by the version of a batch; the listing has a version of its own.
 6. **A refusal is a `Problem` (422) or a `Missing` (404); how an exception reads as a message is in `refusals.py` and `ess.apps.errors.said`.** Code of the application, such as a row source, the file source or a drawing, may raise anything: the page says it and keeps working (`refused`, `said`): a pydantic `ValidationError` as each reason at its field, another refusal (`ValueError`, `OSError`) as its text, and a defect with its type. Elsewhere an action catches only the refusals it expects of the batch layer, or of a file or a value that a person gave, and says them with `why` after what it was doing, such as "Cannot load rows.csv: ...".
@@ -292,15 +292,17 @@ There are no websockets: each action answers with the new `State`, and the page 
 
 ## Layers
 
-The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version` and `files_version` (see [How the page learns of changes](#how-the-page-learns-of-changes)):
+The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version`, and which batch follows (see [How the page learns of changes](#how-the-page-learns-of-changes)):
 
 ```mermaid
 flowchart TD
     browser["browser: app.js"]
     api["api: create_app, the timer"]
-    pages["Pages: one lock, the listing of the files, files_version"]
+    pages["Pages: one lock, the pages open"]
+    runs["Runs: the listing of the files and its version, the Runs view"]
+    last_step["LastStep: what Follow said"]
     page["Page, one per batch: poll compares the versions"]
-    intake["Intake: version"]
+    intake["Intake: following"]
     manager["BatchManager: version"]
     batch["Batch: version"]
     browser -->|HTTP| api
@@ -308,7 +310,10 @@ flowchart TD
     api -->|routes of a batch| page
     pages -->|"step(), create from a source"| intake
     pages -->|"create, remove, counts"| manager
-    page -->|"listing, what Follow said"| pages
+    pages --> runs
+    pages -->|"stepped, failure"| last_step
+    page -->|"listing, list_again"| runs
+    page -->|"token, shown, unsubmitted, applied"| last_step
     page -->|"offered, take, stop()"| intake
     page -->|"batch(label), change"| manager
     page -->|"put, reduce"| batch
@@ -319,11 +324,16 @@ flowchart TD
 | Module | What it holds |
 |---|---|
 | `static/` | the page: `index.html`, `app.js`, `tables.js`, `form.js`; what is shown: selection, filter, view, tab, sort, axes |
-| `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch |
-| `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It alone writes the listing of the files and its version, the corrections of runs, and the step of Follow (`tick`) and what it said |
-| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a draft until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Pages` for the listing and for what to show of Follow |
+| `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch; `serve(app, port=...)` runs it on localhost |
+| `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It steps Follow (`tick`) |
+| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Runs` for the listing and `LastStep` for what to show of Follow |
+| `runs.py` | `Runs`: the listing of what the client lists, shared by every page, its version (`SafeListing.version`), and the Runs view with the corrections of runs |
+| `last_step.py` | `LastStep`: what the last step of Follow said, for the page of the batch that follows |
+| `draft.py` | `Draft`: the settings form of a `Page`, a draft until Apply: what it holds, what it showed of the batch's settings, and the settings it could not show |
+| `view.py` | how what the batch layer gives reads on a page, as the models of `models.py`, and how a cell sent back reads: functions of their arguments only; one title per parameter (`titles`) |
+| `tempfiles.py` | a file that a person sends or gets, in a folder of its own |
 | `refusals.py` | how `Pages` and `Page` refuse a request: `Problem` (422) or `Missing` (404); how an exception of the batch layer reads as a message (`why`, `kept`), and how a request says what code of the application raised (`refused`, with `ess.apps.errors.said`: a pydantic `ValidationError` as each reason at its field, `ValueError` and `OSError` as their text; anything else is a defect, said with its type) |
-| `ess.batch` | the logic: `BatchManager`, `Intake`, `step`, `Batch`, `table`, states, `CorrectedFiles`; shared with the command `essbatch` |
+| `ess.batch` | the logic: `BatchManager`, `Intake`, `step`, `Batch`, `table`, states, `CorrectedFiles`, `open_workspace`; shared with the command `essbatch` |
 
 `/docs` on a running server lists the API.
 
@@ -355,9 +365,9 @@ sequenceDiagram
 ```
 
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
-At each poll the server compares what the page saw at its last version with: `Batch.version` (the batch table, the template, the records of the batch), the position of the listing in the workspace's records, `Pages.files_version` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.version` (the batch that follows), and what the page shows of the last step of Follow (`Pages.follow_token`).
+At each poll the server compares what the page saw at its last version with: `Batch.version` (the batch table and the template), the position of the listing in the workspace's records, `SafeListing.version` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.following` (the batch that follows), and what the page shows of the last step of Follow (`LastStep.token`). A record that changed since the listing's position is in the workspace's changes, which the poll reads too.
 `start` is new at each start of the server; a page that sees another one loads again.
-`State.runs` is `Pages.files_version`, the changes of the runs, which all pages share, and `null` if the application corrects no runs; the Runs view asks for `api/runs` when it moves.
+`State.runs` is `SafeListing.version`, the changes of the runs, which all pages share, and `null` if the application corrects no runs; the Runs view asks for `api/runs` when it moves.
 The batches of each run come with the counts (`api/batches/counts`), every 2 s while the Runs view is shown, and not with `api/runs`: Follow adds rows that name runs without a change of the runs.
 `State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only a page that polls no state asks for `api/batches`.
 `api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.
@@ -391,7 +401,7 @@ parent.mount('/batch', batch)
 ## Where the definition is kept
 
 The headers, the batch tables, the settings, the batch that follows, and the corrections of runs are the definitions of the workspace. A folder whose definitions are of another format is refused when the page starts (`FolderDefinitions`).
-The demo and the LoKI page give the manager, and so the `Intake`, and the file source the folder's definitions, `FOLDER/definitions/` (`ess.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
+The demo and the LoKI page open the folder with `ess.batch.open_workspace`, and give the manager, and so the `Intake`, and the file source the folder's definitions, `FOLDER/definitions/` (`ess.batch.FolderDefinitions`), so a restart shows the batches, their definitions and the batch that follows again.
 The settings form is a draft of the batch's settings: **Apply** writes it to the batch, and so to the definitions. A draft not applied is lost when the server stops.
 Results are records of the workspace, in `FOLDER/store/`.
 See [Where the definitions are kept](../../../../docs/batch.md#where-the-definitions-are-kept).

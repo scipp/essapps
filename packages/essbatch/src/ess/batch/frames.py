@@ -24,6 +24,7 @@ import pandas as pd
 from ess.apps.client import Client
 from ess.apps.records import Template
 
+from . import definition
 from .reduction import Batch
 from .state import RowState, Which, to_reduce
 from .table import RESULT
@@ -151,28 +152,29 @@ def reduce_batch(
         raise
     finally:
         batch.close()
-    frame = batch.frame()
-    if keys is not None:
-        frame = frame.loc[list(keys)]
-    return with_results(client, batch.state(keys), frame, published=batch.published())
+    return with_results(batch, batch.state(keys), keys)
 
 
 def with_results(
-    client: Client,
+    batch: Batch,
     states: Mapping[str, RowState],
-    frame: pd.DataFrame,
-    *,
-    published: Mapping[str, str],
+    keys: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """
-    ``frame``, the table of a batch or some of its rows, with the columns of
-    :data:`RESULT`, replaced if it has them: what ``states`` say of the row of
-    each key. ``status`` is the row's status in the words of the page
-    (:attr:`~.state.RowState.text`), ``record`` the ID of its result, and
-    ``failure`` why that failed, and ``published`` its catalogue identifier,
-    of ``published`` by record ID (:meth:`~.reduction.Batch.published`); each
-    text is empty where there is nothing to say.
+    The rows of ``keys`` of the table of ``batch``, or all, with the columns
+    of :data:`RESULT`, replaced if it has them: what ``states`` say of the
+    row of each key. ``status`` is the row's status in the words of the page
+    (:attr:`~.state.RowState.text`), ``record`` the ID of its result,
+    ``failure`` why that failed, and ``published`` its catalogue identifier
+    (:func:`~.definition.published`); each text is empty where there is
+    nothing to say.
     """
+    client = batch.client
+    kept = batch.definitions
+    published = {} if kept is None else definition.published(kept, batch.label)
+    frame = batch.frame()
+    if keys is not None:
+        frame = frame.loc[list(keys)]
     keys = list(frame.index)
     records = [states[key].record for key in keys]
     found = [r for r in records if r is not None]

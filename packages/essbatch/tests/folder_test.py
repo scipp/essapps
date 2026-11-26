@@ -43,7 +43,7 @@ def _found(client: Client) -> Batch:
 
 def _table(client: Client) -> pd.DataFrame:
     batch = _found(client)
-    return with_results(client, batch.state(), batch.frame(), published={})
+    return with_results(batch, batch.state())
 
 
 def test_a_batch_on_a_moved_folder_shows_what_it_showed_and_reduces_nothing(

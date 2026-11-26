@@ -47,7 +47,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field
 
 from ess.apps import Client
-from ess.apps.folder import ArrivingFiles, open_folder, write_files_table
+from ess.apps.folder import write_files_table
 from ess.apps.testing import StagedFunction, read_file
 from ess.spec import (
     BackgroundRunFile,
@@ -63,11 +63,11 @@ from .. import (
     FolderDefinitions,
     Intake,
     RowSource,
+    open_workspace,
 )
 from ..table import KEY, cell_of
-from . import Pages, create_app, plots
-from .api import STATIC, every
-from .page import Shown
+from . import Pages, create_app, plots, serve
+from .api import every
 
 if TYPE_CHECKING:
     from ess.apps.scicat import Catalogue
@@ -323,9 +323,7 @@ def open_demo(
     if not (directory / 'files.csv').exists():
         runs = [run for group in measurements(samples) for run in group]
         measure(directory, runs)
-    definitions = FolderDefinitions(directory)
-    files = CorrectedFiles(ArrivingFiles(directory), definitions=definitions)
-    return open_folder(directory, BINDINGS, files=files), files, definitions
+    return open_workspace(directory, BINDINGS)
 
 
 def build(
@@ -354,19 +352,11 @@ def build(
             source='sample-runs',
             parameter_columns=['thickness'],
         )
-
-    def draw(shown: Sequence[Shown]) -> dict[str, object]:
-        curves = [
-            plots.Curve(s.name, client.output(s.record, 'iofq'), s.color, s.outdated)
-            for s in shown
-        ]
-        return plots.figure(curves, quantity='I(Q)')
-
     pages = Pages(
         intake,
         interval=interval,
         title=DEMO.title,
-        draw={DEMO.name: draw},
+        draw={DEMO.name: plots.draw(client, 'iofq', 'I(Q)')},
         files=files,
         marks=Marks,
         folder=folder,
@@ -437,8 +427,6 @@ def main() -> None:
     args = parser.parse_args()
     if args.start is not None and args.arrive is None:
         parser.error('--start goes with --arrive')
-    if not (STATIC / 'vendor').is_dir():
-        parser.exit(1, f'The page needs its libraries: sh {STATIC / "vendor.sh"}\n')
     directory = args.directory
     if directory is None:
         directory = Path(tempfile.mkdtemp(prefix='essapps-web-demo-'))
@@ -447,60 +435,33 @@ def main() -> None:
         parser.exit(1, f'--arrive needs a new folder; {directory} has runs\n')
     sys.stdout.write(f'folder {directory}\n')
     sys.stdout.flush()
-    if args.arrive is None:
-        _serve(
-            directory,
-            args.port,
-            interval=args.interval,
-            samples=args.samples,
-            fake=args.fake_catalogue,
-        )
-        return
-    groups = measurements(args.samples)
-    start = 1 + (AT_START if args.start is None else args.start)  # the empty cell
-    arrived = [run for group in groups[:start] for run in group]
-    measure(directory, arrived)
-
-    def arrive(group: list[Run]) -> None:
-        arrived.extend(group)
+    plan = []
+    if args.arrive is not None:
+        groups = measurements(args.samples)
+        start = 1 + (AT_START if args.start is None else args.start)  # the empty cell
+        arrived = [run for group in groups[:start] for run in group]
         measure(directory, arrived)
 
-    plan = [partial(arrive, g) for g in groups[start:]]
-    with every(args.arrive, plan):
-        _serve(
-            directory,
-            args.port,
-            interval=args.interval,
-            samples=args.samples,
-            fake=args.fake_catalogue,
-        )
+        def arrive(group: list[Run]) -> None:
+            arrived.extend(group)
+            measure(directory, arrived)
 
-
-def _serve(
-    directory: Path,
-    port: int,
-    *,
-    interval: float,
-    samples: int,
-    fake: bool,
-) -> None:
-    import uvicorn
-
+        plan = [partial(arrive, g) for g in groups[start:]]
     try:
-        client, files, definitions = open_demo(directory, samples=samples)
+        client, files, definitions = open_demo(directory, samples=args.samples)
     except ValueError as error:  # such as definitions of another format
         raise SystemExit(str(error)) from None
-    with client:
-        folder = directory.name
+    with client, every(args.arrive or 0, plan):
+        catalogue = fake_catalogue(client.proposal) if args.fake_catalogue else None
         app = build(
             client,
             files,
             definitions,
-            folder=folder,
-            interval=interval,
-            catalogue=fake_catalogue(client.proposal) if fake else None,
+            folder=directory.name,
+            interval=args.interval,
+            catalogue=catalogue,
         )
-        uvicorn.run(app, host='localhost', port=port)
+        serve(app, port=args.port)
 
 
 if __name__ == '__main__':

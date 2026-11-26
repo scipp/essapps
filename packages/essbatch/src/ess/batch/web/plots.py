@@ -8,12 +8,17 @@ no Plotly package is needed in Python.
 from __future__ import annotations
 
 import itertools
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import scipp as sc
+
+if TYPE_CHECKING:
+    from ess.apps import Client
+
+    from .page import Draw, Shown
 
 PALETTE = (
     '#2f6fb3',
@@ -158,3 +163,24 @@ def figure(curves: Sequence[Curve], *, quantity: str = 'Intensity') -> dict[str,
             'meta': {'quantity': quantity},
         },
     }
+
+
+def draw(
+    client: Client,
+    output: str,
+    quantity: str,
+    curve: Callable[[Any], sc.DataArray] = lambda value: value,
+) -> Draw:
+    """
+    Draws the curve that ``curve`` takes of ``output`` of each result shown,
+    in a :func:`figure` of ``quantity``.
+    """
+
+    def drawn(shown: Sequence[Shown]) -> dict[str, Any]:
+        curves = [
+            Curve(s.name, curve(client.output(s.record, output)), s.color, s.outdated)
+            for s in shown
+        ]
+        return figure(curves, quantity=quantity)
+
+    return drawn

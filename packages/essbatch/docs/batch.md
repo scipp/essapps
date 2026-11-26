@@ -55,7 +55,7 @@ Nothing in the batch layer imports the page or the command.
 |---|---|---|
 | table | `table.py` | the form of a batch table: dtypes, cells, cell to request value and back, `rows.json`, table files |
 | row source | `source.py`: `RowSource`, `rows_of` | the code of the application that makes rows from the files |
-| batch | `reduction.py`: `Batch` | the settings and the batch table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the batch table, the settings or a record changes; the only part that submits to the client |
+| batch | `reduction.py`: `Batch` | the settings and the batch table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the batch table or the settings change; the only part that submits to the client |
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
@@ -136,7 +136,7 @@ Other tables are always named with what they are of:
    In the batch table above with `batch.settings == {'thickness': 1.5, ...}`, row 60339 is reduced with thickness 1.5 and row 60340 with 2.0. A row with a `MISSING` value is incomplete and is not reduced.
 
    `batch.fills` names the parameter columns that the source of the batch fills, here `sample` and `sample_transmission`; it is empty for a batch made without a source. A row taken by hand before its transmission run is listed has an empty cell there. Without the second branch it would be reduced with the transmission run of another sample, from the settings.
-3. **The state is computed, never kept.** It is read from the records each time. Each rule (`ready`, `not_reduced`, `left_to_reduce`, `earlier_settings`, `to_reduce`) is a function from the states to keys.
+3. **The state is computed, never kept.** It is read from the records each time. Each rule (`ready`, `not_reduced`, `left_to_reduce`, `earlier_settings`, `to_reduce`, `publishable`) is a function from the states to keys.
 4. **A step never changes a row that the batch table has.** It adds rows, and reduces rows that have no result.
 5. **A batch is shown without its source and without the files.** A file that is not found is a problem of its row.
 6. **The rules are in the batch layer.** A refusal of what is asked is a `ValueError`, a label that no batch has a `KeyError`, and a write or delete that the definitions cannot do, such as a file the system refuses to write, a `NotKept`. The page and the command show them and copy no rule of the batch layer. The page refuses only a request that no call of the batch layer can express, such as Follow without a row source. The batch layer has no lock and no timer.
@@ -487,6 +487,7 @@ The rules, in `ess.batch`:
 | `earlier_settings(states)` | the rows with `earlier` |
 | `left_to_reduce(states)` | ready, and without a result, failed, cancelled or outdated; not those of `earlier_settings` |
 | `to_reduce(states, which)` | `left_to_reduce` for `'remaining'`, `earlier_settings` for `'earlier'`, `ready` for `'all'` |
+| `publishable(states)` | `done` or `earlier`: the rows whose result may be published |
 
 A change of settings applies to the rows not reduced yet, also to a row that takes a setting at a column: it reads `earlier`.
 A change of a cell applies to its row: it reads `outdated`.
@@ -616,7 +617,7 @@ sequenceDiagram
         batch->>definitions: write rows.json
     end
     step->>batch: reduce(rows ready and without a result)
-    step-->>intake: Step: considered, refused, waiting, records
+    step-->>intake: Step: added, considered, refused, waiting, records
     intake->>definitions: write source.json: considered, if it changed
     intake-->>timer: Step
 ```
@@ -709,7 +710,7 @@ Each subcommand is a few calls of the batch layer:
 | `sources` | the names of `-s`, and the `fills` and `description` of each |
 | `rows NAME` | `intake.rows_of(NAME)` |
 | `batches` | `manager.headers()`, `batch.state(compare=False)`, `intake.source(label)`, `intake.following` |
-| `show -l LABEL` | `frames.with_results(client, batch.shown()[0], batch.frame(), published=batch.published())` |
+| `show -l LABEL` | `frames.with_results(batch, batch.shown()[0])` |
 | `reduce` | `manager.create` or `intake.create` (with `choose=Range(first, last, later=...)`), or `batch.put` and `batch.settings = ...`; then `frames.reduce_batch` |
 | `export TABLE` | `export.export_table(client, table, directory, export.by_writer(client))`, of the table file |
 | `export -l LABEL` | `export.export_table(client, table, directory, writing.by_form(label)[0])`, of what `show` gives |
@@ -725,7 +726,7 @@ Each subcommand is a few calls of the batch layer:
 Every parameter is commented out, one with a default showing it: the template as written is read by `load_template` and refused by `reduce`, naming each required parameter, and a parameter left commented takes the spec's default, not a copy of today's.
 A file in a group is written in its JSON form, `{'@ref': file, file: run:1}`, since `as_request` converts the value of a parameter, not of a field of a group.
 `batches` counts the rows whose newest result completed (`reduced`), without comparing requests, which would resolve every row of every batch; `show` gives the status of each row.
-The table written has the note columns `status` (the words of `RowState.text`), `record`, `failure` and `published` (the catalogue identifier of the row's result, read from `publish.json` by `Batch.published`, so `show` needs no `-c`).
+The table written has the note columns `status` (the words of `RowState.text`), `record`, `failure` and `published` (the catalogue identifier of the row's result, read from `publish.json` by `definition.published`, so `show` needs no `-c`).
 `--json` writes a table as JSON in place of CSV: a list of objects, one per row, with the key as a field, `null` for an empty cell, and a list of names as a list (a CSV holds the names separated by a space).
 For a label that exists, the template becomes the settings and the table file replaces the batch table.
 A value of the template at a parameter column of the batch table is the setting that each row with an empty cell takes.
