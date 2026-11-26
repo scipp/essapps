@@ -43,6 +43,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
+from .errors import NotFound, Rejected
 from .models import (
     BatchCounts,
     Batches,
@@ -68,7 +69,6 @@ from .models import (
 )
 from .page import Page
 from .pages import Pages
-from .refusals import Missing, Problem
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -146,12 +146,12 @@ def create_app(pages: Pages) -> FastAPI:
     # The state is about 0.6 kB per row and repeats much.
     app.add_middleware(GZipMiddleware)
 
-    @app.exception_handler(Problem)
-    def problem(_: Request, error: Problem) -> JSONResponse:
+    @app.exception_handler(Rejected)
+    def problem(_: Request, error: Rejected) -> JSONResponse:
         return JSONResponse({'message': str(error)}, status_code=422)
 
-    @app.exception_handler(Missing)
-    def missing(_: Request, error: Missing) -> JSONResponse:
+    @app.exception_handler(NotFound)
+    def missing(_: Request, error: NotFound) -> JSONResponse:
         return JSONResponse({'message': str(error)}, status_code=404)
 
     @app.get('/', include_in_schema=False)

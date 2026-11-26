@@ -27,7 +27,7 @@ intake decide what can be made. With no batch at all, the page is served
 without one: it shows the list of batches and the runs. So is the page of a
 batch that cannot be made (:meth:`Pages.page`), with the reason, and that of
 a batch removed (:meth:`Pages.remove`): a :class:`~.page.Page` handed out
-before answers :class:`~.refusals.Missing` from then on.
+before answers :class:`~.errors.NotFound` from then on.
 
 ``Intake`` keeps which batch follows
 (:attr:`~ess.batch.Intake.following`). :meth:`Pages.tick` is one
@@ -61,6 +61,13 @@ from ..source import Range, RowSource
 from ..table import read_table
 from ..writing import Writing
 from . import forms, view
+from .errors import (
+    NotFound,
+    Rejected,
+    reject_on_error,
+    reject_on_write_error,
+    request_error_text,
+)
 from .last_step import LastStep
 from .models import (
     BatchCounts,
@@ -75,7 +82,6 @@ from .models import (
     SpecChoice,
 )
 from .page import Page
-from .refusals import Missing, Problem, kept, refused, why
 from .runs import Runs
 from .tempfiles import read_file
 
@@ -176,8 +182,8 @@ class Pages:
     def page(self, label: str) -> Page:
         """
         The page of ``label``, made at the first call. Raises
-        :class:`~.refusals.Missing` if no batch has the label
-        (:meth:`check`), and :class:`~.refusals.Problem` if its batch cannot
+        :class:`~.errors.NotFound` if no batch has the label
+        (:meth:`check`), and :class:`~.errors.Rejected` if its batch cannot
         be made, such as when the workspace binds no spec of its name, or its
         batch table cannot be read (:meth:`~ess.batch.BatchManager.batch`).
         """
@@ -187,13 +193,13 @@ class Pages:
                 try:
                     page = Page(self, label)
                 except (ValueError, OSError) as error:
-                    raise Problem(f'Cannot show {label}: {error}') from None
+                    raise Rejected(f'Cannot show {label}: {error}') from None
                 self._pages[label] = page
             return page
 
     def check(self, label: str) -> None:
         """
-        Raise :class:`~.refusals.Missing` unless a batch has ``label``; the
+        Raise :class:`~.errors.NotFound` unless a batch has ``label``; the
         page of a label that has none is forgotten, whoever asks, since no
         request is served by it again and a batch made later with the label
         gets a page of its own.
@@ -201,7 +207,7 @@ class Pages:
         with self.lock:
             if label not in self.intake.manager.headers():
                 self._pages.pop(label, None)
-                raise Missing(f'There is no batch {label}.')
+                raise NotFound(f'There is no batch {label}.')
 
     def home(self) -> str | None:
         """
@@ -304,12 +310,12 @@ class Pages:
         row marked as taken, left out, or waiting, for a new batch of the
         :class:`~ess.batch.Range` of ``first``, ``last`` and ``later``
         (:meth:`~ess.batch.Intake.marked`). Raises
-        :class:`~.refusals.Problem` if no source is registered so, if the
+        :class:`~.errors.Rejected` if no source is registered so, if the
         range is refused, and with what the source refuses
-        (:func:`~.refusals.refused`).
+        (:func:`~.errors.reject_on_error`).
         """
         with self.lock:
-            with refused():
+            with reject_on_error():
                 given = self.intake.marked(source, Range(first, last, later))
             return view.listed(given, self.intake.sources[source].fills)
 
@@ -334,13 +340,13 @@ class Pages:
         the :class:`Intake` leaves out the setting of a column that the
         source fills, whose cells are those of the source.
 
-        Raises :class:`~.refusals.Problem` with what the file, the manager,
+        Raises :class:`~.errors.Rejected` with what the file, the manager,
         the :class:`Intake` or the source refuses, for a label of
         ``settings_from`` that is no batch, if the definitions
         refuse a write, and with what the source raises otherwise
-        (:func:`~.refusals.refused`).
+        (:func:`~.errors.reject_on_error`).
         """
-        with self.lock, refused('The batch was not made'):
+        with self.lock, reject_on_error('The batch was not made'):
             manager = self.intake.manager
             settings = None
             if (other := new.settings_from) is not None:
@@ -384,12 +390,12 @@ class Pages:
         Remove the batch of ``label`` with the manager
         (:meth:`~ess.batch.BatchManager.remove`): its definitions go,
         its records stay, and if it follows, none follows. Its page goes, and
-        a page handed out before answers :class:`~.refusals.Missing`. What
-        it did, in words. Raises :class:`~.refusals.Missing` if no batch has
-        the label, and :class:`~.refusals.Problem` if the definitions refuse
+        a page handed out before answers :class:`~.errors.NotFound`. What
+        it did, in words. Raises :class:`~.errors.NotFound` if no batch has
+        the label, and :class:`~.errors.Rejected` if the definitions refuse
         a write.
         """
-        with self.lock, kept():
+        with self.lock, reject_on_write_error():
             self.check(label)
             title = self.intake.manager.headers()[label].title
             self.intake.manager.remove(label)
@@ -420,7 +426,7 @@ class Pages:
                     states, _ = batch.shown()
                     named = batch.files()
                 except (ValueError, OSError) as error:
-                    failed[label] = why(error)
+                    failed[label] = request_error_text(error)
                     continue
                 rows[label] = dict(Counter(s.status for s in states.values()))
                 files[label] = sorted(ref.file for ref in named)

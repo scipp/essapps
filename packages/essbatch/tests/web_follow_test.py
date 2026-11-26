@@ -16,8 +16,8 @@ import pytest
 from ess.batch import BatchManager, CorrectedFiles, FolderDefinitions, Intake
 from ess.batch.web import Page, Pages, create_app
 from ess.batch.web.api import every
+from ess.batch.web.errors import Rejected
 from ess.batch.web.models import CellEdit, Edit, NewBatch, Reduce, State
-from ess.batch.web.refusals import Problem
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -451,7 +451,7 @@ def test_a_refusal_of_a_running_row_is_said_once_and_not_kept(
     page.pages.tick()
     request = Reduce(which='selected', keys=['1'])
 
-    with pytest.raises(Problem, match=r'Nothing was reduced: .*still running'):
+    with pytest.raises(Rejected, match=r'Nothing was reduced: .*still running'):
         page.reduce(request)
     gate.open()
     after = done(page, client)

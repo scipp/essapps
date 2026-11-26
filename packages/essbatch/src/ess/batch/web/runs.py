@@ -37,8 +37,8 @@ from ess.spec import File, FileRef
 
 from ..corrections import CorrectedFiles
 from . import forms, models, view
+from .errors import Rejected, reject_on_write_error
 from .models import CellEdit, Cells, Column, Notice, RunCell, RunRow
-from .refusals import Problem, kept
 
 
 class SafeListing(Listing):
@@ -154,10 +154,10 @@ class Runs:
     def _marks(self) -> tuple[Fields, CorrectedFiles]:
         """
         The form of what a person corrects of a run, and the files to
-        correct; :class:`~.refusals.Problem` if the application corrects no runs.
+        correct; :class:`~.errors.Rejected` if the application corrects no runs.
         """
         if self._marking is None:
-            raise Problem('This application corrects no runs.')
+            raise Rejected('This application corrects no runs.')
         marks, corrected = self._marking
         return Fields(marks, self._listing), corrected
 
@@ -166,7 +166,7 @@ class Runs:
         The runs, listed again, with what a person corrected of each, as the
         Runs view of every page shows them, and that of the page without a
         batch; none, with why, if the file source raises. Raises
-        :class:`~.refusals.Problem` if the application corrects no runs.
+        :class:`~.errors.Rejected` if the application corrects no runs.
         """
         with self._lock:
             marks, corrected = self._marks()
@@ -215,14 +215,14 @@ class Runs:
     def _kept(self, correction: Callable[[], None]) -> None:
         """
         Make ``correction``, then list again, so that the pages show the runs
-        again. Raises :class:`~.refusals.Problem` if the definitions do not keep
+        again. Raises :class:`~.errors.Rejected` if the definitions do not keep
         it, or if the runs cannot be listed after it.
         """
-        with kept():
+        with reject_on_write_error():
             correction()
         self.list_again()
         if (error := self._listing.error) is not None:
-            raise Problem(f'Corrected, but the runs cannot be listed: {error}')
+            raise Rejected(f'Corrected, but the runs cannot be listed: {error}')
 
 
 def _run(

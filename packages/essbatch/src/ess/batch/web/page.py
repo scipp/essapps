@@ -12,7 +12,7 @@ settings and the refusals. It asks :class:`~.pages.Pages` for the rest: the
 by the manager, the corrections of runs, and Follow. The batch and the
 corrections keep their part in their definitions, if given them
 (:mod:`..definition`); a change that the definitions cannot keep is not made,
-and answers a :class:`~.refusals.Problem`.
+and answers a :class:`~.errors.Rejected`.
 
 The page shows the batch table as it is kept, without its source and
 without the files: a cell that names a file that is not found, or that the
@@ -60,7 +60,7 @@ that the batch, the manager, the runs and Follow count, which a poll compares
 (such as :attr:`~ess.batch.Batch.version`). ``start`` tells a page that
 the server started again, so that the same version may be another state.
 
-A reduction refused raises :class:`~.refusals.Problem`. It says the reasons
+A reduction refused raises :class:`~.errors.Rejected`. It says the reasons
 that no cell or setting shows. The others stay in the state until the value of each is
 changed, a setting's by Apply, or a reduction succeeds, so that the page marks
 each at its cell, or at its setting while the form shows the batch's settings.
@@ -68,8 +68,8 @@ The state of the batch reports most refusals of a cell as problems of its row,
 but not those that only a submission finds, since they read the records: a
 reference to a record that the workspace does not know, or to an output whose
 type does not fit the cell.
-Any other request that cannot be done raises :class:`~.refusals.Problem`
-too, with what to tell the person; :mod:`.refusals` says how a refusal of
+Any other request that cannot be done raises :class:`~.errors.Rejected`
+too, with what to tell the person; :mod:`.errors` says how a refusal of
 the batch layer reads, so the page copies no rule. A ``Page`` serves one
 batch to one person, and takes one request at a time, under the lock of all
 pages.
@@ -92,7 +92,7 @@ outdated.
 The tab "Batch" shows the header of the batch, and changes its title and
 description with the manager (:meth:`Page.change`). Removing a batch is
 :meth:`Pages.remove <.pages.Pages.remove>`; a request to a page of a batch
-removed answers :class:`~.refusals.Missing`.
+removed answers :class:`~.errors.NotFound`.
 
 The tab "Output" shows the form of the batch (:class:`~..writing.Writing`):
 the format its results are written in, and what is said of them. The browser
@@ -153,6 +153,7 @@ from ..table import KEY, NAME, cell_of, names, read_table, write_table
 from ..templates import checked_settings, load_template, settings_text
 from . import forms, plots, view
 from .draft import Draft
+from .errors import Rejected, reject_on_error, reject_on_write_error, request_error_text
 from .models import (
     Cell,
     CellEdit,
@@ -169,7 +170,6 @@ from .models import (
     State,
     Value,
 )
-from .refusals import Problem, kept, refused, why
 from .tempfiles import named_file, read_file
 
 if TYPE_CHECKING:
@@ -219,7 +219,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
         page: Page = args[0]  # type: ignore[assignment]
         with page._held():
             try:
-                with kept():
+                with reject_on_write_error():
                     notice = method(*args, **kwargs)
             finally:
                 page._new_version()
@@ -271,7 +271,7 @@ class Page:
     def _held(self) -> Iterator[None]:
         """
         The lock of all pages, taken for a request, with the forms fit to the
-        columns of the batch; raises :class:`~.refusals.Missing` if the batch
+        columns of the batch; raises :class:`~.errors.NotFound` if the batch
         was removed since the page was handed out, such as by a request that
         ran between this one's check of the label and its action
         (:meth:`Pages.check <.pages.Pages.check>`).
@@ -367,21 +367,21 @@ class Page:
 
     def _frame(self, keys: Iterable[str] = ()) -> pd.DataFrame:
         """
-        The batch table, a copy; a ``Problem`` unless it has a row of each of
+        The batch table, a copy; a ``Rejected`` unless it has a row of each of
         ``keys``.
         """
         frame = self.batch.frame()
         for key in keys:
             if key not in frame.index:
-                raise Problem(f'There is no row {key}.')
+                raise Rejected(f'There is no row {key}.')
         return frame
 
     def _put(self, frame: pd.DataFrame) -> None:
-        """Make ``frame`` the batch table; what the batch refuses is a ``Problem``."""
+        """Make ``frame`` the batch table; what the batch refuses is a ``Rejected``."""
         try:
             self.batch.put(frame)
         except ValueError as error:
-            raise Problem(f'{why(error)}.') from None
+            raise Rejected(f'{request_error_text(error)}.') from None
 
     @_locked
     def state(self, notice: str = '') -> State:
@@ -582,10 +582,10 @@ class Page:
 
     @_action
     def add(self, key: str) -> str:
-        """Add an empty row of ``key``; what the batch refuses is a ``Problem``."""
+        """Add an empty row of ``key``; what the batch refuses is a ``Rejected``."""
         key = key.strip()
         if not key:
-            raise Problem('Give the new row a key.')
+            raise Rejected('Give the new row a key.')
         frame = self._frame()
         self._put(frame.reindex(pd.Index([*frame.index, key], name=KEY)))
         return f'Added {key}: fill in its cells.'
@@ -595,10 +595,10 @@ class Page:
         """
         The rows of the source that the batch table lacks, those that wait marked
         (:meth:`~ess.batch.Intake.offered`), for :meth:`take`;
-        what the source refuses is a :class:`~.refusals.Problem`
-        (:func:`~.refusals.refused`).
+        what the source refuses is a :class:`~.errors.Rejected`
+        (:func:`~.errors.reject_on_error`).
         """
-        with refused('The rows of the source cannot be listed'):
+        with reject_on_error('The rows of the source cannot be listed'):
             given = self.pages.intake.offered(self.label)
         return view.listed(given, self.batch.fills)
 
@@ -608,10 +608,10 @@ class Page:
         Add the rows of ``keys`` as the source makes them now, so that Follow
         does not add them again once removed
         (:meth:`~ess.batch.Intake.take`). What ``Intake`` or the
-        source refuses is a :class:`~.refusals.Problem`
-        (:func:`~.refusals.refused`).
+        source refuses is a :class:`~.errors.Rejected`
+        (:func:`~.errors.reject_on_error`).
         """
-        with refused('No row was added'):
+        with reject_on_error('No row was added'):
             self.pages.intake.take(self.label, keys)
         # The rows may name files that the listing lacks.
         self._list_again()
@@ -628,7 +628,7 @@ class Page:
         try:
             values = self.batch.values(name)
         except ValueError as error:
-            raise Problem(f'{why(error)}.') from None
+            raise Rejected(f'{request_error_text(error)}.') from None
         return [
             Value(key=key, text=self._cell_text(name, cell))
             for key, cell in values.items()
@@ -636,12 +636,12 @@ class Page:
 
     def _settled(self) -> None:
         """
-        Raise :class:`~.refusals.Problem` while the form holds a change: a
+        Raise :class:`~.errors.Rejected` while the form holds a change: a
         change of which parameters are columns builds the form again, which
         would drop it.
         """
         if unapplied := self.draft.unapplied():
-            raise Problem(f'Nothing was changed: {unapplied.lower()} first.')
+            raise Rejected(f'Nothing was changed: {unapplied.lower()} first.')
 
     def _reshape(self, name: str, change: Callable[[], None]) -> None:
         """
@@ -653,7 +653,9 @@ class Page:
         try:
             change()
         except ValueError as error:
-            raise Problem(f'Nothing was changed: {why(error)}.') from None
+            raise Rejected(
+                f'Nothing was changed: {request_error_text(error)}.'
+            ) from None
         self._refusals = [e for e in self._refusals if not (e.loc and e.loc[0] == name)]
 
     @_action
@@ -684,7 +686,7 @@ class Page:
         """Submit the rows asked for, all or none."""
         frame = self._frame(request.keys)
         if unapplied := self.draft.unapplied():
-            raise Problem(f'Nothing was reduced: {unapplied.lower()}.')
+            raise Rejected(f'Nothing was reduced: {unapplied.lower()}.')
         try:
             keys = (
                 request.keys
@@ -747,14 +749,14 @@ class Page:
         try:
             self.draft.edit(edit)
         except (KeyError, ValueError) as error:
-            raise Problem(why(error)) from None
+            raise Rejected(request_error_text(error)) from None
 
     @_action
     def apply_settings(self) -> str:
         """Give the batch the settings of the form, unless one is missing."""
         given, missing = self.draft.held()
         if missing:
-            raise Problem(f'Not applied: {view.said(missing, self._titles)}.')
+            raise Rejected(f'Not applied: {view.said(missing, self._titles)}.')
         self.batch.settings = given
         self._show_settings()
         # A refusal of a setting was a refusal of the settings replaced, and
@@ -787,7 +789,7 @@ class Page:
         try:
             settings = self.batch.settings_of(key)
         except ValueError as error:
-            raise Problem(f'{why(error)}.') from None
+            raise Rejected(f'{request_error_text(error)}.') from None
         self._fill(settings)
         return (
             f'The form shows the settings {name} was reduced with. Apply to use them.'
@@ -800,14 +802,16 @@ class Page:
         """
         Give the batch the title and description of ``edit``
         (:meth:`~ess.batch.BatchManager.change`). What the manager
-        refuses is a :class:`~.refusals.Problem`, and changes nothing.
+        refuses is a :class:`~.errors.Rejected`, and changes nothing.
         """
         try:
             self.pages.intake.manager.change(
                 self.label, title=edit.title, description=edit.description
             )
         except ValueError as error:
-            raise Problem(f'The batch was not changed: {why(error)}.') from None
+            raise Rejected(
+                f'The batch was not changed: {request_error_text(error)}.'
+            ) from None
         return 'Saved.'
 
     # The output
@@ -818,7 +822,7 @@ class Page:
         Keep the form of the tab "Output", given as its fields
         (:meth:`~..writing.Writing.set_form`).
         """
-        with refused('Not applied'):
+        with reject_on_error('Not applied'):
             self.pages.writing.set_form(self.label, Form.model_validate(fields))
         return 'Applied the form.'
 
@@ -831,10 +835,10 @@ class Page:
         and the rows then show.
         """
         if (publisher := self.pages.publisher) is None:
-            raise Problem('This application publishes to no catalogue.')
+            raise Rejected('This application publishes to no catalogue.')
         if not keys:
-            raise Problem('Select the rows to publish.')
-        with refused('Not published'):
+            raise Rejected('Select the rows to publish.')
+        with reject_on_error('Not published'):
             pids = publisher.publish(self.label, keys)
         return f'Published {_rows(len(pids))}: {", ".join(pids.values())}.'
 
@@ -930,10 +934,10 @@ class Page:
         try:
             params = self.batch.spec.params
             frame = read_file(name, content, lambda path: read_table(path, params))
-            with kept():  # a fault of the definitions, not of the file
+            with reject_on_write_error():  # a fault of the definitions, not of the file
                 self.batch.put(frame)
         except (ValueError, OSError) as error:
-            raise Problem(f'Cannot load {name}: {why(error)}') from None
+            raise Rejected(f'Cannot load {name}: {request_error_text(error)}') from None
         finally:
             # The rows may name files that the listing lacks, even if the
             # table is then refused.
@@ -944,9 +948,9 @@ class Page:
     def settings_file(self) -> bytes:
         """The batch's settings as a YAML template, those at the columns included."""
         if unapplied := self.draft.unapplied():
-            raise Problem(f'{unapplied} first.')
+            raise Rejected(f'{unapplied} first.')
         if missing := self.draft.held()[1]:
-            raise Problem(f'Fill in the settings first: {SubmitError(missing)}')
+            raise Rejected(f'Fill in the settings first: {SubmitError(missing)}')
         return settings_text(self.batch).encode()
 
     @_action
@@ -957,14 +961,16 @@ class Page:
             try:
                 template = load_template(path)
             except (OSError, ValueError):
-                raise Problem(
+                raise Rejected(
                     f'{cannot} it is not a settings file saved from this page.'
                 ) from None
         try:
             batch = self.batch
             self._fill(checked_settings(batch.client, batch.spec, template))
         except (ValueError, KeyError) as error:
-            raise Problem(f'{cannot} {forms.message(why(error))}.') from None
+            raise Rejected(
+                f'{cannot} {forms.message(request_error_text(error))}.'
+            ) from None
         return f'The form shows the settings of {name}. Apply to use them.'
 
     @_locked
@@ -981,11 +987,11 @@ class Page:
         states, _ = self._states(known if keys else None)
         done = [k for k, s in states.items() if s.record_status is Status.COMPLETED]
         if not done:
-            raise Problem('None of these rows has a result.')
+            raise Rejected('None of these rows has a result.')
         buffer = io.BytesIO()
         with named_file('results') as folder:
             table = frames.with_results(batch, states, done)
-            with refused('Not downloaded'):
+            with reject_on_error('Not downloaded'):
                 write, _ = self.pages.writing.by_form(self.label)
                 export_table(batch.client, table, folder, write)
             write_table(table, folder / 'results.csv')
@@ -996,7 +1002,7 @@ class Page:
         return buffer.getvalue()
 
 
-class _NotReduced(Problem):
+class _NotReduced(Rejected):
     """
     A reduction refused. It says the reasons that no cell or setting shows,
     such as a row still running; those that one shows are in the state.

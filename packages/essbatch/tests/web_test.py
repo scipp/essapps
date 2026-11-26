@@ -34,8 +34,8 @@ from ess.batch.definition import (
     NotKept,
 )
 from ess.batch.web import Pages, Shown, create_app, demo, plots
+from ess.batch.web.errors import NotFound, Rejected
 from ess.batch.web.models import NewBatch
-from ess.batch.web.refusals import Missing, Problem
 from ess.batch.writing import Writing
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -2353,7 +2353,7 @@ def test_a_batch_made_on_the_page_is_made_as_asked_or_not_at_all(
         )
         try:
             made = pages.create(new)
-        except Problem:
+        except Rejected:
             manager = pages.intake.manager
             assert (list(manager.headers()), pages.intake.following) == (
                 ['old'],
@@ -2795,9 +2795,9 @@ def test_a_page_handed_out_before_its_batch_is_removed_answers_missing(
 
     pages.remove('scan')
 
-    with pytest.raises(Missing, match=r'There is no batch scan\.'):
+    with pytest.raises(NotFound, match=r'There is no batch scan\.'):
         page.poll(0)
-    with pytest.raises(Missing):
+    with pytest.raises(NotFound):
         page.relist()
 
 

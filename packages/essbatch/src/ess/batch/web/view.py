@@ -30,6 +30,7 @@ from ..definition import Form
 from ..state import RowState, left_to_reduce, ready
 from ..table import NAME, as_request, names
 from . import forms
+from .errors import Rejected, request_error_text, titled_field_error
 from .models import (
     Action,
     CellEdit,
@@ -41,7 +42,6 @@ from .models import (
     SourceRow,
     SourceRows,
 )
-from .refusals import Problem, say, why
 
 if TYPE_CHECKING:
     from ess.apps.writers import Writer
@@ -107,11 +107,13 @@ def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
 def read(fields: Fields, edit: CellEdit) -> Any:
     """The value of ``edit`` as the field of its column reads it."""
     if edit.column not in fields.fields:
-        raise Problem(f'There is no column {edit.column}.')
+        raise Rejected(f'There is no column {edit.column}.')
     try:
         return forms.read(fields.fields[edit.column], edit.value)
     except (KeyError, ValueError) as error:
-        raise Problem(say(fields.titles[edit.column], why(error))) from None
+        raise Rejected(
+            titled_field_error(fields.titles[edit.column], request_error_text(error))
+        ) from None
 
 
 def text(listing: Listing, value: Any) -> str:
@@ -138,7 +140,7 @@ def _said_at(error: FieldError, titles: Mapping[str, str]) -> str:
     if not error.loc:
         return error.msg
     name = str(error.loc[0])
-    return say(titles.get(name, name), error.msg)
+    return titled_field_error(titles.get(name, name), error.msg)
 
 
 def settings_problem(

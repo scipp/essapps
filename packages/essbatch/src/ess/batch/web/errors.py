@@ -1,25 +1,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-How the web layer refuses a request, and says why: :class:`Problem` (a 422
-with a message) or :class:`Missing` (a 404). :class:`~.pages.Pages` and
+How the web layer refuses a request, and says why: :class:`Rejected` (a 422
+with a message) or :class:`NotFound` (a 404). :class:`~.pages.Pages` and
 :class:`~.page.Page` raise them; :mod:`.api` answers them.
 
 The batch layer refuses with exceptions, and the page says each as a
 sentence for a person:
 
-======================================  =====================================
+======================================  ==================================
 raised by the batch layer               said
-======================================  =====================================
-``ValueError``                          its text, as it is (:func:`why`)
-``KeyError``                            its first argument (:func:`why`)
-:class:`~ess.batch.NotKept`        "The change was not kept: ..."
-                                        (:func:`kept`)
-======================================  =====================================
+======================================  ==================================
+``ValueError``                          its text, as it is
+                                        (:func:`request_error_text`)
+``KeyError``                            its first argument
+                                        (:func:`request_error_text`)
+:class:`~ess.batch.NotKept`             "The change was not kept: ..."
+                                        (:func:`reject_on_write_error`)
+======================================  ==================================
 
 A reason at a field of the page is said with the title of the field
-(:func:`say`), as :func:`ess.apps.errors.field_error_text` words it: "Thickness is
-missing".
+(:func:`titled_field_error`), as :func:`ess.apps.errors.field_error_text`
+words it: "Thickness is missing".
 
 So the page copies no rule of the batch layer: it adds what the person
 asked for, such as "The batch was not made: ", and says the rest as given.
@@ -32,7 +34,7 @@ refusal, said as its text; a pydantic ``ValidationError``, such as of
 metadata that the code validates, as each reason at its field. Anything else
 is a defect of that code, and is said with its type, so that a person can
 tell: ``RuntimeError: boom``, ``KeyError: 'run'``. A request that runs such
-code says it with :func:`refused`; the listing of the files, the step of
+code says it with :func:`reject_on_error`; the listing of the files, the step of
 Follow and the plot show it in place of what they could not give.
 """
 
@@ -47,15 +49,15 @@ from ..definition import NotKept
 from . import forms
 
 
-class Problem(Exception):
+class Rejected(Exception):
     """A request that cannot be done, with what to tell the person."""
 
 
-class Missing(Exception):
+class NotFound(Exception):
     """No batch has the label asked for."""
 
 
-def say(title: str, message: str) -> str:
+def titled_field_error(title: str, message: str) -> str:
     """
     A reason at the field ``title``, as a sentence
     (:func:`~ess.apps.errors.field_error_text`).
@@ -63,7 +65,7 @@ def say(title: str, message: str) -> str:
     return field_error_text(title, forms.message(message))
 
 
-def why(error: Exception) -> str:
+def request_error_text(error: Exception) -> str:
     """
     What a ``ValueError``, ``OSError`` or ``KeyError`` of a request says,
     without its type or quotes: a ``KeyError`` as its first argument, the
@@ -75,32 +77,32 @@ def why(error: Exception) -> str:
 
 
 @contextmanager
-def refused(doing: str = '') -> Iterator[None]:
+def reject_on_error(doing: str = '') -> Iterator[None]:
     """
     A block that runs code of the application, such as a source, and so
     may raise anything: a write that the definitions refuse raises
-    :class:`Problem` as :func:`kept` says it, and any other exception as
-    ``'<doing>: <error_text>.'``, or as the sentence of :func:`error_text` if ``doing``
-    is empty (:func:`error_text`).
+    :class:`Rejected` as :func:`reject_on_write_error` says it, and any other
+    exception as ``'<doing>: <error_text>.'``, or as the sentence of
+    :func:`error_text` if ``doing`` is empty (:func:`error_text`).
     """
     try:
-        with kept():
+        with reject_on_write_error():
             yield
-    except Problem:
+    except Rejected:
         raise
     except Exception as error:  # code of the application
         text = error_text(error)
         text = f'{doing}: {text}' if doing else f'{text[:1].upper()}{text[1:]}'
-        raise Problem(text if text.endswith('.') else f'{text}.') from None
+        raise Rejected(text if text.endswith('.') else f'{text}.') from None
 
 
 @contextmanager
-def kept() -> Iterator[None]:
+def reject_on_write_error() -> Iterator[None]:
     """
     A block whose writes to the definitions, if refused
-    (:class:`~ess.batch.NotKept`), raise :class:`Problem`.
+    (:class:`~ess.batch.NotKept`), raise :class:`Rejected`.
     """
     try:
         yield
     except NotKept as error:
-        raise Problem(f'The change was not kept: {error}') from None
+        raise Rejected(f'The change was not kept: {error}') from None

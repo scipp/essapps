@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from .refusals import why
+from .errors import request_error_text
 
 
 @contextmanager
@@ -34,5 +34,9 @@ def read_file[T](name: str, content: bytes, read: Callable[[Path], T]) -> T:
         try:
             return read(path)
         except (OSError, ValueError, KeyError) as error:
-            said = why(error).replace(f'{path}: ', '').replace(str(path), name)
+            said = (
+                request_error_text(error)
+                .replace(f'{path}: ', '')
+                .replace(str(path), name)
+            )
             raise ValueError(said) from None
