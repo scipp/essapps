@@ -9,129 +9,54 @@
 A *distribution* is what pip installs, such as `essapps`; a *package* is what Python imports, such as `ess.apps`.
 An *extra* is an optional set of dependencies of a distribution, installed as `pip install 'essapps[panel]'`.
 
-The prototype was one distribution, `essapps`, that depended on essreduce for `ess.reduce.spec` and on sciline for one module.
-Several programs will be built on it, and they need different things installed:
+Several programs are built on the framework, and they need different things installed:
 
 | Program | Runs | Needs |
 |---|---|---|
-| notebook, Jupyter app | VISA (ESS's remote desktops) or a laptop; both count as local | client, local workspace (the workspace in the user's process that `local()` makes), workflow packages, a GUI toolkit |
-| web frontend (not Python) | in a browser, against a local workspace or the service | an HTTP server in front of a workspace |
-| remote client, CLI | anywhere | client, HTTP client |
-| the service | DMSC (ESS's data centre) | workspaces, HTTP server, durable storage, workers, SciCat (ESS's data catalogue), workflow packages |
-| workflow package (esssans, ...) | everywhere a workspace runs | the spec vocabulary, the binding protocol, and the bindings |
+| notebook, Jupyter app | VISA or a laptop | client, workspace, workflow packages, a GUI toolkit |
+| web frontend | a browser | an HTTP server in front of a workspace |
+| the service | DMSC | workspaces, storage, workers, SciCat, workflow packages |
+| workflow package (esssans, ...) | everywhere a workspace runs | the spec vocabulary, the binding protocol, the bindings |
 
-A *workflow package*, such as esssans or essreflectometry, holds the sciline workflows of one technique and its instruments.
-The local workspace needs nothing the client does not: pydantic and the standard library.
-The heavy dependencies are elsewhere:
+The workspace and the client need only pydantic and the standard library.
+The heavy dependencies are the science stack (essreduce brings scipp, scippnexus, scippneutron, dask, scipy), the service stack, and GUI toolkits.
+If workflow packages had to import `ess.apps` for the binding protocol, every workflow package would depend on the framework.
 
-- **The science stack.** Installing essreduce pulls in scipp, scippnexus, scippneutron, dask, scipy, and graphviz. `ess.spec` needs only pydantic; a module that defines specs also imports scipp, for the types of the data in the groups that references to outputs fill.
-- **The service stack**: web framework, database, cluster launcher, SciCat client.
-- **GUI toolkits**: ipywidgets, Panel, or a JavaScript build.
-
-Workflow packages write specs and bindings.
-If they had to import `ess.apps` for the binding protocol or for the bindings, such as `PipelineBinding`, every workflow package would depend on the framework.
-The spec vocabulary still changes whenever the framework's design does, and nothing else imports it.
-
-Each application chooses its own facility defaults, adapters, and which settings users may change.
-esslivedata keeps these in one subpackage per instrument (`ess.livedata.config.instruments.loki`, ...), next to the instrument's params models.
-Since this glue is the application's choice, not the workflow package's, the specs and bindings of offline reduction might never move into the workflow packages.
-
-Code changes at two different rates.
+Code changes at two rates.
 The client, the workspace, the HTTP layer, the GUIs, and the service change together.
-A form decides what each field accepts, at any depth, with the functions of `ess.spec.field_types`, such as `split`, and submits through the client.
-The HTTP server and its client are two halves of one protocol.
-The service hosts the workspaces.
 An instrument's specs and bindings change when its users or its workflow package need it, independently of the core and of other instruments.
 
 ## Decision
 
-**Code gets a distribution of its own when a different set of distributions must depend on it, or when it is released on a different schedule.**
-**Code that needs dependencies only some users install is a subpackage behind an extra of the distribution it belongs to.**
-An application that science users run is a distribution of its own as well, `essbatch` ([ADR 0014](0014-applications-for-science-users-are-distributions-of-their-own.md)); this ADR is about the framework and the instruments.
+**Code gets a distribution of its own when a different set of distributions must depend on it, or when it is released on a different schedule. Code that needs dependencies only some users install is a subpackage behind an extra of the distribution it belongs to.**
 
-```text
-packages/
-  essspec/          ess.spec               the spec vocabulary, the binding protocol, and the bindings
-  essapps/          ess.apps               client, workspace, controllers
-                    ess.apps.http.server   [server]    HTTP server in front of a workspace
-                    ess.apps.http.remote   [remote]    connect(), a client of that server
-                    ess.apps.panel         [panel]     Panel forms and apps
-                    ess.apps.scicat        [scicat]    a record published to SciCat as a derived dataset
-                    ess.apps.service       [service]   storage, workers, retention, auth, automatic reduction
-                    ess.apps.writers       [scipp]     writers of outputs to files
-  essinstruments/   ess.instruments        specs and bindings per instrument, extras [loki], [dream], ...
-frontends/
-  <app>/            a web frontend, against the HTTP API of ess.apps
-```
-
-The *framework* is `essspec` and `essapps`; the *core* is the plain install of `essapps`, without extras.
-Of these, `essspec`, `essapps`, `ess.apps.panel`, and `ess.apps.scicat` exist.
-Publishing is an extra of its own, not part of the service, since a person publishes from an application on VISA or a laptop too.
-Each of the others is created with its first module, so none is an empty scaffold.
-
-An arrow points from a distribution to one it depends on; the dashed arrow is a dependency through an extra:
-
-```mermaid
-flowchart BT
-    essapps --> essspec
-    frontends -->|over HTTP| essapps
-    app["essinstruments[...-app], an instrument's app"] -.-> essapps
-    instruments["essinstruments, workflow packages"] --> essspec
-```
-
-`essapps` does not depend on `essinstruments`: it finds bindings through entry points (below), and an app that needs an instrument's specs depends on both.
-
-- **Names follow the ess monorepo**: distribution `essX`, package `ess.X`, one level under `ess`. A second distribution cannot install into a regular package (one with an `__init__.py`) such as `ess.apps`, and a namespace package (one without, which may span distributions) could not export `local` and the rest. So `ess.apps.panel` exists only as part of the `essapps` distribution.
-- **`essspec` (`ess.spec`) is everything a workflow author writes against.** The vocabulary (`WorkflowSpec`, references, the functions that read field types, parameter models), the binding protocol (`Binding`, `StageBinding`, `AccumulatorBinding`, `Driver`), and the bindings `DriverBinding` and `function_binding` need only pydantic. A client imports `ess.spec` for the specs, and the bindings cost it nothing more. `ess.spec.conversions` needs scipp (extra `[scipp]`), and `ess.spec.pipeline` with `PipelineBinding` needs sciline (extra `[sciline]`). It is developed in this repository while it changes, and nothing outside this repository depends on a version of it. Once a second consumer, such as esslivedata or essnmx, is to adopt it, it moves to scipp/ess as a distribution of its own and is published from there.
-- **`essapps` (`ess.apps`) is what notebooks and apps use**: records, the client, the workspace and its log, files, and fakes for tests. The batch application with its loop of automatic reduction is `essbatch` (ADR 0014). The core depends on essspec and pydantic, not on essreduce or sciline. The subpackages behind extras change in step with the core, so they are released with it. Importing one without its extra raises an `ImportError` that names the extra. A local workspace serves a web frontend on VISA or a laptop through `ess.apps.http.server`, as the service does. The loop of automatic reduction is in `ess.batch`, and the source of rows in the application that knows the technique; `ess.apps.service` runs the loop as a daemon from a configuration file.
-- **`essinstruments` (`ess.instruments`) holds one subpackage per instrument, and is released on its own schedule.** A fix to LoKI's specs ships without whatever changed in the core since its last release, and a core release ships without unreleased instrument changes. It depends on essspec, not on essapps. Each instrument has two modules: `specs.py` with the specs, and `bindings.py` with their bindings, which need the instrument's workflow package, behind an extra such as `[loki]`, so that an install for LoKI does not install the workflow packages of every other instrument. The two are separate because a spec may move into its workflow package without its binding, and a type checker checks the binding against the spec. `ess.instruments.loki` holds the specs and bindings of LoKI's reductions; `ess.loki`, from esssans, holds the workflow they bind to. A spec can move into its workflow package only after essspec has moved to scipp/ess, and only once its binding is a plain `PipelineBinding`, with no facility defaults or adapters. Deployment configuration, such as which batches automatic reduction runs and data paths, is not here; it belongs to the service's configuration.
-- **A Python client that imports spec modules installs the instrument's workflow package.** A local workspace, a notebook, and a Panel app on VISA or a laptop run the bindings, so they have it anyway. A notebook against the service wants scipp and plotting for the outputs, so it runs in an ESS environment that has the workflow packages too. A client without workflow packages, such as a web frontend, reads `SerializedWorkflowSpec`: the JSON form of a spec, which names each data type as a string. A spec module imports scipp for the types of data: an array is a field of a group, typed by its scipp class, such as `intensity: sc.DataArray` of the group `IofQ`, so that a type checker checks a binding against the spec, and the workspace checks by the group's class that an output fits a field typed `Referenced[IofQ]`.
-- **`essapps` finds bindings through the entry-point group `ess.apps.workflows`.** An entry point is a name that a distribution registers under a group in its `pyproject.toml` (see the example below); `importlib.metadata.entry_points(group=...)` lists the entries of all installed distributions. Each entry names a function that returns a list of bindings, each of which names its spec. `local()` without `bind=`, the command `essbatch`, and the service read the group, so a distribution registers its workflows without importing the framework. Listing the specs this way imports the bindings; a client of the service gets the list from the service instead. An entry registers whether or not its extra is installed: an entry whose workflow package is missing is skipped, and `essbatch specs` lists its specs as unavailable, naming the extra; any other import error fails the load. Two entries that register the same spec name and version fail the load, naming both entries, since picking one would leave records ambiguous about what ran. This is decided and not implemented.
-- **The command-line tool is `essbatch`**, which runs a single reduction as a batch of one row ([ADR 0014](0014-applications-for-science-users-are-distributions-of-their-own.md)). A tool with instrument-specific arguments, such as essnmx's reducer, stays in its workflow package.
-- **GUI code has one subpackage per toolkit, and no toolkit-independent GUI package.** A toolbox built on the framework keeps its UI beside its logic, as `ess.batch.web` does, so that `ess.apps.panel` knows nothing of it. A Python GUI builds its form from the models, each field through its request type: `ess.spec.request_types.sources` gives the sources a request writes there, inline, a file, or a reference to an output, and `ess.spec.field_types` the type and alternatives of each. A web frontend builds it from the params schema of `SerializedWorkflowSpec`, the JSON schema of the same request type, so both apply the same rules. An app keeps its own logic, such as grouping runs by sample and angle, in plain classes apart from its widgets. A module of shared app logic is made once two apps share some. An instrument's app goes with its specs: in `essinstruments`, behind an extra such as `[amor-app]` that brings `essapps[panel]`. Once its specs move into the workflow package, the app moves with them, into a `gui` extra such as `essreflectometry[gui]`. Only that extra depends on essapps; the plain install of the workflow package depends on essspec only.
-
-```python
-from ess.apps import local, Template                # notebook or app
-from ess.apps.panel import App                      # Panel app, needs essapps[panel]
-from ess.instruments.loki.specs import IOFQ         # LoKI's specs
-from ess.spec import WorkflowSpec                   # workflow author
-from ess.spec.pipeline import PipelineBinding       # workflow author with a sciline workflow
-```
-
-```toml
-# pyproject.toml of essinstruments, or one day of esssans
-[project.entry-points."ess.apps.workflows"]
-loki = "ess.instruments.loki.bindings:workflows"
-```
-
-```bash
-pip install 'essapps[panel]' 'essinstruments[loki]'         # a LoKI app on VISA, once published
-essbatch specs                                                # the registered specs
-```
+- `essspec` (`ess.spec`) holds everything a workflow author writes against: the spec vocabulary, the binding protocol, and the bindings. It needs only pydantic, with sciline and scipp behind extras.
+- `essapps` (`ess.apps`) holds what notebooks and apps use: the client, the workspace, files, and fakes for tests. Its subpackages behind extras, such as `ess.apps.panel`, are released with it.
+- `essinstruments` (`ess.instruments`) holds the specs and bindings of each instrument, released on its own schedule, with each instrument's workflow package behind an extra such as `[loki]`.
+- An application that science users run is a distribution of its own ([ADR 0014](0014-applications-for-science-users-are-distributions-of-their-own.md)).
+- Names follow the ess monorepo: distribution `essX`, package `ess.X`.
+- `essapps` finds bindings through the entry-point group `ess.apps.workflows`, so a distribution registers its workflows without importing the framework.
+- GUI code has one subpackage per toolkit, and no toolkit-independent GUI package.
 
 ## Alternatives considered
 
-- **The HTTP layer, the GUIs, and the service as distributions of their own**, such as `essappspanel` next to `essapps`. Each would pin a narrow range of the core and be released with it, and each name would repeat the core's.
-- **Client and workspace as separate distributions.** They have the same dependencies, and apps on VISA use `local()`, so the split installs nothing less. The client depends only on `WorkspaceProtocol`, not on `Workspace`, so the code keeps them apart without a second distribution.
-- **The instruments' specs and bindings in `essapps`**, as `ess.apps.loki`. A fix to one instrument would ship whatever changed in the core. Since `ess.apps` is a regular package, moving an instrument out later renames every import of it.
-- **The instruments' specs in `essspec`, with the bindings behind extras such as `essspec[loki]`.** `essspec[loki]` would depend on esssans, which will depend on `essspec` once it writes bindings. The vocabulary would carry this application's glue to every consumer, such as esslivedata, which has its own, and each instrument fix would be a release of the distribution that all of them pin.
-- **The instruments' specs importable without their workflow packages**, as a distribution of their own, for a remote Python client. Such a client runs in an ESS environment, which has the workflow packages, and a client without them reads `SerializedWorkflowSpec`.
-- **The spec vocabulary in essreduce.** Every client, remote ones included, would install the science stack. Each change would be a pull request in scipp/ess, made alongside the one here, with a branch pinned in between.
-- **The binding protocol and the bindings in essreduce.** They are the other half of the contract with workflow packages, and essreduce would depend on a distribution that still changes.
-- **Bindings only passed explicitly, as a list to `bind=`.** The command-line tool and the service would each need their own list of workflows, and a new workflow package would need a change to each.
-- **The HTTP server in the service.** A web frontend against a local workspace needs it too, and so does development.
-- **A generic GUI layer under the toolkit subpackages.** The rules of a parameter's widget that it would hold are the request type of `ess.spec.request_types`, which is in essspec already, and a web frontend reads its rules from the params schema of `SerializedWorkflowSpec`.
-- **`ess.dispatch` as the core's name.** `essapps` is the repository's name, and the distribution is what the apps are built on. Names that mean something else here were avoided: run (a neutron run), job (a cluster job), workflow (sciline), reduce (essreduce), stage and session (terms of the design).
-- **`essappsinstruments` as the instruments' name.** It says whose glue it is, at the cost of length; `ess.instruments.loki` and `ess.loki` already say which is which.
+- **The HTTP layer, the GUIs, and the service as distributions of their own.** Each would pin a narrow range of the core and be released with it.
+- **Client and workspace as separate distributions.** They have the same dependencies, so the split installs nothing less.
+- **The instruments' specs and bindings in `essapps`.** A fix to one instrument would ship whatever changed in the core, and moving an instrument out later renames every import.
+- **The instruments' specs in `essspec`, with bindings behind extras.** `essspec[loki]` would depend on esssans, which will depend on `essspec`, and every consumer would carry this application's glue.
+- **The instruments' specs importable without their workflow packages.** A Python client runs in an ESS environment that has them, and a web frontend reads the serialized spec.
+- **The spec vocabulary in essreduce.** Every client would install the science stack, and each change would be a pull request in two repositories.
+- **The binding protocol and the bindings in essreduce.** essreduce would depend on a distribution that still changes.
+- **Bindings only passed explicitly, as a list to `bind=`.** Every command and service would need its own list, and a new workflow package a change to each.
+- **The HTTP server in the service.** A web frontend against a local workspace needs it too.
+- **A generic GUI layer under the toolkit subpackages.** Its rules are the request types of `ess.spec.request_types`, which essspec holds already.
+- **`ess.dispatch` as the core's name.** `essapps` is the repository's name, and other names (run, job, workflow, reduce, stage, session) already mean something here.
+- **`essappsinstruments` as the instruments' name.** Longer, and `ess.instruments.loki` and `ess.loki` already say which is which.
 
 ## Consequences
 
-- A plain install of essspec and essapps installs no scipp; scipp comes with the extras `[scipp]` and with the workflow packages.
-- A change to the spec, the core, and the instrument specs is one pull request. A breaking change to essspec updates essapps, essinstruments, and their pins of essspec in that pull request, and each is then released with a tag of its own.
-- Moving a spec into its workflow package is one coordinated release: the spec leaves `essinstruments`, and its extra pins the first version of the workflow package that has it, since two entries with the same spec fail the load.
-- An instrument's app pins a range of `essapps`, as any app pins the framework it is built on.
-- essspec has its own tags (`essspec/*`) and its own ADRs (`packages/essspec/docs/developer/adr`, where scipp/ess keeps them), so moving it to scipp/ess is a variant of the move that scipp/ess's `ADDING_PACKAGES.md` describes: the history filtered to `packages/essspec`, keeping only its own tags, and no tag rename, since they already carry the prefix. essapps, essbatch and essinstruments are tagged `essapps/*`, `essbatch/*` and `essinstruments/*`.
-- None of the distributions is on PyPI. They are installed together from the checkout: `pip install -e packages/essspec -e 'packages/essapps[test]' -e 'packages/essbatch[test]'`, where the test extra of each brings `essspec[scipp,sciline]` and its own extras.
+- A plain install of essspec and essapps installs no scipp.
+- A change to the spec, the core, and the instrument specs is one pull request. Each distribution is released with a tag of its own, such as `essspec/*`.
+- Moving a spec into its workflow package is one coordinated release, since two entries with the same spec fail the load.
+- essspec has its own ADRs, so it can move to scipp/ess once a second consumer adopts it.
 - Testing and type-checking essapps needs all its extras installed.
-- The HTTP API is a public interface once a web frontend uses it, with its own versioning.
-- The repository keeps its name, scipp/essapps.
