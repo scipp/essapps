@@ -47,13 +47,13 @@ client.output(records[60339], 'iofq')
 `IOFQ` is the *spec* of the I(Q) reduction: it names the reduction's parameters and outputs.
 `file(run=run)` names the raw data of a run.
 `t` is the record of an earlier transmission reduction, and `t.ref('transmission')` passes its output to each reduction.
-`client.submit` returns a *record* at once, and the three reductions run in parallel.
+`client.submit` returns a *record* at once, and the workspace runs the three reductions in the background.
 
 What the framework adds to the plain loop:
 
 - Each call is stored as a record. The same process finds it later, and so does a later process that opens the same folder.
 - Output values stay in memory until a client releases them, and every client of the workspace reads them. Persisted values are stored on disk.
-- Calls run in parallel. Where they run is the workspace's decision: on threads of its process.
+- Requests run on worker threads of the workspace's process, one thread by default (`workers=1`). Where they run is the workspace's decision.
 - Every output can answer where it came from: which spec, which parameter values, which files.
 
 ## Components
@@ -152,7 +152,7 @@ Running the same request again creates a new record.
 result = client.compute(IOFQ, params={...})          # submit, then wait
 client.output(result, 'iofq')                        # raises RecordFailed if the record failed
 client.output(result, 'iofq', select={'Q': slice(0, 10)})   # copies a part
-client.describe(result, 'iofq')                      # {'intensity': ArrayInfo(sizes, unit, coords)}, no data
+client.describe(result, 'iofq')                      # {'iofq': ArrayInfo(sizes, unit, coords)}, no data
 client.failure(result)                               # why it failed, or None
 ```
 
