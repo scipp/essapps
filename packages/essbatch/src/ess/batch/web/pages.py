@@ -3,14 +3,8 @@
 """
 What the pages of all batches share, without HTTP: :class:`Pages`.
 
-One lock, :attr:`Pages.lock`, serializes every request, every step of Follow
-and every count. One person uses the application, so a request waits for at
-most one step of Follow or one count.
-
-:meth:`Pages.tick` runs one step of Follow, whether a page is open or not.
-
-The objects of the page and the state each one owns: ``README.md`` in this
-folder.
+The objects of the page, the state each one owns, and the lock:
+``README.md`` in this folder.
 """
 
 from __future__ import annotations

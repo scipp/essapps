@@ -96,9 +96,6 @@ def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     """
     Whether each row of ``given`` has a value in each of ``columns``.
 
-    A row of a source is *complete* once it has a value in each source column,
-    and *incomplete* until then.
-
     Raises ``ValueError`` if ``given`` lacks one of ``columns``.
     """
     if lacking := [c for c in columns if c not in given.columns]:

@@ -554,4 +554,4 @@ A folder read with the wrong meaning would reduce rows with wrong values, and no
 - A correction of a run changes no batch.
 - No range of runs is stored: "from run 60339 on" is the choice of rows when the batch is made.
 - One batch follows at a time. The page offers no action to let a stopped batch follow again; `intake.follow(label)` and `essbatch follow` do.
-- The batch layer has no lock and no timer: whoever serves owns both.
+- The batch layer has no lock: whoever serves holds one.
