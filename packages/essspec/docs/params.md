@@ -185,6 +185,7 @@ Each value is a string, a number or a bool.
 `kind` states what the file holds: `'raw'` (the file of a run, the default), `'mask'`, or another kind.
 
 A file fits a file field if its metadata contain each key and value of the marker, such as `kind='mask'` or `instrument='loki'`.
+A file without `kind` counts as raw.
 At a raw file field, `role` is not checked.
 It states what the field uses the run for: `'sample'`, `'background'` (a SANS can), `'transmission'`, `'empty_beam'`, `'vanadium'`, `'reference'`, after the run types of `ess.reduce` and the technique packages.
 One run can have several uses: the transmission run of a can can also be the empty beam.
@@ -344,8 +345,9 @@ Each parameter is validated alone, since a template or a push contains only some
 An error states the *position* of each problem: the parameter, then field names and list indices, such as `reduction.range.start` or `samples[1].transmission`.
 
 At submission, before anything runs, each value is validated by its type, with files resolved.
-A group without a reference is then validated whole, with its validators, which see the local path of each file in it.
-A group with a reference, at any depth, is validated when the request runs, with the data read, since the output may not exist at submission.
+A group without a file or a reference is validated whole, with its validators.
+A parameter that holds files and no reference is then validated whole, with validators that see the local path of each file.
+A parameter that holds a reference, at any depth, is validated whole when the request runs, with the data read, since the output may not exist at submission.
 A failure then fails the record, or stops the accumulator for a push.
 
 A validator raises `ValueError` for a value it rejects.
@@ -359,7 +361,8 @@ A field has no alias, no `exclude`, and no serializer in its type, such as `Anno
 A group has no serializers and no computed fields.
 A group may have field validators and model validators of any mode.
 A value written inline must read back from its JSON form as the same value.
-So a value whose validator changes an already valid value, such as by converting millimetres to metres, is rejected at submission.
+So a validator does not change an already valid value, such as by converting millimetres to metres.
+Submission rejects such a value in a group without a file or a reference.
 
 Values that a check compares, such as the start and stop of a range, are fields of one group, which a request always writes whole.
 A check across parameters, such as of a Q range that the wavelength band can reach, belongs to the workflow and fails when the request runs.

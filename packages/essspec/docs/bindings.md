@@ -133,7 +133,7 @@ PipelineBinding(IOFQ, make_pipeline, keys={'iofq': (BackgroundSubtractedIofQ,)})
 
 No two fields, parameters or outputs, share a key, over all members of a union.
 An output computed at a parameter's key would be the value that the binding received, and an output must not share memory with one.
-Two parameters of one class each need a key from `keys=`, or a class of their own, `class Can(Run): ...`.
+Of two parameters of one class, at least one needs a key from `keys=`, or a class of its own, `class Can(Run): ...`.
 An output that reports the beam centre given or found has a key of its own, such as `UsedCentre`, which a provider computes from `GivenCentre`.
 
 ### Groups and adapters
