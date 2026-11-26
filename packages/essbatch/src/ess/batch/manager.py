@@ -24,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from ess.apps.client import Client
+from ess.apps.records import Status
 from ess.spec import WorkflowSpec
 
 from .definition import (
@@ -261,8 +262,19 @@ class BatchManager:
         """
         Clear the outputs of every record of the workspace, also of the
         records of removed batches (:meth:`~ess.apps.Client.clear`).
+
+        Raises ``ValueError``, and clears nothing, if a record is running,
+        naming its label, or as the client raises.
         """
-        self.client.clear(self.client.records())
+        records = self.client.records()
+        status = self.client.status(records)
+        running = {
+            r.label for r, s in zip(records, status, strict=True) if s is Status.PENDING
+        }
+        if running:
+            named = sorted(str(label) for label in running)
+            raise ValueError(f'still running: {", ".join(named)}')
+        self.client.clear(records)
 
     def change(
         self, label: str, *, title: str | None = None, description: str | None = None
@@ -289,12 +301,14 @@ class BatchManager:
         an entry.
 
         With ``clear``, the outputs of the records of the label are cleared
-        first (:meth:`~ess.apps.Client.clear`). If that raises, nothing is
+        first (:meth:`~.reduction.Batch.clear`). If that raises, nothing is
         removed.
         """
         if label not in self._headers and label not in self.definitions.labels():
             raise KeyError(label)
-        if clear:
+        if clear and label in self._headers:
+            self.batch(label).clear()
+        elif clear:
             self.client.clear(self.client.records(label=label))
         header, *parts = LABEL_ENTRIES
         self.definitions.delete(header.key(label))

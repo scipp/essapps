@@ -390,7 +390,7 @@ def test_a_batch_removed_with_clear_has_the_outputs_of_its_records_cleared(
     assert client.cleared(client.records(label=label)) == [True]
 
 
-def test_a_batch_whose_clear_is_refused_is_not_removed(
+def test_a_running_batch_is_not_cleared_and_not_removed(
     intake: Intake, client: Client, sample: Measure, gate: Gate
 ) -> None:
     manager = intake.manager
@@ -399,11 +399,14 @@ def test_a_batch_whose_clear_is_refused_is_not_removed(
     gate.close()
     records = manager.batch(label).reduce(['1'])
 
-    with pytest.raises(ValueError, match='is pending'):
+    with pytest.raises(ValueError, match=r'^water: still running$'):
         manager.remove(label, clear=True)
+    with pytest.raises(ValueError, match=rf'^still running: {label}$'):
+        manager.clear()
     gate.open()
     client.wait(records)
     assert list(manager.headers()) == [label]
+    assert client.cleared(records['1']) is False
 
 
 class Releases:
