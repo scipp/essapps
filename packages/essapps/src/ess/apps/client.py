@@ -3,19 +3,16 @@
 """
 The client: what a notebook, an application, or a controller calls.
 
-A client is a connection to a workspace, which holds the history and the values of
-one proposal. It calls the workspace through
-:class:`~ess.apps.protocol.WorkspaceProtocol`, which holds the rules behind the calls.
-A client keeps nothing: every client of a workspace reads and references the same
-values. The client only adapts: calls that take records or requests accept one, a
-list, or a dict, and return the same shape, it wraps IDs in objects, and it adds
-shortcuts.
-:meth:`~Client.cancel` and :meth:`~Client.release` accept the same and return nothing.
+A client is a connection to a workspace. It calls the workspace through
+:class:`~ess.apps.protocol.WorkspaceProtocol`, which holds the rules behind the
+calls. A client holds nothing, so every client of a workspace reads and
+references the same values. A call that accepts records or requests accepts one,
+a list, or a dict, and returns its results in the same shape.
 
-See :class:`~ess.apps.protocol.WorkspaceProtocol` for which calls wait.
-:meth:`Client.wait`, :meth:`Client.compute`, and :meth:`Files.watch` also wait, and so
-does :meth:`Client.close` if ``on_close`` does. A GUI application makes the others
-from its UI thread.
+:class:`~ess.apps.protocol.WorkspaceProtocol` states which calls wait.
+:meth:`Client.wait`, :meth:`Client.compute` and :meth:`Files.watch` also wait, and
+so does :meth:`Client.close` if ``on_close`` does. A GUI application makes the
+other calls from its UI thread.
 """
 
 from __future__ import annotations
@@ -49,7 +46,7 @@ _WAIT = 10.0
 
 
 type _Items[T] = T | list[T] | Mapping[Any, T]
-"""What a call on several items takes: one item, a list, or a dict."""
+"""What a call on several items accepts: one item, a list, or a dict."""
 
 
 def _items(what: object) -> list[Any]:
@@ -72,8 +69,9 @@ def _reshape(what: object, items: list[Any]) -> Any:
 
 def _filled(template: Template, each: Any) -> Any:
     """
-    The template filled by each item of ``each``, in its shape. Raises
-    ``SubmitError`` for the items refused, each reason naming its item.
+    The template filled by each item of ``each``, in its shape.
+
+    Raises ``SubmitError`` with the key or index of each rejected item.
     """
     requests = []
     errors: list[FieldError] = []
@@ -128,7 +126,7 @@ def _shaped[S, I, O](
 
 
 def _typed_as[F](method: F) -> Callable[[Callable[..., Any]], F]:
-    """Gives a function that forwards its arguments to ``method`` the same type."""
+    """Types the decorated forwarding function as ``method``."""
 
     def typed(forwarding: Callable[..., Any]) -> F:
         return cast('F', forwarding)
@@ -137,7 +135,7 @@ def _typed_as[F](method: F) -> Callable[[Callable[..., Any]], F]:
 
 
 def _named(error: FieldError, names: list[str | int | None]) -> FieldError:
-    """The reason with the index of its request replaced by what the caller named."""
+    """The problem with the index of its request replaced by the caller's key."""
     if isinstance(error.request_key, int):
         return replace(error, request_key=names[error.request_key])
     return error
@@ -170,9 +168,8 @@ class Files:
     """
     The files of the workspace's file source that the proposal may read.
 
-    Forms and controllers find files here: they list them, wait for new ones,
-    and read their metadata. A selector picks files by metadata (see
-    :class:`~ess.apps.files.Selector`). A request names a file with ``file(...)``.
+    A selector picks files by metadata (see :class:`~ess.apps.files.Selector`).
+    A request names a file with ``file(...)``.
     """
 
     def __init__(self, workspace: WorkspaceProtocol) -> None:
@@ -181,8 +178,9 @@ class Files:
     @_shaped
     def metadata(self, refs: list[FileRef]) -> list[dict[str, Any]]:
         """
-        The metadata of each file, in the shape of ``refs``; see
-        :meth:`~ess.apps.protocol.WorkspaceProtocol.file_metadata`.
+        The metadata of each file, in the shape of ``refs``.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.file_metadata`.
         """
         return self._workspace.file_metadata(refs)
 
@@ -192,8 +190,11 @@ class Files:
 
     def watch(self, selector: Selector, *, interval: float = 1.0) -> Iterator[FileRef]:
         """
-        Matching files: the existing ones first, then new ones, each once. It never
-        ends, and lists the files again every ``interval`` seconds while none is new.
+        Yields the matching files: the existing ones first, then new ones, each
+        once.
+
+        Never ends. Lists the files again every ``interval`` seconds while none
+        is new.
         """
         seen: set[FileRef] = set()
         while True:
@@ -207,10 +208,10 @@ class Files:
 @dataclass(frozen=True)
 class Stage:
     """
-    A template whose fixed part the workspace computes once; a call fills its blanks.
+    A template whose fixed part the workspace computes once.
 
-    A stage never changes what a record says: a call through it makes the
-    record of the filled template. ``id`` names the stage in the workspace.
+    A call through the stage fills its blanks, and makes the record of the filled
+    template, as a plain request would. ``id`` is the stage's ID in the workspace.
     """
 
     template: Template
@@ -219,16 +220,12 @@ class Stage:
 
 class Accumulator:
     """
-    A template whose blanks, tables, are filled one push at a time.
+    A template whose blanks are tables, filled one push at a time.
 
-    Its outputs are those of the plain request of its *logged state*, over the
-    rows of every push logged so far. A client reads them with
-    :meth:`Client.output`; a request references them only through the record of
-    :meth:`Client.freeze`. See
-    :meth:`~ess.apps.protocol.WorkspaceProtocol.open_accumulator`.
-
-    ``template`` holds the other values as the workspace accepted them, and ``id``
-    names the accumulator in the workspace.
+    Its outputs are those of the plain request of its logged state (see
+    ``docs/developer/accumulators.md``). A client reads them with
+    :meth:`Client.output`. ``template`` holds the fixed values as the workspace
+    accepted them, and ``id`` is the accumulator's ID in the workspace.
     """
 
     def __init__(
@@ -243,7 +240,7 @@ class Accumulator:
 
     def push(self, **rows: Sequence[Any]) -> None:
         """
-        Add rows to blank tables of the template, the rows entering one state::
+        Logs rows of blank tables of the template. The rows enter one state::
 
             acc.push(sample=[file(run=611), file(run=612)])
             acc.push(sample=[file(run=615)], can=[file(run=614)])
@@ -251,8 +248,8 @@ class Accumulator:
         Parameters
         ----------
         **rows:
-            For each table, a list of rows, each given as :meth:`Client.submit`
-            takes a value of that type. Rows of different tables are not paired.
+            For each table, a list of rows, each as :meth:`Client.submit`
+            accepts a value of that type.
 
         Raises
         ------
@@ -274,13 +271,12 @@ class Accumulator:
 
 class Client:
     """
-    A connection to a workspace; it keeps nothing. ``with client:`` calls
-    :meth:`close` at the end of the block.
+    A connection to a workspace. It holds nothing.
+
+    ``with client:`` calls :meth:`close` at the end of the block.
 
     Parameters
     ----------
-    workspace:
-        The workspace.
     submitter:
         Who submits, as records name them.
     on_close:
@@ -303,7 +299,7 @@ class Client:
 
     @property
     def proposal(self) -> str:
-        """The proposal of the workspace, which every record of it names."""
+        """The proposal of the workspace."""
         return self._workspace.proposal
 
     def __enter__(self) -> Self:
@@ -313,7 +309,7 @@ class Client:
         self.close()
 
     def close(self) -> None:
-        """Call ``on_close``, if given; the client keeps nothing to release."""
+        """Calls ``on_close``, if given. The client holds nothing to release."""
         if self._on_close is not None:
             self._on_close()
 
@@ -321,8 +317,9 @@ class Client:
 
     def spec(self, spec_id: SpecId) -> WorkflowSpec[Any, Any]:
         """
-        The spec the workspace runs as ``spec_id``, such as ``record.spec``;
-        raises ``KeyError`` for one it does not run.
+        The spec the workspace runs as ``spec_id``, such as ``record.spec``.
+
+        Raises ``KeyError`` for a spec the workspace does not run.
         """
         for spec in self.specs():
             if SpecId.of(spec) == spec_id:
@@ -331,8 +328,9 @@ class Client:
 
     def spec_named(self, name: str) -> WorkflowSpec[Any, Any]:
         """
-        The spec named ``name`` that the workspace binds, the highest version
-        if it binds several; raises ``KeyError`` if it binds none.
+        The highest version of the spec named ``name`` that the workspace binds.
+
+        Raises ``KeyError`` if it binds none.
         """
         specs = [spec for spec in self.specs() if spec.name == name]
         if not specs:
@@ -340,12 +338,7 @@ class Client:
         return max(specs, key=lambda spec: spec.version)
 
     def specs(self) -> list[WorkflowSpec[Any, Any]]:
-        """
-        The specs the workspace runs, one for each binding, in the order bound.
-
-        A form builds itself from these and :meth:`spec`, so it needs no specs
-        of its own.
-        """
+        """The specs the workspace runs, one for each binding, in the order bound."""
         return self._workspace.specs()
 
     # Submitting
@@ -422,18 +415,18 @@ class Client:
         persist: bool | Sequence[str] = False,
     ) -> Any:
         """
-        Submit a spec or a stage with values, or requests.
+        Submits requests, or a spec or a stage with values.
 
-        Returns the records, pending, in the shape of ``what``, once the workspace has
-        logged the requests. A request never references a record of its own call.
+        Returns the pending records in the shape of ``what``, once the workspace
+        has logged the requests. A request never references a record of its own
+        call.
 
         Parameters
         ----------
         what:
-            A spec (or its ``SpecId``) with ``params``; a :class:`Stage` with the
-            values of its blanks in ``params``; or requests, one, a list, or a dict.
-            An accumulator is not submitted: a request reads the record of its
-            :meth:`freeze`.
+            A spec (or its ``SpecId``) with ``params``, a :class:`Stage` with the
+            values of its blanks in ``params``, or requests: one, a list, or a
+            dict.
         params:
             The parameters by name, or an instance of the params model if it holds
             no reference to an output. Each parameter, or each row of a list
@@ -454,21 +447,20 @@ class Client:
             Names a sequence of records, such as all I(Q) reductions of an
             experiment. Under a label, the keys of a dict become the members.
         member:
-            Names one part of the sequence, such as one sample. It is refused with a
-            dict. Records are found by label and member with :meth:`records` and
-            :meth:`latest`. Neither changes the request or its result.
+            Names one part of the sequence, such as one sample. Not allowed with
+            a dict. :meth:`records` and :meth:`latest` find records by label and
+            member. Neither changes the request or its result.
         persist:
-            ``True``, or the names of outputs: the store keeps these outputs instead
-            of the workspace (see :meth:`~ess.apps.protocol.WorkspaceProtocol.submit`).
+            ``True``, or the names of outputs that the store holds in place of the
+            workspace (see :meth:`~ess.apps.protocol.WorkspaceProtocol.submit`).
 
         Raises
         ------
         SubmitError
-            If a request or ``persist`` is refused (see
-            :meth:`~ess.apps.protocol.WorkspaceProtocol.submit`). No request of the
-            call is submitted. Each of its ``errors`` names the field at fault by
-            its position and the request by its key or index (see
-            :class:`~ess.apps.errors.FieldError`).
+            If a request or ``persist`` is rejected (see
+            :meth:`~ess.apps.protocol.WorkspaceProtocol.submit`). Then no request
+            of the call is submitted. The ``request_key`` of each problem is the
+            request's key or index.
         """
         stage = None
         if each is not None and (params is not None or not isinstance(what, Stage)):
@@ -509,22 +501,12 @@ class Client:
 
     def resolve(self, what: _Items[Request | Template]) -> Any:
         """
-        Each request as its record would hold it, in the shape of ``what``: one
-        request or template, a list, or a dict. Nothing is logged. A refused item
-        is the ``SubmitError`` that :meth:`submit` raises for it, naming it by its
-        key or index, and does not hide the others::
+        Each request or template as its record would hold it, in the shape of
+        ``what``.
 
-            resolved = client.resolve({'a': load_run_1, 'b': load_run_9})
-            resolved['a'].params['sample']  # FileRef(file='pid:...')
-            resolved['b']                   # SubmitError: b: sample: unknown file run:9
-            client.resolve(record.request) == record.request  # of the bound spec
-
-        A template comes back with its blanks, and every other parameter resolved,
-        defaults filled in: ``client.resolve(Template(IOFQ, params=settings,
-        blanks=('sample',)))``.
-
-        See :meth:`~ess.apps.protocol.WorkspaceProtocol.resolve` for what it does
-        not look at, and why resolving a resolved request gives the same request.
+        Logs nothing. A rejected item is the ``SubmitError`` that :meth:`submit`
+        raises for it, with the item's key or index as ``request_key``. See
+        :meth:`~ess.apps.protocol.WorkspaceProtocol.resolve`.
         """
         names = _names(what)
         resolved = self._workspace.resolve(_items(what))
@@ -541,8 +523,9 @@ class Client:
     @_typed_as(submit)
     def compute(self, *args: Any, **kwargs: Any) -> Any:
         """
-        :meth:`submit`, then :meth:`wait`, and return the records, which a
-        failure leaves failed, not raised.
+        :meth:`submit`, then :meth:`wait`. Returns the records.
+
+        A failed record is returned, not raised.
         """
         records = self.submit(*args, **kwargs)
         self.wait(records)
@@ -556,8 +539,10 @@ class Client:
     @_shaped
     def wait(self, records: list[Record]) -> list[Status]:
         """
-        The status of each record once all have finished; a failure is not raised. If
-        the workspace closes meanwhile, raises ``RuntimeError``.
+        The status of each record once all have finished.
+
+        A failure is not raised. Raises :class:`~ess.apps.errors.Stopped` if the
+        workspace closes meanwhile.
         """
         ids = [r.id for r in records]
         # The position comes first, so that no finish after it is missed.
@@ -581,8 +566,9 @@ class Client:
     @_shaped
     def failure(self, records: list[Record]) -> list[str | None]:
         """
-        Why each record failed, or why the workspace cancelled it; see
-        :class:`~ess.apps.RecordStatus`.
+        Why each record failed, or why the workspace cancelled it.
+
+        See :class:`~ess.apps.RecordStatus`.
         """
         return [s.failure for s in self._statuses(records)]
 
@@ -593,20 +579,22 @@ class Client:
         """See :meth:`~ess.apps.protocol.WorkspaceProtocol.cancel`."""
         self._workspace.cancel([r.id for r in _items(records)])
 
-    # Stages, accumulators, and what the workspace keeps
+    # Stages, accumulators, and releases
 
     def stage(self, template: Template) -> Stage:
         """
-        A stage of the template; see
-        :meth:`~ess.apps.protocol.WorkspaceProtocol.open_stage`.
+        Opens a stage of the template.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.open_stage`.
         """
         stage_id, resolved = self._workspace.open_stage(template)
         return Stage(resolved, stage_id)
 
     def accumulator(self, template: Template) -> Accumulator:
         """
-        An accumulator of the template; see
-        :meth:`~ess.apps.protocol.WorkspaceProtocol.open_accumulator`.
+        Opens an accumulator of the template.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.open_accumulator`.
         """
         accumulator_id, resolved = self._workspace.open_accumulator(template)
         push = functools.partial(self._workspace.push, accumulator_id)
@@ -616,15 +604,17 @@ class Client:
         self, accumulator: Accumulator, *, persist: bool | Sequence[str] = False
     ) -> Record:
         """
-        The record of the accumulator's logged state; see
-        :meth:`~ess.apps.protocol.WorkspaceProtocol.freeze`.
+        The record of the accumulator's logged state.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.freeze`.
         """
         return self._workspace.freeze(accumulator.id, self.submitter, persist=persist)
 
     def release[T: Record | Stage | Accumulator](self, what: _Items[T]) -> None:
         """
-        Release records, stages, or accumulators: one, a list, or a dict. See
-        :meth:`~ess.apps.protocol.WorkspaceProtocol.release`.
+        Releases records, stages, or accumulators: one, a list, or a dict.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.release`.
         """
         self._workspace.release([x.id for x in _items(what)])
 
@@ -656,20 +646,17 @@ class Client:
         select: Selection | None = None,
     ) -> Any:
         """
-        The value of an output, or every output returned, by name, if ``name`` is
-        None. See :meth:`~ess.apps.protocol.WorkspaceProtocol.outputs` for a record and
+        The value of the output ``name``, or every output returned, by name.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.outputs` for a record and
         :meth:`~ess.apps.protocol.WorkspaceProtocol.accumulator_outputs` for an
-        accumulator, for what is read and what is raised.
+        accumulator.
 
         Parameters
         ----------
-        what:
-            A record or an accumulator.
-        name:
-            The output to read.
         select:
-            Picks part of the named array output by dimension name, an index or a
-            slice for each dimension it names, such as ``{'q': slice(0, 10)}``.
+            A part of the output: an index or a slice for each dimension it names,
+            such as ``{'q': slice(0, 10)}``.
         """
         names = None if name is None else [name]
         if isinstance(what, Accumulator):
@@ -680,7 +667,7 @@ class Client:
 
     def describe(self, record: Record, name: str) -> dict[str, Any]:
         """
-        What an output is, without its data; takes a record, not an accumulator::
+        What an output is, without its data::
 
             client.describe(record, 'image')['counts'].sizes  # {'y': 200, 'x': 200}
 
@@ -691,8 +678,7 @@ class Client:
     @_shaped
     def readable(self, records: list[Record]) -> list[tuple[str, ...]]:
         """
-        The outputs of each record, by name, that may be read now. A picker of
-        records calls it at each refresh::
+        The outputs of each record that may be read now::
 
             for record, names in zip(records, client.readable(records)):
                 ...  # offer record.ref(name) for each name
@@ -704,8 +690,7 @@ class Client:
     @_shaped
     def bound(self, records: list[Record]) -> list[bool]:
         """
-        Whether each record is of the bound spec. A view asks for the spec of a
-        bound record only::
+        Whether each record is of the bound spec::
 
             for record, bound in zip(records, client.bound(records)):
                 spec = client.spec(record.spec) if bound else None
@@ -718,36 +703,29 @@ class Client:
         self, *, label: str | None = None, ids: Sequence[str] | None = None
     ) -> list[Record]:
         """
-        The proposal's records; see
-        :meth:`~ess.apps.protocol.WorkspaceProtocol.records`.
+        The proposal's records.
 
-        Each record has its ``member``, so
-        ``{r.member: r for r in client.records(label=...)}`` is the newest of each
-        member.
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.records`. The newest
+        record of each member is
+        ``{r.member: r for r in client.records(label=...)}``.
         """
         return self._workspace.records(label=label, ids=ids)
 
     def changes(self, *, after: int = 0, timeout: float = 0.0) -> Changes:
         """
-        The IDs of the proposal's records that changed since the position ``after``,
-        and the position to pass next. An application stays up to date by reading
-        what it shows of them::
+        The IDs of the records that changed after position ``after``, and the
+        position to pass next.
 
-            cursor = 0
-            while True:
-                changes = client.changes(after=cursor, timeout=30)
-                cursor = changes.cursor
-                for record in client.records(ids=changes.records):
-                    ...
-
-        See :meth:`~ess.apps.protocol.WorkspaceProtocol.changes`.
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.changes`, and the loop in
+        ``docs/developer/README.md``, "What changed".
         """
         return self._workspace.changes(after, timeout=timeout)
 
     def latest(self, label: str, member: str | None = None) -> Record:
         """
-        The newest record under a label, of ``member`` if given, pending or
-        not; raises ``KeyError`` if there is none.
+        The newest record under a label, of ``member`` if given, pending or not.
+
+        Raises ``KeyError`` if there is none.
         """
         matching = [
             r for r in self.records(label=label) if member is None or r.member == member
@@ -761,8 +739,8 @@ class Client:
         Where a record, or the logged state of an accumulator, came from.
 
         The provenance of an accumulator's logged state is that of the record
-        of its plain request. It returns at once, without waiting for the
-        pushes logged to be added.
+        of its plain request. Returns at once, without waiting for the logged
+        pushes to be added.
         """
         if isinstance(what, Accumulator):
             request = self._workspace.plain_request(what.id)
