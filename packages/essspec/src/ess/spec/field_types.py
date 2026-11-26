@@ -15,14 +15,9 @@ apart::
 ``Annotated`` metadata, such as a validator: ``Annotated[X, ...]`` is ``X``
 (see :func:`plain`).
 
-:func:`fits` says whether data of one type can be the value of a field of
-another, so that an output of one spec can fill a parameter of another.
-
 What a request writes at a field follows from the field's type, read by
-:func:`shape` as the table of field types in
-``packages/essspec/docs/params.md`` gives it. The request type, and so the
-params schema of a spec (see :mod:`ess.spec.request_types`), the fields of a
-form, and the templates and tables of essbatch branch on its result::
+:func:`shape` after the table of field types in
+``packages/essspec/docs/params.md``::
 
     field = shape(info.annotation, field_metadata(info))
     field.none        # whether it is X | None
@@ -35,14 +30,8 @@ form, and the templates and tables of essbatch branch on its result::
 
 :func:`unwrapped`, :func:`split`, :func:`alternatives`, and
 :func:`file_marker` are the steps of :func:`shape`. The checks of a spec
-(:class:`~ess.spec.WorkflowSpec`) take a type apart with them, since they
-check the rules that :func:`shape` takes for granted, and so does the walk
-that places an error inside a value
-(:func:`ess.spec._param_errors.value_position`).
-
-:func:`field_metadata` gives the metadata of a field with its
-discriminator, and :func:`title` the label of a field.
-``packages/essspec/docs/params.md`` states the rules these serve.
+(:class:`~ess.spec.WorkflowSpec`) call the steps directly, since they check
+the rules that :func:`shape` assumes.
 """
 
 from __future__ import annotations
@@ -144,7 +133,7 @@ def reachable(tp: Any, seen: frozenset[type] = frozenset()) -> Iterator[Any]:
     """
     ``tp`` and each type it is made of, at any depth: its type arguments, and
     the field types of each model, dataclass, or ``TypedDict`` among them.
-    ``seen`` holds the classes looked into already, so that a recursive class
+    ``seen`` holds the classes visited already, so that a recursive class
     ends.
     """
     if get_origin(tp) is Annotated:
@@ -397,10 +386,9 @@ def field_metadata(info: FieldInfo) -> tuple[Any, ...]:
 def title(name: str, info: FieldInfo) -> str:
     """
     The title of a field with ``info``: its own, or ``name`` in words,
-    ``beam_centre`` as ``Beam Centre``. A form and the params schema of a
-    spec label each field so. An alternative of a union is labelled by its
-    tag field, titled by the tag's value rather than the field's name, which
-    is that of every alternative::
+    ``beam_centre`` as ``Beam Centre``. An alternative of a union is titled
+    by its tag field, with the tag's value as ``name``, since the field's
+    name is the same in every alternative::
 
         title('beam_centre', info)  # 'Beam Centre'
         title('find', group.model_fields['kind'])  # 'Find', unless titled
@@ -416,9 +404,9 @@ def unwrapped(
     :func:`field_metadata`), without its outer ``Annotated`` and
     ``| None``, at any depth, up to the marker of ``Referenced[T]``, which
     leaves ``T``; whether it had ``| None``; and ``metadata``, then the
-    metadata of each ``Annotated``, the outer first. Unlike
-    :func:`~ess.spec.optional`, it keeps the metadata of the
-    members of a union and the elements of a list.
+    metadata of each ``Annotated``, the outer first. Unlike :func:`optional`,
+    it keeps the metadata of the members of a union and the elements of a
+    list.
     """
     tp, none = annotation, False
     while REFERENCED not in metadata:
@@ -520,11 +508,8 @@ def alternatives(annotation: Any, *metadata: Any) -> tuple[str, dict[str, Any]] 
     in the order of the union, without their ``Annotated`` metadata.
 
     ``annotation`` is the part of a field that a request writes (see
-    :func:`split`). Raises ``ValueError`` for a union that breaks a rule of
-    ``packages/essspec/docs/params.md`` (Choices): a member that is not a
-    group; no discriminator, or one that is not the name of a field, such as
-    a callable ``Discriminator``; a tag field with an alias or not typed a
-    ``Literal`` of one string.
+    :func:`split`). Raises ``ValueError`` for a union of groups that breaks a
+    rule of ``packages/essspec/docs/params.md`` (Choices).
     """
     if annotation is None:
         return None
@@ -632,10 +617,11 @@ class FieldShape:
 def shape(annotation: Any, metadata: tuple[Any, ...] = ()) -> FieldShape:
     """
     The shape of a field typed ``annotation``, with ``metadata`` (see
-    :func:`field_metadata`), a type that the checks of a spec accept. Of a type
-    they refuse, it raises ``ValueError`` for a union of groups that breaks a
-    rule (see :func:`alternatives`), and gives :class:`Scalar` for a type of
-    no other kind.
+    :func:`field_metadata`), a type that the checks of a spec accept.
+
+    Of a type they reject, it raises ``ValueError`` for a union of groups that
+    breaks a rule (see :func:`alternatives`), and returns :class:`Scalar` for
+    a type of no other kind.
     """
     tp, none, metadata = unwrapped(annotation, metadata)
     if REFERENCED not in metadata and get_origin(tp) is list:

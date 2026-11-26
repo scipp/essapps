@@ -1,20 +1,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Bindings: what the workspace (``ess.apps.Workspace``) calls to compute a
-spec's requests.
+The protocols that the workspace calls, and the bindings that need no sciline.
 
-``packages/essspec/docs/bindings.md`` is a guide for workflow authors.
+``packages/essspec/docs/bindings.md`` is the guide for workflow authors.
 
-The protocols name what the workspace calls: :class:`Binding` for a plain
-request, :class:`StageBinding` for a stage, and :class:`AccumulatorBinding`
-for an accumulator, whose :class:`Driver` the workflow package writes. The
-workspace checks which protocol a binding implements when a stage or an
-accumulator is made, and refuses one that the binding does not serve.
-
-This module holds the bindings that need no sciline: :class:`DriverBinding`
-and :func:`function_binding`. ``PipelineBinding`` is in
-:mod:`ess.spec.pipeline`, the only module that imports sciline.
+The workspace checks which protocol a binding implements when a stage or an
+accumulator is created, and rejects one that the binding does not serve.
 ``DriverBinding`` computes a plain request as an accumulator with no blanks,
 read once, and ``PipelineBinding`` as a stage with no blanks, called once, so
 that a plain request and a stage or an accumulator go through the same code.
@@ -39,12 +31,7 @@ type StageCall[O] = Callable[[Mapping[str, Any]], O]
 
 @runtime_checkable
 class Binding[P: BaseModel, O: BaseModel](Protocol):
-    """
-    What the workspace calls to compute a plain request.
-
-    Every binding is one, whatever else it serves. See
-    ``packages/essspec/docs/bindings.md``.
-    """
+    """What the workspace calls to compute a plain request; every binding is one."""
 
     @property
     def spec(self) -> WorkflowSpec[P, O]:
@@ -52,7 +39,7 @@ class Binding[P: BaseModel, O: BaseModel](Protocol):
         ...
 
     def compute(self, params: P) -> O:
-        """The outputs of a plain request, called once per request."""
+        """The outputs of a plain request."""
         ...
 
 
@@ -62,8 +49,7 @@ class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
     A binding that serves stages.
 
     The workspace calls :meth:`make_stage` at a stage's first call, and the
-    callable it returns once per call through the stage. See
-    ``packages/essspec/docs/bindings.md``.
+    callable it returns once per call through the stage.
     """
 
     def make_stage(
@@ -73,9 +59,9 @@ class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
         A callable that computes the outputs from the values of ``blanks``,
         by name, with the values of ``fixed``.
 
-        A parameter in neither ``fixed`` nor ``blanks`` takes the spec's
-        default. The callable takes a value of each blank, a table as its
-        rows, and gives what :meth:`compute` gives with the same values.
+        A parameter in neither ``fixed`` nor ``blanks`` has the spec's
+        default. The callable accepts a value for each blank, a table as its
+        rows, and returns what :meth:`compute` returns for the same values.
 
         Raises
         ------
@@ -87,11 +73,10 @@ class StageBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
 
 class Driver[O: BaseModel](Protocol):
     """
-    The object behind an accumulator: tables are pushed into it, and it gives
-    the outputs over the rows so far.
+    The object behind an accumulator, which the workflow package writes.
 
-    The workflow package writes it. What a driver and its caller promise is in
-    ``packages/essspec/docs/bindings.md``.
+    ``packages/essspec/docs/bindings.md`` states what a driver and its caller
+    promise.
     """
 
     def push(self, table: str, rows: Sequence[Any]) -> None:
@@ -110,19 +95,18 @@ class AccumulatorBinding[P: BaseModel, O: BaseModel](Binding[P, O], Protocol):
 
     The workspace calls :meth:`make_accumulator` when an accumulator opens, then
     :meth:`Driver.push` once per table of a push, with its rows, and
-    :meth:`Driver.outputs` once per state that is read. See
-    ``packages/essspec/docs/bindings.md``.
+    :meth:`Driver.outputs` once per state that is read.
     """
 
     def make_accumulator(
         self, fixed: Mapping[str, Any], blanks: Collection[str]
     ) -> Driver[O]:
         """
-        A driver that takes pushes into the tables ``blanks``, made with the
-        values of ``fixed``, with the rows of any table in ``fixed`` in it.
+        A driver created with the values of ``fixed``, which accepts pushes
+        into the tables ``blanks``.
 
-        A parameter in neither ``fixed`` nor ``blanks`` takes the spec's
-        default.
+        The rows of each table in ``fixed`` are in it already. A parameter in
+        neither ``fixed`` nor ``blanks`` has the spec's default.
 
         Raises
         ------
@@ -167,18 +151,14 @@ def fixed_values(
 @dataclass(frozen=True)
 class DriverBinding[P: BaseModel, O: BaseModel]:
     """
-    A driver behind a spec over tables: plain requests and accumulators.
-
-    An accumulator gets a driver of its own, into which the rows of each table
-    in its fixed values are pushed first, one push per table. See
-    ``packages/essspec/docs/bindings.md``.
+    A driver behind a spec with tables: plain requests and accumulators.
 
     Parameters
     ----------
     spec:
         The spec whose requests the binding computes.
     make_driver:
-        Makes a driver from the fixed values that are not tables, by name.
+        Creates a driver from the fixed values that are not tables, by name.
     """
 
     spec: WorkflowSpec[P, O]
@@ -219,14 +199,12 @@ def function_binding[P: BaseModel, O: BaseModel](
     """
     A function behind a spec: plain requests only.
 
-    See ``packages/essspec/docs/bindings.md``.
-
     Parameters
     ----------
     spec:
         The spec whose requests the binding computes.
     function:
-        Takes an instance of the spec's params model and returns an instance
+        Accepts an instance of the spec's params model and returns an instance
         of its outputs model.
     """
     return _FunctionBinding(spec, function)

@@ -1,26 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A sciline pipeline behind a spec: :class:`PipelineBinding`.
+A sciline pipeline behind a spec: :class:`PipelineBinding`, which needs the
+extra ``[sciline]``.
 
-``packages/essspec/docs/bindings.md`` is a guide for workflow authors.
+``packages/essspec/docs/bindings.md`` is the guide for workflow authors.
 
-This is the only module of ``ess.spec`` that imports sciline (extra
-``[sciline]``).
-
-:meth:`PipelineBinding.pipeline` copies what ``make_pipeline`` returns before
-it sets the fixed values at their keys, so that ``make_pipeline`` may hold one
-pipeline and return it for every request. A stage cuts that pipeline with two
-``sciline.Stage`` objects (:class:`_Cut`): the first, with no inputs, finds the
-keys that the outputs depend on, so that a blank whose keys no output uses is
-not fed; the second, with the used keys of the blanks as inputs, computes on
-its first call what does not depend on them, and holds it. An optional output
-is computed only if the pipeline has a value or a provider at its key, so that
-``sciline.Stage`` is never asked for a key that it cannot compute.
-
-A union of groups with several classes keeps the key of each member by class
-(``PipelineBinding._unions``), and a value sets the key of the first class in
-its MRO that is a member.
+A stage cuts the pipeline with two ``sciline.Stage`` objects (:class:`_Cut`).
+The first, with no inputs, finds the keys that the outputs depend on, so that
+a blank whose keys no output uses is not fed. The second, with the used keys
+of the blanks as inputs, computes on its first call what does not depend on
+them, and holds it. An optional output is computed only if the pipeline has a
+value or a provider at its key, so that ``sciline.Stage`` is never asked for a
+key that it cannot compute.
 """
 
 from __future__ import annotations
@@ -43,17 +35,12 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
     """
     A sciline pipeline behind a spec: plain requests and stages.
 
-    Each parameter sets the sciline key of its type, and each output is
-    computed at the key of its type. How parameters map to keys, ``keys=``,
-    unions, ``None``, and what ``make_pipeline`` may hold are in
-    ``packages/essspec/docs/bindings.md``.
-
     Parameters
     ----------
     spec:
         The spec whose requests the binding computes.
     make_pipeline:
-        Makes the pipeline from the fixed values, by name, with defaults
+        Creates the pipeline from the fixed values, by name, with defaults
         filled in.
     keys:
         A tuple of sciline keys for a parameter or an output, by name:
@@ -158,8 +145,8 @@ class PipelineBinding[P: BaseModel, O: BaseModel]:
 
     def pipeline(self, fixed: Mapping[str, Any]) -> sciline.Pipeline:
         """
-        The pipeline ``make_pipeline`` makes from ``fixed``, by name, with each
-        value of ``fixed`` set at its key: the graph that a stage cuts.
+        A copy of the pipeline that ``make_pipeline`` returns for ``fixed``,
+        with each value of ``fixed`` set at its key: the graph that a stage cuts.
 
         Raises
         ------

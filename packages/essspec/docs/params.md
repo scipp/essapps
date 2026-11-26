@@ -152,7 +152,7 @@ A reference fills only a field typed `Referenced[...]`, at any depth, or a membe
 It never fills a whole list.
 `record.ref(name, key)` refers to one element of a list or dict output, which fits by the element type.
 A reference never refers to an accumulator.
-A request reads an accumulator's outputs through the record that `client.freeze` returns ([accumulators.md](../../../docs/developer/accumulators.md#freeze-release-stop)).
+A request reads an accumulator's outputs through the record that `client.freeze` returns ([accumulators.md](../../../docs/developer/accumulators.md#freeze)).
 
 | Output | Field | Fits |
 |---|---|---|
@@ -372,11 +372,11 @@ It distinguishes a record made with other models under the same name and version
 |---|---|
 | a field renamed, added, or removed | a title, a description, a docstring |
 | a field's type, such as `float` to `int`, `X` to `X \| None`, `X` to `Referenced[X]` | a default |
-| a field made required or optional | a constraint, such as `Field(gt=0)`, or a validator |
+| a field made required or optional | a constraint, such as `Field(gt=0)`, a validator, or a discriminator |
 | the values of a `Literal` or an enum | the order of fields, or of the members of a union |
 | the metadata of a `File(...)` marker, a role included | the name or module of a group's class |
 | the `extra` setting of a group | the names of an enum's members, or an enum replaced by a `Literal` of its values |
-| the root type of a `RootModel` | |
+| the root type of a `RootModel` | the spec's name and version |
 | the module or name of a class that is not a group | |
 
 A type is described so:

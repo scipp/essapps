@@ -3,9 +3,9 @@
 """
 Conversions from validated parameter models to scipp objects.
 
-A workflow calls them in a provider that takes the model, such as one that
-makes ``QBins`` from ``QEdges``. Kept out of the rest of :mod:`ess.spec` so
-that a spec module that needs no scipp does not import it.
+A workflow calls them in a provider that accepts the model, such as one that
+makes ``QBins`` from ``QEdges``. They are in a module of their own, so that a
+spec module that needs no scipp does not import it.
 """
 
 import scipp as sc

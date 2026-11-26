@@ -1,55 +1,19 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Validation of the parameters of a request, in the request phase and the call phase.
+Validation of a request's parameters, one at a time, in two phases.
 
-The workspace validates each parameter of a request with
-:func:`validate_request_value`, which it gives a resolver of files,
-:data:`~ess.spec.request_types.FileResolver`, and the local path of a file,
-:data:`LocalPath`. It returns what the record holds, the JSON form of the
-request type, and each reference to an output with the type its data must
-fit, :data:`OutputReads`, which the workspace checks against history. The call
-phase validates the params model itself from the record (see
-:func:`validated`).
+- The *request phase* is when a request is submitted, before any data is
+  read. :func:`validate_request_value` validates a parameter by its request
+  type (see :mod:`ess.spec.request_types`) and returns what the record
+  stores.
+- The *call phase* is when the request runs, after the workspace has read the
+  data of each reference to an output. :func:`validated` validates a
+  parameter by the params model from what the record stores.
 
-A request is validated one parameter at a time, in two phases, and a spec
-checks its defaults the same way:
-
-=============  =================================  ==========================
-When           Function                           What it does
-=============  =================================  ==========================
-spec made      :func:`validated`                  validates the default of
-                                                  a field as a binding
-                                                  takes it
-request phase  :func:`validate_request_value`     validates a parameter by
-                                                  its request type, and
-                                                  returns what the record
-                                                  stores: the JSON form of
-                                                  each group and file, and
-                                                  each reference to an
-                                                  output as it is; validates
-                                                  a parameter that holds a
-                                                  file field and no
-                                                  ``Referenced[...]`` by the
-                                                  params model too, with
-                                                  the context ``paths``
-call phase     :func:`validated`, with the        validates a parameter by
-               context ``read`` and ``paths``     the params model from
-                                                  what the record stores:
-                                                  each reference to an
-                                                  output replaced by its
-                                                  data, each file with its
-                                                  local path
-=============  =================================  ==========================
-
-The *request phase* is when a request is submitted, before any data is
-read. The *call phase* is when the request runs, once the workspace has read
-the data of each reference to an output. :func:`validated` validates by the
-params model, not by the request type; the request types are in
-:mod:`ess.spec.request_types`.
-
-An error is a :class:`~ess.spec.refs.ParamsError` that names the position of
-each problem in the params, such as ``reduction.bins`` or ``runs[1]``.
+A spec checks its defaults with the same two functions. An error is a
+:class:`~ess.spec.refs.ParamsError` that states the position of each problem
+in the params, such as ``reduction.bins`` or ``runs[1]``.
 """
 
 from __future__ import annotations
@@ -74,9 +38,9 @@ from .refs import FileRef, Loc, OutputRef, ParamsError, Ref, iter_refs
 
 type LocalPath = Callable[[FileRef], Path]
 """
-The local path of a file, by its identity, as the file source gives it. It
-looks the path up and never raises: a file that cannot be read fails the
-workflow that reads it.
+The local path of a file, by its identity, from the file source. It looks the
+path up and never raises: a file that cannot be read fails the workflow that
+reads it.
 """
 
 
@@ -102,11 +66,10 @@ def validate_request_value(
     ``value`` is validated from its JSON form by the request type of the
     field, with each file resolved by ``files``. A field that holds a file
     field and no ``Referenced[...]`` is then validated whole by the params
-    model, with the local path of each file (see :func:`validated`), so that
-    the validators of a group that holds a file, which its request type
-    lacks (see :mod:`ess.spec.request_types`), see the path; the record still
-    holds the group as the request wrote it. A field that holds
-    ``Referenced[...]`` is validated so only in the call phase.
+    model, with the local path of each file, so that the validators of a
+    group that holds a file see the path. The record still holds the group as
+    the request wrote it. A field that holds ``Referenced[...]`` is validated
+    by the params model only in the call phase.
 
     Parameters
     ----------
@@ -115,7 +78,7 @@ def validate_request_value(
     name:
         The parameter.
     value:
-        What the request gives: plain data, or Python objects such as an
+        What the request writes: plain data, or Python objects such as an
         instance of a group or a :data:`~ess.spec.refs.Ref`.
     files:
         Resolves each file, given the marker of its field.
@@ -128,19 +91,17 @@ def validate_request_value(
     Returns
     -------
     :
-        The value as the record stores it, the JSON form of the validated
-        value (see :func:`_validate_round_trip`), and each reference to an output in it
-        with the type its data must fit, read from the request type, so that
-        the workspace checks it against history without validating again.
+        The value as the record stores it, its JSON form, and each reference
+        to an output in it with the type its data must fit. The workspace
+        checks each reference against history without validating again.
 
     Raises
     ------
     ess.spec.refs.ParamsError
-        At the position of each problem (see
-        :func:`ess.spec._param_errors.request_type_errors`). Besides what
-        the request type and the params model refuse, a file or a reference
-        to an output in the JSON form that the request did not give, such as
-        one that a serializer makes.
+        At the position of each problem. Besides what the request type and
+        the params model reject, a file or a reference to an output in the
+        JSON form that the request did not write, such as one that a
+        serializer makes.
     """
     resolved: set[str] = set()
     context = {'files': files, 'resolved': resolved}
@@ -261,13 +222,11 @@ def _single_field_params_model(
 ) -> type[BaseModel]:
     """
     A model of the field ``name`` of ``model`` alone, with its config and
-    without the decorators of ``model``: it validates one value by its own
-    field. The params model has no decorators; a check of one value belongs
-    to the value's type.
+    without the decorators of ``model``.
 
     With ``table``, the field is a table, validated without its length
-    constraints: an accumulator takes a table a few rows at a time, and the
-    workspace checks the number of rows of the whole table.
+    constraints: an accumulator receives a table a few rows at a time, and
+    the workspace checks the number of rows of the whole table.
     """
     info = model.model_fields[name]
     field = (info.annotation, Field()) if table else (info.annotation, info)
@@ -297,9 +256,8 @@ def _validate_round_trip(
     is a value of the field ``name`` of ``one``, a model of that field alone,
     such as the request type of a parameter.
 
-    ``value`` is plain data, such as :func:`validate_request_value` makes of
-    Python objects. It is validated from its JSON form, with ``context``. A
-    field that a model lacks is refused at any depth, since validating would
+    ``value`` is plain data, validated from its JSON form with ``context``. A
+    field that a model lacks is rejected at any depth, since validating would
     drop it silently. The JSON form of the validated value must read back as
     a value with the same JSON form, validated without ``context``. Raises:
 
@@ -360,12 +318,10 @@ def validated(
     """
     Validate a parameter by the params model, as the binding takes it.
 
-    pydantic tries the members of a union with a member ``Referenced[...]``
-    in order, each with the stored value, so a member written inline is
-    given a reference too and refuses it. An error that a value is not a
-    reference or not a file is dropped where another error, at the same
-    position or inside, explains the value. Data read for a reference that
-    fail a check of ``T`` are one error, at the reference.
+    An error that a value is not a reference or not a file is dropped where
+    another error, at the same position or inside, explains the value. Data
+    read for a reference that fail a check of ``T`` are one error, at the
+    reference.
 
     Parameters
     ----------
@@ -375,16 +331,15 @@ def validated(
         The parameter.
     value:
         Without ``context``, data as in direct use: each field typed
-        ``Referenced[T]`` takes ``T``, each file field a ``Path``. A spec
-        checks a default so, and :func:`ess.spec.testing.instance` makes a
-        params instance so. With ``context``, what the record stores,
-        validated from its JSON form; a field that a model lacks is refused.
+        ``Referenced[T]`` accepts ``T``, each file field a ``Path``. With
+        ``context``, what the record stores, validated from its JSON form. A
+        field that a model lacks is then rejected.
     table:
         Whether the parameter is a table, validated without the length
         constraints of the list (see :func:`_single_field_params_model`).
     context:
         ``paths``, the local path of each file by its identity (see
-        :func:`local_paths`), and, in the call phase, ``read``, which gives
+        :func:`local_paths`), and, in the call phase, ``read``, which returns
         the data of each reference to an output (see
         :data:`~ess.spec.parameters.Referenced`).
 

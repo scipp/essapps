@@ -1,18 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Shared vocabulary of workflow parameter models.
+Building blocks of params models: the markers ``File`` and ``Referenced``,
+file field types of common kinds and roles, units, and range and edges models.
 
-Common building blocks for workflow params models: the markers of a field
-that a file fills and of a field that a reference fills, the types of file
-fields of common kinds and roles, constrained unit choices, and range/edges
-models with cross-field validation. Purely declarative — no scipp; converting
-validated values into scipp objects is the workflow implementation's concern
-(see :mod:`ess.spec.conversions`).
+The module needs no scipp. :mod:`ess.spec.conversions` converts validated
+values to scipp objects.
 
-Value defaults (start, stop, number of bins) are deliberately not provided
-here: sensible values depend on the workflow and instrument, so workflow
-authors set them at the use site, next to the field's title and description::
+It provides no value defaults, such as start, stop and number of bins, since
+they depend on the workflow and the instrument. A workflow author sets them at
+the use site::
 
     class MyParams(pydantic.BaseModel):
         wavelength: WavelengthEdges = pydantic.Field(
@@ -50,18 +47,14 @@ class File:
     """
     The marker of a *file field*, ``Annotated[Path, File(**metadata)]``.
 
-    A file fits the field if its metadata have each key and value of the
-    marker's :attr:`metadata`, but for a raw file not ``role``, which only narrows
-    what a picker offers. ``packages/essspec/docs/params.md`` (Files) names the
-    keys and the rules of a file field.
+    ``packages/essspec/docs/params.md`` (Files) states which files fit.
 
     Validated with the context ``{'paths': {identity: local path}}``, as the
     workspace validates a request, the marker replaces the stored form of a
-    file by its local path, validated as ``Path``, and refuses any other
-    value. Validated without ``paths``, as in direct use, the field takes a
-    ``Path`` as it is. Two markers are equal if their metadata are, each
-    value of the same type, so that ``File(n=1)`` and ``File(n=True)`` are
-    two markers.
+    file by its local path, validated as ``Path``, and rejects any other
+    value. Validated without ``paths``, as in direct use, the field accepts a
+    ``Path`` as it is. Two markers are equal if their metadata are equal,
+    each value of the same type, so ``File(n=1)`` and ``File(n=True)`` differ.
 
     Parameters
     ----------
@@ -90,7 +83,7 @@ class File:
 
     @property
     def metadata(self) -> dict[str, Any]:
-        """The metadata of the files for the field; see the class for the rules."""
+        """The metadata of the files for the field."""
         return dict(self._metadata)
 
     def __eq__(self, other: object) -> bool:
@@ -140,7 +133,7 @@ def _given(
     """
     What the context holds under ``key``, and ``value`` as the reference of
     ``kind`` that the stored form holds; ``None`` without ``key``, as in
-    direct use. Refuses a value of another source (see :func:`not_its_source`).
+    direct use. Raises for a value of another source (see :func:`not_its_source`).
     """
     held = (info.context or {}).get(key)
     if held is None:
@@ -174,7 +167,7 @@ class ReferencedDataInvalid(Exception):
     ``T`` of ``Referenced[T]``, with ``errors``. It is not a ``ValueError``, so
     that pydantic does not try the next member of a union with the
     reference: the request phase checked that the output is of ``T``, so the
-    data are refused (see :func:`ess.spec.validation.validated`).
+    data are rejected (see :func:`ess.spec.validation.validated`).
     """
 
     def __init__(self, ref: OutputRef, errors: list[ErrorDetails]) -> None:
@@ -188,10 +181,10 @@ class _Referenced:
     The marker of :data:`Referenced`. Validated with the context
     ``{'read': read}``, as the workspace validates a request when it runs, it
     replaces a reference to an output with its data, ``read(ref)``,
-    validated as ``T``, and refuses any other value. Data of ``T`` that fail
+    validated as ``T``, and rejects any other value. Data of ``T`` that fail
     a check of ``T``, such as an ``AfterValidator``, raise
-    :class:`ReferencedDataInvalid`. Validated without ``read``, as in direct use, it
-    takes ``T`` as it is.
+    :class:`ReferencedDataInvalid`. Validated without ``read``, as in direct
+    use, it accepts ``T`` as it is.
     """
 
     def __repr__(self) -> str:
@@ -236,13 +229,12 @@ _T = TypeVar('_T')
 
 Referenced = Annotated[_T, REFERENCED]
 """
-``Referenced[T]`` types a field that a reference to an output fills, whose
-data fit ``T``, a group, such as ``mask: Referenced[PixelMask] | None``.
-It is ``Annotated[T, REFERENCED]``, so pydantic and a type checker see
-``T``: the params model holds the data, as the binding takes them. The
-request type has a reference instead (see :mod:`ess.spec.request_types`).
-``packages/essspec/docs/params.md`` (References to outputs) states the
-rules.
+``Referenced[T]`` types a field that a reference to an output fills, with data
+that fit ``T``, a group, such as ``mask: Referenced[PixelMask] | None``.
+
+It is ``Annotated[T, REFERENCED]``, so pydantic and a type checker see ``T``.
+The request type has a reference instead (see :mod:`ess.spec.request_types`).
+See ``packages/essspec/docs/params.md`` (References to outputs).
 """
 
 RunFile = Annotated[Path, File()]

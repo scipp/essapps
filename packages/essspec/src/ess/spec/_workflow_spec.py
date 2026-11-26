@@ -3,47 +3,23 @@
 """
 Workflow specifications: the interface of a workflow, without its code.
 
-A :class:`WorkflowSpec` names a workflow and holds two pydantic models: the
-*params*, everything a request gives the workflow, and the *outputs*, the
-results it returns. ``packages/essspec/docs/params.md`` states the rules of
-both models and their reasons.
+``packages/essspec/docs/params.md`` is the guide to writing a spec.
 
-How the checks fit together
----------------------------
+Creating a :class:`WorkflowSpec` runs one model validator. It collects the
+problems of every check and raises them together, so that an author sees
+all of them at once. Each problem states the model and field it concerns,
+and the fix where it is not plain.
 
-Making a :class:`WorkflowSpec` runs one model validator. It collects the
-problems of four checks and raises them together, so that an author sees
-every problem at once:
+The checks take field types apart with :mod:`ess.spec.field_types`, as the
+request type and the forms do, so a type that passes here is one they
+understand. A default is checked by validating it as a request and as a
+binding would, so that a default passes exactly when a request could write
+it.
 
-- :func:`_distinct`: no name is both a parameter and an output.
-- :func:`_params_problems`: the decorators and the ``__init__`` of the
-  params model (:func:`_no_decorators`), then each field of the params
-  model and of each group in it, at any depth
-  (:func:`_fields_problems`, :func:`_type_problems`,
-  :func:`_group_problems`). The ``T`` of each ``Referenced[T]`` is checked
-  as an output is (:func:`_referenced_problems`).
-- :func:`_outputs_problems`: the type of each output.
-- :func:`_tables_problems`: the parameters that ``tables`` names.
-
-The checks take field types apart with :mod:`ess.spec.field_types`, the
-functions that the request type and the forms use too, so a type that
-passes here is one they understand. A default is checked by validating it
-as a request and as a binding would (:func:`_default_problem`, with
-:func:`~ess.spec.validation.validate_request_value` and
-:func:`~ess.spec.validation.validated`), not by rules of its own, so
-that a default passes when a request could write it. Each problem names the
-model and field it concerns, and the fix where it is not plain.
-
-Two forms
----------
-
-* :class:`WorkflowSpec` is the in-process form. It holds the model *classes*,
-  so consumers in the same process get full pydantic validation.
-* :class:`SerializedWorkflowSpec` is the plain-data form produced by
-  :meth:`WorkflowSpec.serialize`. It is what a service announces to remote
-  consumers. There is intentionally no inverse: validators do not round-trip
-  through JSON Schema, and authoritative validation always happens in the
-  process owning the model classes.
+:class:`WorkflowSpec` holds the model classes. :class:`SerializedWorkflowSpec`
+is its plain-data form, which a service sends to remote consumers. It has no
+inverse: validators do not survive JSON Schema, so authoritative validation
+happens in the process that holds the model classes.
 """
 
 from __future__ import annotations
@@ -85,12 +61,10 @@ from .refs import FileRef, ParamsError, iter_refs
 
 class NoParams(BaseModel):
     """
-    Params model for workflows that take no parameters.
+    Params model of a workflow that accepts no parameters.
 
-    Workflows always have a params model, so consumers never branch on its
-    absence; "takes no parameters" is expressed as a model with no fields.
-    Extra fields are rejected so that sending params to such a workflow is an
-    error rather than silently ignored.
+    It rejects every field, so that params sent to such a workflow raise an
+    error.
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -144,56 +118,46 @@ class _SpecFields(BaseModel, frozen=True):
 
 class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
     """
-    Implementation-independent specification of a workflow's user interface.
+    The interface of a workflow: its identity, display metadata, and the
+    params and outputs models.
 
-    Holds identity and display metadata and the pydantic model classes of the
-    workflow's params and outputs. Contains no factory, no executor, and no
-    reference to any workflow implementation, so that a service can load and
-    validate every spec it knows without the workflow code.
-
-    The spec is generic over its models, which a type checker infers from
-    ``params=`` and ``outputs=``, so that a binding's
-    ``compute(params: P) -> O`` is checked against them. Code that takes any
-    spec annotates it ``WorkflowSpec[Any, Any]``.
-
-    ``packages/essspec/docs/params.md`` is the guide to writing a spec; its
-    section "What WorkflowSpec refuses" lists every rule checked here.
+    It holds no reference to the workflow's code, so that a service can load
+    every spec without it. A type checker infers ``P`` and ``O`` from
+    ``params=`` and ``outputs=``, and checks a binding's
+    ``compute(params: P) -> O`` against them. Code that accepts any spec
+    annotates it ``WorkflowSpec[Any, Any]``. See
+    ``packages/essspec/docs/params.md``.
 
     Parameters
     ----------
     name:
-        Machine-readable identifier of the workflow, not empty. Unique within
-        the context that lists the specs.
+        Machine-readable identifier, unique among the specs that a service
+        lists.
     version:
-        Version of the workflow interface, at least 1. Increase it on any
-        change that a consumer can observe: the params, the outputs, or what
-        the workflow computes. :attr:`digest` detects a change of the models
-        under one version.
+        Version of the interface. Increase it on any change that a consumer
+        can observe: the params, the outputs, or what the workflow computes.
+        :attr:`digest` detects a change of the models under one version.
     title:
-        Display title of the workflow, not empty.
+        Display title.
     description:
-        What the workflow computes, not empty.
+        What the workflow computes.
     params:
-        Pydantic model class of everything a request gives the workflow.
-        Defaults to :class:`NoParams`, a workflow that takes nothing.
+        The params model.
     outputs:
-        Pydantic model class of the results. The title and description of a
-        field are its display metadata. The order of the fields is the order
-        in which consumers present the outputs, and they may select the
-        first, so put the primary output first.
+        The outputs model. Consumers show the outputs in the order of its
+        fields and may select the first.
     tables:
-        Names of the list parameters whose rows an accumulator takes a push
-        at a time, each a *table*. Defaults to none.
+        The list parameters that an accumulator receives a push at a time.
     code_revision:
         Git commit or package version of the workflow code, so that a record
-        made from a development branch says what ran. Provenance, not
-        identity: the interface version is ``version``.
+        made from a development branch states what ran. It is not part of the
+        identity.
 
     Raises
     ------
     pydantic.ValidationError
-        If the spec breaks a rule. The message lists the problems found, each
-        with the model and field it concerns.
+        If the models break a rule of the guide. The message lists every
+        problem.
     """
 
     # A type checker cannot check a default against P, which only params=
@@ -230,48 +194,11 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
     @property
     def digest(self) -> str:
         """
-        A short hex string that changes when the stored form of the params or
-        the outputs changes, so that a record of the spec can tell whether the
-        spec it was made with had the models of this one.
+        A short hex string of the name, type and requiredness of each field of
+        the params and outputs models, at any depth.
 
-        It covers the name, type, and requiredness of each field of the params
-        and outputs models, and of each group inside them, at any depth.
-        Requiredness counts although a record stores its params with the
-        defaults filled in, since a parameter that becomes required breaks
-        callers. A type is described so:
-
-        - a group, a pydantic model that is not a ``RootModel``, by its fields
-          and by its ``extra`` setting unless that is the default, not by its
-          class name or module, so that a group may be renamed or moved;
-        - a ``RootModel`` by the type of its root;
-        - a ``Literal`` and an enum by their values, which the stored form
-          holds, so that the two are the same and an enum member may be
-          renamed;
-        - ``Referenced[T]`` as a reference to ``T`` and its fields, and a file
-          field by the metadata of its ``File(...)`` marker, the role of a raw
-          file included, which decide which files fit;
-        - a union by its members, a list, a dict, or a tuple by its type
-          arguments, in order;
-        - a builtin, such as ``float`` or ``list``, a time, ``Path``, and a
-          scipp type, such as ``DataArray``, by its name;
-        - any other class by its module and qualified name, such as
-          ``mypackage.masks.MaskSet``, so that moving or renaming it changes
-          the digest.
-
-        The order of fields, and of the members of a union, does not count.
-        A reference is checked by class when it is used, so ``T`` replaced by
-        another class of the same fields keeps the digest, and a reference
-        made with the old class is refused when it is checked.
-
-        Titles, descriptions, defaults, constraints such as ``Field(gt=0)``,
-        validators, discriminators, and the spec's name and version are not
-        part of it: they do not change the stored form of a value. Settings
-        of a group's ``model_config`` that change its JSON form, other than
-        ``extra``, such as ``ser_json_inf_nan``, are not covered. The digest
-        does not see a change of what the workflow computes, so the version
-        stays the author's statement of any change a consumer can observe.
-        ``ess.spec.testing.check_digests`` checks that a changed digest comes
-        with a new version.
+        ``packages/essspec/docs/params.md`` (The digest of a spec) states what
+        changes it.
 
         Raises
         ------
@@ -287,12 +214,10 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
 
     def serialize(self) -> SerializedWorkflowSpec:
         """
-        Project to the plain-data form.
+        The plain-data form of the spec.
 
-        The params schema gives each field, at any depth, the sources a
-        request may write there (see :class:`SerializedWorkflowSpec`). The
-        projection is one-way: pydantic validators do not survive it, so a
-        consumer of the serialized form can validate only optimistically.
+        Validators do not survive it, so a consumer of the serialized form can
+        validate only optimistically.
         """
         return SerializedWorkflowSpec(
             name=self.name,
@@ -308,26 +233,18 @@ class WorkflowSpec[P: BaseModel, O: BaseModel](_SpecFields, frozen=True):
 
 class SerializedWorkflowSpec(_SpecFields, frozen=True):
     """
-    Plain-data form of a workflow spec, safe to send across process boundaries.
+    Plain-data form of a workflow spec, which round-trips through JSON.
 
-    Produced by :meth:`WorkflowSpec.serialize`; round-trips through JSON.
     ``params_schema`` is the JSON schema of the spec's request type (see
-    :mod:`ess.spec.request_types`), which also validates a request, so the
-    two agree. At each field, at any depth, it allows the sources that a
-    request may write there, in ``oneOf``; a UI made from it picks a widget
-    by these sources, as the field types in
-    ``packages/essspec/docs/params.md`` (What a field may be) say.
-
-    The schema of a reference to an output is the ``@ref`` object of an
-    output (see :mod:`ess.spec.refs`), with the name of the type it must fit
-    under ``dataType``, as the outputs schema names the type of each output.
-    A file is the ``@ref`` object of a file, with the marker's metadata under
-    ``metadata``, which say which files to offer: those with each key and value,
-    and a run without a role at a raw file field with a role, which the workspace
-    accepts with any role. The schemas of the parameter
-    ``reduction``, a parameter ``centre`` typed ``BeamCentre |
-    Referenced[BeamCentre]``, a file field ``mask`` typed ``MaskFile``, the
-    definition of a file, and the field ``Reduction.bins``::
+    :mod:`ess.spec.request_types`), which also validates a request. At each
+    field, at any depth, ``oneOf`` lists the sources that a request may write
+    there, and a UI picks a widget by them. A reference to an output has the
+    name of the type it must fit under ``dataType``, as the outputs schema
+    states the type of each output. A file has the marker's metadata under
+    ``metadata``, from which a picker selects the files to offer. The schemas
+    of the parameter ``reduction``, a parameter ``centre`` typed
+    ``BeamCentre | Referenced[BeamCentre]``, a file field ``mask`` typed
+    ``MaskFile``, the definition of a file, and the field ``Reduction.bins``::
 
         "reduction": {"$ref": "#/$defs/Reduction", ...}
         "centre":    {"oneOf": [{"$ref": "#/$defs/BeamCentre", ...},
@@ -347,7 +264,7 @@ class SerializedWorkflowSpec(_SpecFields, frozen=True):
 
 
 def _distinct(params: type[BaseModel], outputs: type[BaseModel]) -> list[str]:
-    """Refuse a name of both a parameter and an output."""
+    """The problems of a name that is both a parameter and an output."""
     return [
         f'{name}: a field of both {params.__name__} and {outputs.__name__}'
         for name in params.model_fields.keys() & outputs.model_fields.keys()
@@ -365,12 +282,7 @@ def _decorators(model: type[BaseModel], kinds: Sequence[str]) -> dict[str, list[
 
 
 def _no_decorators(model: type[BaseModel]) -> list[str]:
-    """
-    Refuse a decorator of the params model, of any kind, and an ``__init__``
-    of its own. The framework validates and stores each parameter alone, and
-    a stage and a driver get the values by name, so it never validates the
-    params model whole and never calls its ``__init__``.
-    """
+    """The problems of the decorators and the ``__init__`` of the params model."""
     problems = []
     if found := _decorators(model, _DECORATORS):
         problems.append(f'{model.__name__}: no decorators, {found}; {_ALONE}')
@@ -408,12 +320,8 @@ def _fields_problems(
     model: type[BaseModel], stack: tuple[type[BaseModel], ...]
 ) -> list[str]:
     """
-    The problems of each field of ``model``, the params model or a group,
-    inside the groups ``stack``, the params model first. Each field is typed
-    as :func:`_type_problems` checks, has no alias, is not excluded from the
-    JSON form, has no serializer in its type (see
-    :func:`_annotated_serializers`), and has a default that is a value (see
-    :func:`_default_problem`).
+    The problems of each field of ``model``, inside the groups ``stack``, the
+    params model first.
     """
     kind = 'a parameter' if len(stack) == 1 else 'a field of a group'
     problems = []
@@ -444,9 +352,7 @@ def _fields_problems(
 def _annotated_serializers(annotation: Any, metadata: tuple[Any, ...]) -> list[str]:
     """
     The serializers written with ``Annotated``, such as ``PlainSerializer``,
-    in ``metadata`` or in ``annotation``, not inside a class in it: each makes
-    the JSON form of a value differ from that of its type, as a decorator
-    serializer of a group does.
+    in ``metadata`` or in ``annotation``, not inside a class in it.
     """
     found = [type(m).__name__ for m in metadata if isinstance(m, _SERIALIZER_MARKERS)]
     if get_origin(annotation) is Annotated:
@@ -465,18 +371,7 @@ def _type_problems(
 ) -> list[str]:
     """
     The problems of a field typed ``annotation``, with ``metadata``, inside
-    the groups ``stack``, at any depth. The types of a field:
-
-    - a scalar, with constraints;
-    - a file field, ``Annotated[Path, File(...)]``;
-    - a group, whose fields are typed so in turn, and which does not
-      contain itself;
-    - a union of groups with a tag;
-    - ``Referenced[T]``, ``T`` a group typed as an output is (see
-      :func:`_referenced_problems`);
-    - a union of members written inline and members ``Referenced[...]``;
-    - ``X | None``, and ``list[X]``, with ``X`` not a list and not
-      ``X | None``.
+    the groups ``stack``, at any depth.
     """
     if _marks_optional(annotation, metadata):
         return [_OPTIONAL_MARKED]
@@ -537,10 +432,7 @@ _TAGGED_REFERENCE = (
 
 
 def _marks_optional(annotation: Any, metadata: tuple[Any, ...]) -> bool:
-    """
-    Whether a :class:`~ess.spec.parameters.File` marker, in ``metadata`` or
-    in an ``Annotated`` of ``annotation``, marks a type ``X | None``.
-    """
+    """Whether a ``File`` marker in ``metadata`` or ``annotation`` marks X | None."""
     tp = annotation
     while True:
         origin, args = get_origin(tp), get_args(tp)
@@ -591,9 +483,8 @@ _FILES_UNION = (
 
 def _marker_problem(tp: Any, metadata: tuple[Any, ...]) -> str | None:
     """
-    Why the :class:`~ess.spec.parameters.File` markers in ``metadata``, of a
-    field of type ``tp``, do not make it a file field, or ``None``: a marker
-    marks a ``Path``, once.
+    Why the ``File`` markers in ``metadata`` do not make a field of type ``tp``
+    a file field, or ``None``.
     """
     markers = [m for m in metadata if isinstance(m, File)]
     if not markers:
@@ -651,11 +542,7 @@ def _found(annotation: Any, test: Callable[[Any], bool]) -> list[tuple[str, Any]
 
 
 def _alias_problems(annotation: Any) -> list[str]:
-    """
-    Refuse each ``NewType`` or type alias that ``annotation`` is made of,
-    named by the field of the class that holds it, if any: a class says what
-    a value is.
-    """
+    """The problems of each ``NewType`` or type alias that ``annotation`` is made of."""
     return [
         f'{where}{_alias_text(alias)}'
         for where, alias in _found(annotation, field_types.is_alias)
@@ -671,12 +558,7 @@ def _alias_text(alias: Any) -> str:
 
 
 def _output_path_problems(annotation: Any) -> list[str]:
-    """
-    Refuse each ``Path`` that ``annotation``, of an output, is made of, a
-    file field among them, named by the field of the class that holds it, if
-    any: no output holds one, so that every file comes from the file source,
-    which checks it.
-    """
+    """The problems of each ``Path`` that ``annotation``, of an output, is made of."""
     found = _found(annotation, _is_path)
     return [
         f'{where}a Path is in the data of an output; no output holds a file or a '
@@ -706,17 +588,7 @@ def _has_alias(field: FieldInfo) -> bool:
 def _group_problems(
     group: type[BaseModel], stack: tuple[type[BaseModel], ...]
 ) -> list[str]:
-    """
-    The problems of a group that a request writes, inside the groups
-    ``stack``.
-
-    A group is refused if it contains itself, at any depth; if it has a
-    serializer or a computed field, which would make its JSON form differ
-    from the object of its fields; or for a problem of a field (see
-    :func:`_fields_problems`). Field and model validators of any mode are
-    allowed: they run whenever the group is validated (see
-    :func:`ess.spec.validation.validated`).
-    """
+    """The problems of a group that a request writes, inside the groups ``stack``."""
     if group in stack:
         return [
             f'{group.__name__} contains itself; a group holds no field of its own '
@@ -729,14 +601,7 @@ def _group_problems(
 
 
 def _referenced_problems(data: Any) -> list[str]:
-    """
-    The problems of ``T`` of ``Referenced[T]``, typed as an output is: a
-    group, so that a picker of records lists the outputs of a class that
-    names a role, without a type alias or a ``Path``, a file field among
-    them, at any depth (see :func:`_output_path_problems`), and without
-    ``Referenced[...]`` inside it. The framework does not look inside ``T``
-    otherwise.
-    """
+    """The problems of the ``T`` of ``Referenced[T]``."""
     name = field_types.type_name(data)
     if not field_types.is_group(group := field_types.plain(data)):
         return [
@@ -758,18 +623,8 @@ def _referenced_problems(data: Any) -> list[str]:
 
 def _default_problem(model: type[BaseModel], name: str) -> str | None:
     """
-    Why the default of the field ``name`` of ``model`` is not a value, or
-    ``None``: what a request may write, without a reference to an output or
-    a file (see :func:`ess.spec.validation.validate_request_value`), and the value that
-    validating it gives, since pydantic does not validate a default, and a
-    binding gets it as it is (see :func:`ess.spec.validation.validated`). So a
-    group's default is an instance, not the object of its fields, and a
-    list's default keeps the length constraints of the list. A file field has
-    no default but ``None`` or ``[]``: each ``Path`` in the default names a
-    file, which the resolver of files refuses. A ``default_factory`` gives
-    the same value at each call, compared by JSON form: a record holds its
-    request with the defaults filled in, and a request is compared with a
-    record's.
+    Why the default of the field ``name`` of ``model`` is not a value that a
+    request may write and that validating returns unchanged, or ``None``.
     """
     field = model.model_fields[name]
     default = field.get_default(call_default_factory=True)
@@ -862,9 +717,8 @@ def _tables_problems(spec: WorkflowSpec[Any, Any]) -> list[str]:
 
 def _params_schema(spec: WorkflowSpec[Any, Any]) -> dict[str, Any]:
     """
-    The JSON Schema of the params: that of the spec's request type (see
-    :func:`ess.spec.request_types.request_model`), which validates a
-    request. As the workspace does, it refuses a field that a model lacks.
+    The JSON schema of the spec's request type, which rejects a field that a
+    model lacks, as the workspace does.
     """
     model = request_types.request_model(spec.params)
     schema = model.model_json_schema()
