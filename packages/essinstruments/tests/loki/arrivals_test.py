@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from ess.batch import file_sources, open_workspace
+from ess.batch.web import create_app
 from ess.instruments.loki.arrivals import (
     EXPERIMENT,
     Instrument,
@@ -39,7 +40,7 @@ def page(tmp_path: Path) -> Iterator[tuple[TestClient, Instrument, Client]]:
     )
     with client:
         given = settings(client, instrument)
-        app = build(client, files, definitions, settings=given, follow=True)
+        app = create_app(build(client, files, definitions, settings=given, follow=True))
         page = TestClient(app).get('/').url
         yield TestClient(app, base_url=str(page)), instrument, client
 

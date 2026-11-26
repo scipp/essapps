@@ -11,6 +11,7 @@ import h5py
 import pytest
 import scipp as sc
 from ess.batch import FileInfo, file_sources, open_workspace
+from ess.batch.web import create_app
 from ess.instruments.loki.batch import per_run
 from ess.instruments.loki.bindings import BINDINGS, bank_histogram_binding
 from ess.instruments.loki.specs import BANK_HISTOGRAM, BankHistogramParams
@@ -100,8 +101,9 @@ def test_the_page_of_raw_runs_draws_a_histogram_per_run(tmp_path: Path) -> None:
         tmp_path, BINDINGS, allowed=file_sources(['local'])
     )
     with client:
-        app = build(client, files, definitions, first='raw-runs')
-        manager = app.state.pages.intake.manager
+        pages = build(client, files, definitions, first='raw-runs')
+        app = create_app(pages)
+        manager = pages.intake.manager
         (label,) = manager.headers()
         spec = manager.batch(label).spec
         http = TestClient(app, base_url=str(TestClient(app).get('/').url))

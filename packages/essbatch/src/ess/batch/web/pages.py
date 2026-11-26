@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from ess.apps.fields import Fields
 from ess.apps.listing import Listing
+from ess.apps.records import Status
 from ess.spec import WorkflowSpec
 
 from ..corrections import CorrectedFiles
@@ -372,6 +373,27 @@ class Pages:
         return Notice(
             notice='Cleared the outputs of every batch. Reduce computes them again.'
         )
+
+    def stop(self) -> None:
+        """
+        Stop Follow, so that the workspace can be closed.
+
+        Raises :class:`~.errors.Rejected` if a record of the workspace is
+        pending, and if the definitions cannot be written.
+        """
+        with self.lock, reject_on_write_error():
+            self.intake.stop()
+            client = self.intake.manager.client
+            pending = client.status(client.records()).count(Status.PENDING)
+            if pending == 1:
+                raise Rejected(
+                    'A reduction has not ended. Cancel it, or wait until it ends.'
+                )
+            if pending:
+                raise Rejected(
+                    f'{pending} reductions have not ended. Cancel them, or wait '
+                    'until they end.'
+                )
 
     def counts(self) -> BatchCounts:
         """

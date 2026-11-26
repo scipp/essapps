@@ -107,6 +107,18 @@ def serve(app: FastAPI, *, port: int) -> None:
     uvicorn.run(app, host='localhost', port=port)
 
 
+def answer_errors(app: FastAPI) -> None:
+    """Answer a :class:`Rejected` with 422 and a :class:`NotFound` with 404."""
+
+    @app.exception_handler(Rejected)
+    def problem(_: Request, error: Rejected) -> JSONResponse:
+        return JSONResponse({'message': str(error)}, status_code=422)
+
+    @app.exception_handler(NotFound)
+    def missing(_: Request, error: NotFound) -> JSONResponse:
+        return JSONResponse({'message': str(error)}, status_code=404)
+
+
 def create_app(pages: Pages) -> FastAPI:
     """
     The app that serves the page of each batch of ``pages`` and its JSON API.
@@ -127,13 +139,7 @@ def create_app(pages: Pages) -> FastAPI:
     # The state is about 0.6 kB per row and repeats much.
     app.add_middleware(GZipMiddleware)
 
-    @app.exception_handler(Rejected)
-    def problem(_: Request, error: Rejected) -> JSONResponse:
-        return JSONResponse({'message': str(error)}, status_code=422)
-
-    @app.exception_handler(NotFound)
-    def missing(_: Request, error: NotFound) -> JSONResponse:
-        return JSONResponse({'message': str(error)}, status_code=404)
+    answer_errors(app)
 
     @app.get('/', include_in_schema=False)
     def home() -> Response:

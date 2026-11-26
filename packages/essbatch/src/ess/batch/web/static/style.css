@@ -444,7 +444,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .list tr[aria-current="page"] a { font-weight: 600; }
 .list .follows { color: var(--done); font-weight: 600; }
 .list .bad { color: var(--bad); }
-.new-batch {
+.new-batch, .new-workspace {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -452,8 +452,8 @@ input[type="checkbox"] { accent-color: var(--accent); }
   border-top: 1px solid var(--line);
   background: #f7f8fa;
 }
-.new-batch .field > input, .new-batch .field > select, .new-batch .field > textarea { max-width: 420px; }
-/* The forms "New batch" and of the tab "Batch" */
+:is(.new-batch, .new-workspace) .field > :is(input, select, textarea) { max-width: 420px; }
+/* The forms "New batch", "New workspace" and of the tab "Batch" */
 .header-form .field > :first-child { color: var(--muted); }
 .header-form .field > small { grid-column: 2; }
 .header-form .problem { margin: 0 0 0 162px; color: var(--bad); }
@@ -503,6 +503,10 @@ body[inert] main { opacity: 0.6; transition: opacity 0.1s 0.3s; }
 
 .no-batch [data-view="rows"], .no-batch #files, .no-batch main .right { display: none; }
 .no-batch main { grid-template-columns: minmax(0, 1fr); }
+
+/* The launch page: the list of workspaces only */
+
+.launch main { grid-template-columns: minmax(0, 1fr); }
 
 /* The right region */
 

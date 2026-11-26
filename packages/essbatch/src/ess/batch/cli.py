@@ -161,8 +161,8 @@ folder, not in files.csv. The commands see it too, either way.
 workspace.json of the folder holds its proposal and where its files are
 listed: "local", in files.csv, or "scicat:PROFILE", the raw datasets of the
 proposal in SciCat, with a login to the scitacean profile PROFILE. "files
---proposal P" writes it. A folder without it is local, of the proposal
-"local".
+--proposal P" writes it, and so does a launch page when it makes a folder. A
+folder without it is local, of the proposal "local".
 
 The status of a row:
     ready             no result yet; it can be reduced, unless the settings are invalid

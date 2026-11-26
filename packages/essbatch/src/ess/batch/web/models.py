@@ -500,3 +500,39 @@ class Notice(BaseModel):
     """What an action of the workspace did, in words for a person."""
 
     notice: str
+
+
+class WorkspaceRow(BaseModel):
+    """
+    A workspace of the root folder. ``problem`` states why it cannot be
+    opened; ``open`` is true once it is open in this server.
+    """
+
+    name: str
+    title: str
+    description: str
+    proposal: str
+    files: str
+    open: bool
+    problem: str | None
+
+
+class WorkspaceList(BaseModel):
+    """
+    The workspaces of the root folder, and the file sources that a new
+    workspace may have.
+    """
+
+    application: str
+    sources: list[str]
+    rows: list[WorkspaceRow]
+
+
+class NewWorkspace(BaseModel):
+    """A request for a new workspace: its folder ``name`` and its header."""
+
+    name: str
+    title: str
+    description: str = ''
+    proposal: str
+    files: str

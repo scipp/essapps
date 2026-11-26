@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workspaces</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232f6fb3'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="static/style.css">
+  <script type="module" src="static/launch.js"></script>
+</head>
+<body class="launch">
+  <header class="top">
+    <h1 id="title">Workspaces</h1>
+  </header>
+
+  <main>
+    <section class="left">
+      <div class="message" id="message" hidden>
+        <div class="message-text"></div>
+        <button type="button" class="quiet close" aria-label="Dismiss">×</button>
+      </div>
+      <div class="toolbar">
+        <button type="button" id="new-workspace-open">+ New workspace</button>
+      </div>
+      <!-- The fields Title and Description follow Name: headerFields of list.js -->
+      <form class="new-workspace header-form" id="new-workspace" hidden>
+        <div class="field"><label for="new-name">Name</label><input type="text" id="new-name" name="name"><small>The name of its folder: letters, digits, "_", "." and "-"</small></div>
+        <div class="field"><label for="new-proposal">Proposal</label><input type="text" id="new-proposal" name="proposal" placeholder="such as 336349, or local"></div>
+        <div class="field" id="new-files-field"><label for="new-files">Runs</label><select id="new-files" name="files"></select></div>
+        <p class="problem" id="new-problem"></p>
+        <div class="buttons">
+          <button type="submit" class="primary">Make</button>
+          <button type="button" class="quiet" data-cancel>Cancel</button>
+        </div>
+      </form>
+      <div class="list">
+        <table id="workspaces">
+          <thead><tr><th>Workspace</th><th>Proposal</th><th>Runs</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

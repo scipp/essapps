@@ -13,11 +13,15 @@ from ess.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    FileSources,
     FolderDefinitions,
     Intake,
+    file_sources,
+    open_workspace,
 )
 from ess.batch.cli import main
 from ess.batch.table import KEY
+from ess.batch.web import Launcher, OpenPages, Pages
 
 from ess.apps import Client, Template, Workspace
 from ess.apps.folder import folder_files, open_folder
@@ -98,6 +102,40 @@ def client(workspace: Workspace) -> Client:
 def other(workspace: Workspace) -> Client:
     """Another client of the proposal of ``client``."""
     return Client(workspace, submitter='bob')
+
+
+@pytest.fixture
+def launcher(tmp_path: Path, gate: toys.Gate, fake: FakeFiles) -> Launcher:
+    """
+    The workspaces of ``tmp_path / 'root'``: local ones, and those of a fake
+    SciCat, ``scicat:fake``, that lists the runs of ``fake``. A workspace opens
+    with a batch of the pairs that follows, with a step every 0.01 s.
+    """
+
+    def reduce(params: toys.Params) -> toys.Outputs:
+        gate.wait()
+        return toys.Outputs(total=read_file(params.sample))
+
+    bind = [function_binding(toys.PLAIN, reduce)]
+    sources: FileSources = {
+        **file_sources(['local']),
+        'scicat:fake': lambda folder, proposal: fake,
+    }
+
+    @contextmanager
+    def open_pages(folder: Path) -> Iterator[Pages]:
+        client, files, definitions = open_workspace(folder, bind, allowed=sources)
+        with client:
+            manager = BatchManager(client, definitions=definitions)
+            intake = Intake(manager, sources=toys.SOURCES)
+            if not manager.headers():
+                intake.create(
+                    toys.PLAIN.name, title='Pairs', source='pairs', follow=True
+                )
+            yield Pages(intake, interval=0.01, files=files)
+
+    opener: OpenPages = open_pages
+    return Launcher(tmp_path / 'root', opener, sources=sources.keys(), title='Toy')
 
 
 @pytest.fixture

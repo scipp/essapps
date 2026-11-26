@@ -599,6 +599,7 @@ An application states the file sources it allows, and `open_workspace` raises `V
 `essbatch` allows the file source of the folder it opens.
 A test passes its own `FileSources`, such as a fake of SciCat, and needs no network.
 The name of a workspace follows the rule of a label of a batch (`definition.check_label`).
+The launch page of [`web/README.md`](../src/ess/batch/web/README.md) lists the workspaces of a root folder, makes and removes them, and opens each at its own URL.
 
 ## What is stored on disk
 

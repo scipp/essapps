@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from ess.batch import file_sources, open_workspace
-from ess.batch.web.api import STATIC, every
+from ess.batch.web.api import STATIC, create_app, every
 from ess.loki import data
 
 from ess.apps import Client, file
@@ -233,7 +233,7 @@ def main() -> None:
         plan = arrivals(args.count)
         for arrival in plan[: args.start]:
             arrive(*arrival)
-        app = build(
+        pages = build(
             client,
             files,
             definitions,
@@ -246,7 +246,9 @@ def main() -> None:
         later = [functools.partial(arrive, *a) for a in plan[args.start :]]
         _say(f'serving http://localhost:{args.port}/; Ctrl-C stops')
         with every(args.arrive, later):
-            uvicorn.run(app, host='localhost', port=args.port, log_level='warning')
+            uvicorn.run(
+                create_app(pages), host='localhost', port=args.port, log_level='warning'
+            )
 
 
 if __name__ == '__main__':
