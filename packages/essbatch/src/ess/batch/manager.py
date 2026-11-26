@@ -2,37 +2,15 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 The batches of a workspace: :class:`BatchManager` makes, lists, changes and
-removes them. It knows no row source: :class:`~.intake.Intake` brings the
-rows of a source into a batch. The guide is the section "The batches of a
-workspace" of ``packages/essbatch/docs/batch.md``; the decisions are
-``docs/developer/adr/0011``, ``0012`` and ``0013``.
+removes them.
 
-A batch is a label with a header. A :class:`~.reduction.Batch` is the object
-that holds its template and its batch table; the manager makes the one ``Batch`` of
-each batch. A batch is kept as these entries of the definitions
-(:mod:`.definition`), each with one writer::
+The manager knows no row source: :class:`~.intake.Intake` brings the rows of a
+source into a batch. A label is a batch if and only if it has a header. The
+order of the writes that keeps this true when a process stops: guide
+``packages/essbatch/docs/batch.md``, "What is kept on disk".
 
-    header          title, description              BatchManager
-    settings        the template, with the source   the Batch
-                    columns as blanks
-    table           the batch table                 the Batch
-    source          the source, the keys seen, and  Intake; only for a batch
-                    whether the batch follows       made from a source
-    output_options  the format its results are      Writing; only for a batch
-                    written as, and what a person   whose output options are
-                    says of them                    set
-    publish         the records published to the    Publisher; only for a
-                    catalogue                       batch published from
-
-so a manager made again, after a restart, makes the same ``Batch`` of a label
-from them, the specs that the workspace binds, and the specs that run staged.
-Making a batch makes its ``Batch``, which writes the settings and the table;
-then the manager writes the header: a label without a header is not a batch.
-Removing a batch deletes the header first, then every other entry of the
-label, whoever wrote it. So a ``create`` or a ``remove`` cut off at any
-write leaves a label with entries and no header, which
-:meth:`BatchManager.remove` removes. After a restart, the ``Batch`` of a
-label is made at the first call of :meth:`BatchManager.batch`.
+Guide: "The batches of a workspace". Decisions: ``docs/developer/adr/0011``,
+``0012`` and ``0013``.
 """
 
 from __future__ import annotations
@@ -62,11 +40,7 @@ from .table import typed
 
 
 def _check_label(label: str) -> None:
-    """
-    Raise ``ValueError`` unless ``label`` is letters, digits, ``_``, ``.``
-    and ``-``, and starts with none of the last two, so that it is one
-    segment of a URL path.
-    """
+    """Raise ``ValueError`` unless ``label`` can be one segment of a URL path."""
     if re.fullmatch(r'\w[\w.-]*', label) is None:
         raise ValueError(
             f'{label!r}: a label is letters, digits, "_", "." and "-", '
@@ -77,47 +51,24 @@ def _check_label(label: str) -> None:
 class BatchManager:
     """
     Makes, lists, changes and removes the batches of a workspace, and holds
-    the one :class:`~.reduction.Batch` of each label. See
-    ``packages/essbatch/docs/batch.md``.
+    the one :class:`~.reduction.Batch` of each label.
 
-    Every refusal of what is asked raises ``ValueError``, with a message for a
-    person, such as for a spec that the workspace does not bind, or a label
-    that is taken. ``KeyError`` says only that no batch has the label asked
-    for, and :class:`~.definition.DefinitionWriteError` that the definitions refuse a
-    write. Anything else is an error of the code of the application.
-
-    :attr:`revision` moves whenever :meth:`headers` may give something else:
-    while it is the same, they give the same. A batch counts its own changes
-    (:attr:`.reduction.Batch.revision`).
-
-    The headers are read when the manager is made. Each change of a header is
-    written to the definitions before the manager holds it, so the manager
-    lists the batches whose header the definitions keep. A write that they
-    refuse raises :class:`~.definition.DefinitionWriteError`, and what was
-    written before it in the same call stays written.
+    It raises as ``batch.md``, "Errors", says. The headers are read once, when
+    the manager is made.
 
     Parameters
     ----------
     client:
-        The client of the workspace. Its batches persist what they submit.
+        The client of the workspace. The batches persist what they submit.
     definitions:
-        Where the batches are kept.
+        Where the batches are stored.
     settings:
-        The settings that a new batch of a spec starts with, by the name of
-        the spec; none for a spec not named. They are copied when a batch is
-        made, so a change of them leaves the batches made before as they are.
-        :meth:`create` leaves out those at ``source_columns``.
+        The first settings of a new batch, by spec name. They are copied when
+        a batch is made.
     staged:
-        The names of the specs whose batches run their rows through a stage,
-        as :class:`~.reduction.Batch` takes it. It is read each time the
-        manager makes the ``Batch`` of a label, so it applies to the batches
+        The names of the specs whose batches run their rows through a stage.
+        Read each time the manager makes a ``Batch``, so it applies to batches
         made before too.
-
-    Attributes
-    ----------
-    definitions:
-        Where the batches are kept, also the entries that
-        :class:`~.intake.Intake` writes.
     """
 
     def __init__(
@@ -141,7 +92,7 @@ class BatchManager:
 
     @property
     def revision(self) -> int:
-        """Counts the changes of the headers."""
+        """Changes whenever :meth:`headers` may return something else."""
         return self._revision
 
     def create(
@@ -157,55 +108,35 @@ class BatchManager:
         label: str | None = None,
     ) -> Batch:
         """
-        Make a batch and keep it; its ``Batch``, whose ``label`` names it.
-        Nothing is written if a check fails; :meth:`check` comes first. The
-        header is written after the
-        other entries of the batch, so a label without a header is no batch.
+        Make a batch, write it to the definitions, and return its ``Batch``.
 
-        If the definitions refuse a write, the entries written are deleted,
-        and what was kept before stays. If a delete is refused too, as when
-        the process stops, what is left is a label with entries and no header,
-        which :meth:`remove` removes.
+        Nothing is written if a check fails. If the definitions reject a
+        write, the entries written are deleted.
 
         Parameters
         ----------
         spec:
-            The name of the spec. The batch is of the version the workspace
-            binds, the highest if several.
-        title:
-            What the batch is called.
+            The name of the spec. The batch is of the version that the
+            workspace binds, the highest if several.
         table:
             The first batch table, as :meth:`~.reduction.Batch.set_table`
-            takes it; its parameter columns are the blanks of the template. One
-            without rows or columns if not given.
+            accepts it. Empty if not given.
         source_columns:
             The parameters that a row source fills
-            (:attr:`.reduction.Batch.source_columns`), kept as the blanks of the
-            settings: each is a column of ``table``, an empty cell there means
-            that the row waits for its file, and the settings given are left
-            out there (:meth:`.reduction.Batch.settable`).
+            (:attr:`.reduction.Batch.source_columns`). Settings there are
+            dropped.
         parameter_columns:
-            Parameters that are parameter columns of the batch, of empty
-            cells, besides those of ``table``; a column of ``table`` keeps its
-            cells.
-        description:
-            What a person says of the batch.
+            Parameter columns of empty cells to add to ``table``.
         settings:
-            The settings to start with, in place of those that the manager
-            was given for the spec; those at ``source_columns`` are left out.
+            The first settings, in place of those of the manager for the spec.
         label:
             The label of the batch. If not given, the time of making,
-            ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if that is
-            taken.
+            ``YYYYMMDD-HHMMSS``, with ``-2``, ``-3``, ... added if taken.
 
         Raises
         ------
         ValueError
-            If ``title`` is empty or only spaces; if ``label`` is not letters,
-            digits, ``_``, ``.`` and ``-``, starting with none of the last
-            two, or has definitions or records; if the workspace binds no
-            spec ``spec``; or if the table is refused, as ``set_table``
-            refuses it, also for a batch table without a column of ``source_columns``.
+            As :meth:`check` and :meth:`~.reduction.Batch.set_table` raise.
         """
         self.check(spec, title=title, label=label)
         if label is None:
@@ -223,7 +154,7 @@ class BatchManager:
         # Refused here, before anything is written.
         table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
         batch = self._new_batch(label, bound, {}, None, source_columns)
-        # what to delete if a write is refused
+        # what to delete if a write is rejected
         written = [entry.key(label) for entry in LABEL_ENTRIES[1:]]
         try:
             batch.set_table(table)
@@ -242,9 +173,12 @@ class BatchManager:
 
     def check(self, spec: str, *, title: str, label: str | None) -> None:
         """
-        Raise ``ValueError`` as :meth:`create` refuses ``spec``, ``title``
-        and ``label``, without rows: so a caller that lists rows first, such
-        as :meth:`.intake.Intake.create`, refuses in the same order.
+        Raise ``ValueError`` if :meth:`create` would reject ``spec``, ``title``
+        or ``label``.
+
+        A label is taken if it has definitions or records. For a caller that
+        lists rows first, such as :meth:`.intake.Intake.create`, so that it
+        raises in the same order as :meth:`create`.
         """
         if label is not None:
             _check_label(label)
@@ -255,8 +189,8 @@ class BatchManager:
 
     def spec_named(self, spec: str) -> WorkflowSpec[Any, Any]:
         """
-        The spec of name ``spec`` that the workspace binds, the highest
-        version if several; ``ValueError`` if it binds none.
+        The spec named ``spec`` that the workspace binds, the highest version
+        if several. Raises ``ValueError`` if it binds none.
         """
         try:
             return self.client.spec_named(spec)
@@ -275,19 +209,17 @@ class BatchManager:
 
     def batch(self, label: str) -> Batch:
         """
-        The batch of ``label``, made from its definitions at the first call.
-        Ask for the batch each time it is used: one handed out before must not
-        be used after :meth:`remove`.
+        The ``Batch`` of ``label``, made from its definitions at the first
+        call.
 
-        Raises ``KeyError`` if no batch has the label; ``ValueError`` if the
-        workspace binds no spec of the name of its settings, or if its
-        settings or rows cannot be read. A version of the spec that takes
-        another kind of value at a column of the batch table, or that has a
-        parameter of the name of a note, refuses the cells of the batch table, and
-        the batch cannot be shown either.
+        Ask for the batch each time: one returned before :meth:`remove` must
+        not be used after.
 
-        The blanks of the settings kept are the source columns of the batch
-        (:attr:`.reduction.Batch.source_columns`).
+        Raises ``KeyError`` if no batch has the label. Raises ``ValueError`` if
+        the workspace binds no spec of that name, or the settings or the batch
+        table cannot be read. A spec version that accepts another kind of value
+        at a column, or has a parameter named like a note column, rejects the
+        batch table.
         """
         if (batch := self._batches.get(label)) is not None:
             return batch
@@ -328,11 +260,7 @@ class BatchManager:
     def change(
         self, label: str, *, title: str | None = None, description: str | None = None
     ) -> None:
-        """
-        Change what is given of the header of ``label``, and keep it. Raises
-        ``KeyError`` if no batch has the label, and ``ValueError`` for an
-        empty title.
-        """
+        """Change the title or the description of ``label``, and write the header."""
         header = self._headers[label]
         header = Header(
             header.title if title is None else title,
@@ -344,16 +272,14 @@ class BatchManager:
 
     def remove(self, label: str) -> None:
         """
-        Forget the batch of ``label`` and remove every entry of it
-        (:data:`~.definition.LABEL_ENTRIES`); its records stay, and those running
-        keep running. A ``Batch`` of the label handed out before must not be
-        used after: it would write its definitions again. A label that keeps
-        entries but no header, as a ``create`` or ``remove`` cut off leaves
-        it, is removed too, and can then be made again. Raises ``KeyError``
-        if no batch has the label and no entry is kept of it.
+        Remove the batch of ``label`` and every entry of the label. Its records
+        stay, and running ones keep running.
 
-        The header is deleted first, so a batch is never listed half removed.
-        Whether the batch follows is kept with the label, so it goes too.
+        A ``Batch`` of the label returned before must not be used after: it
+        would write its definitions again. A label with entries and no header,
+        as an interrupted :meth:`create` or :meth:`remove` leaves it, is
+        removed too. Raises ``KeyError`` if the label has neither a batch nor
+        an entry.
         """
         if label not in self._headers and label not in self.definitions.labels():
             raise KeyError(label)
