@@ -16,11 +16,10 @@ from ess.batch import (
     RowSource,
 )
 from ess.batch.definition import (
+    HEADER,
+    SETTINGS,
+    SOURCE,
     Key,
-    header_key,
-    settings_key,
-    source_key,
-    source_of,
 )
 
 from ess.apps import Client
@@ -61,7 +60,7 @@ def made(intake: Intake, sample: Measure) -> Intake:
 def test_a_batch_made_from_a_source_takes_and_considers_its_filled_rows(
     made: Intake, definitions: FolderDefinitions
 ) -> None:
-    kept = definitions.load(source_key('a'), source_of)
+    kept = SOURCE.load(definitions, 'a')
 
     assert list(made.manager.batch('a').frame().index) == ['3', '4', 'mine']
     assert made.source('a') == 'pairs'
@@ -82,8 +81,8 @@ def test_a_source_json_with_fills_is_refused_when_read(
     intake: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
     from_pairs(intake, 'plain', title='A', label='a')
-    kept = definitions.load(source_key('a'), dict)
-    definitions.save(source_key('a'), {**kept, 'fills': ['sample']})
+    kept = definitions.load(SOURCE.key('a'), dict)
+    definitions.save(SOURCE.key('a'), {**kept, 'fills': ['sample']})
 
     with pytest.raises(ValueError, match=r'source\.json: fills: Unexpected'):
         _again(client, definitions).source('a')
@@ -149,7 +148,7 @@ def test_a_range_takes_the_filled_rows_between_its_ends_and_considers_all(
     batch = four.create(PLAIN.name, title='A', source='pairs', choose=chosen)
 
     assert list(batch.frame().index) == taken
-    considered = definitions.load(source_key(batch.label), source_of).considered
+    considered = SOURCE.load(definitions, batch.label).considered
     assert considered == {'1', '2', '4'}  # not 3, which waits
 
 
@@ -300,7 +299,7 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     assert taken['sample'] == 'uuid:run-2'
     assert pd.isna(taken['transmission'])
     assert list(batch.frame().index) == ['1']
-    assert definitions.load(source_key('a'), source_of).considered == {'1', '2'}
+    assert SOURCE.load(definitions, 'a').considered == {'1', '2'}
 
 
 @pytest.mark.parametrize('added_by', ['step', 'take'])
@@ -336,9 +335,9 @@ def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
     sample(1, 'water')
     from_pairs(intake, 'plain', title='A', label='a', follow=True)
     sample(2, 'oil', partner=False)
-    kept = definitions.load(settings_key('a'), dict)
+    kept = definitions.load(SETTINGS.key('a'), dict)
     stale = {**kept['params'], 'transmission': 'run:1001'}
-    definitions.save(settings_key('a'), {**kept, 'params': stale})
+    definitions.save(SETTINGS.key('a'), {**kept, 'params': stale})
     again = _again(client, definitions)  # as after a restart
 
     again.take('a', ['2'])
@@ -380,7 +379,7 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
         intake.step()
 
     # A key typed by hand is considered only by a step that reads the source.
-    assert definitions.load(source_key('a'), source_of).considered == {'1'}
+    assert SOURCE.load(definitions, 'a').considered == {'1'}
 
 
 @pytest.mark.parametrize(
@@ -498,8 +497,7 @@ def _follows(definitions: FolderDefinitions) -> list[str]:
     return [
         label
         for label in definitions.labels()
-        if (made := definitions.load(source_key(label), source_of)) is not None
-        and made.follows
+        if (made := SOURCE.load(definitions, label)) is not None and made.follows
     ]
 
 
@@ -507,7 +505,7 @@ def test_a_source_json_that_cannot_be_read_hides_neither_follow_nor_other_batche
     two: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
     two.create('plain', title='C', source='pairs', label='c', follow=True)
-    definitions.save(source_key('a'), {'source': 'pairs'})
+    definitions.save(SOURCE.key('a'), {'source': 'pairs'})
     again = _again(client, definitions)
 
     assert again.following == 'c'
@@ -521,7 +519,7 @@ def test_a_batch_made_to_follow_ends_follow_on_the_one_before_then_writes_its_ow
 ) -> None:
     two.create('plain', title='C', source='pairs', label='c', follow=True)
 
-    assert refusing.saved[-3:] == [header_key('c'), source_key('a'), source_key('c')]
+    assert refusing.saved[-3:] == [HEADER.key('c'), SOURCE.key('a'), SOURCE.key('c')]
     assert _follows(definitions) == ['c']
 
 
@@ -619,7 +617,7 @@ def test_a_batch_told_to_follow_ends_follow_on_the_one_before_then_writes_its_ow
 ) -> None:
     two.follow('b')
 
-    assert refusing.saved[-2:] == [source_key('a'), source_key('b')]
+    assert refusing.saved[-2:] == [SOURCE.key('a'), SOURCE.key('b')]
     assert _follows(definitions) == ['b']
     assert two.following == 'b'
 
@@ -657,7 +655,7 @@ def test_a_batch_whose_source_is_not_registered_cannot_follow(
 def test_a_batch_refused_to_follow_leaves_the_one_before_following(
     two: Intake, refusing: Refusing, client: Client, definitions: FolderDefinitions
 ) -> None:
-    refusing.part = source_key('b')
+    refusing.part = SOURCE.key('b')
 
     with pytest.raises(NotKept):
         two.follow('b')
@@ -736,7 +734,7 @@ def test_a_kept_label_without_a_header_follows_not(
 def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
     two: Intake, refusing: Refusing
 ) -> None:
-    refusing.part = source_key('a')
+    refusing.part = SOURCE.key('a')
 
     with pytest.raises(NotKept):
         two.create('plain', title='C', source='pairs', label='c', follow=True)

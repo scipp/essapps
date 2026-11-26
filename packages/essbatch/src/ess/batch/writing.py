@@ -39,7 +39,7 @@ from ess.apps.errors import said
 from ess.apps.records import Record
 from ess.apps.writers import SCIPP_HDF5, About, Person, Writer
 
-from .definition import Form, form_data, form_key, form_of
+from .definition import FORM, Form
 from .export import RowWriter
 from .manager import BatchManager
 from .table import names
@@ -101,7 +101,7 @@ class Writing:
         is the batch's, and its owner and contact are the ``contact`` given.
         """
         spec = self.manager.batch(label).spec
-        kept = self.manager.definitions.load(form_key(label), form_of)
+        kept = FORM.load(self.manager.definitions, label)
         if kept is not None:
             return kept
         contact = self._contact
@@ -125,7 +125,7 @@ class Writing:
             raise ValueError(f'{spec.name} has no output {", ".join(unknown)}')
         if writer.outputs is None and not form.outputs:
             raise ValueError(f'{writer.title} writes the outputs chosen: choose one')
-        self.manager.definitions.save(form_key(label), form_data(form))
+        FORM.save(self.manager.definitions, label, form)
 
     def by_form(self, label: str) -> tuple[RowWriter, dict[str, About]]:
         """

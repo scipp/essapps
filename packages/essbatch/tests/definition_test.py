@@ -25,16 +25,12 @@ from ess.batch import (
 from ess.batch.definition import (
     CORRECTIONS,
     FORMAT,
+    HEADER,
+    ROWS,
+    SETTINGS,
+    SOURCE,
     FromSource,
     Key,
-    header_data,
-    header_key,
-    header_of,
-    rows_key,
-    settings_key,
-    source_data,
-    source_key,
-    source_of,
 )
 from ess.batch.table import KEY, frame_of
 from ess.batch.templates import load_template
@@ -148,7 +144,7 @@ def test_the_settings_kept_are_a_template_of_all_settings_that_the_command_reads
         batch.settings = settings
         batch.make_column('thickness')
 
-    path = FolderDefinitions(folder).path(settings_key(made))
+    path = FolderDefinitions(folder).path(SETTINGS.key(made))
 
     assert load_template(path) == Template(batch.spec, params=settings)
     with opened() as (intake, _):
@@ -172,7 +168,7 @@ def test_the_settings_kept_are_a_template_of_all_settings_that_the_command_reads
 def test_rows_that_cannot_be_read_are_refused_naming_the_file_and_the_entry(
     opened: Opened, made: str, folder: Path, data: Any, entry: str
 ) -> None:
-    FolderDefinitions(folder).save(rows_key(made), data)
+    FolderDefinitions(folder).save(ROWS.key(made), data)
 
     with opened() as (intake, _):
         with pytest.raises(ValueError, match=rf'b/rows\.json: {re.escape(entry)}'):
@@ -204,7 +200,7 @@ def test_settings_of_another_version_are_taken_as_they_are(
     opened: Opened, made: str, folder: Path
 ) -> None:
     kept = {'spec': {'name': 'plain', 'version': 9}, 'params': {'gone': 1}}
-    FolderDefinitions(folder).save(settings_key(made), kept)
+    FolderDefinitions(folder).save(SETTINGS.key(made), kept)
 
     with opened() as (intake, _):
         batch = intake.manager.batch(made)
@@ -225,7 +221,7 @@ def test_a_folder_that_cannot_be_written_raises_that_the_table_was_not_kept(
 def test_a_label_is_kept_in_a_folder_of_its_own(tmp_path: Path) -> None:
     store = FolderDefinitions(tmp_path)
     labels = ['auto/iofq', 'auto%2Fiofq', '..', '.', 'labels']
-    paths = [store.path(rows_key(label)) for label in labels]
+    paths = [store.path(ROWS.key(label)) for label in labels]
 
     assert len(set(paths)) == len(labels)
     assert all(p.parent.parent == tmp_path / 'definitions' / 'labels' for p in paths)
@@ -241,7 +237,7 @@ def test_a_label_that_looks_like_a_path_keeps_its_rows_inside_the_definitions(
 
     edit(batch, '1', thickness=2.0)
 
-    assert store.load(rows_key(label), frame_of).loc['1', 'thickness'] == 2.0
+    assert store.load(ROWS.key(label), frame_of).loc['1', 'thickness'] == 2.0
     written = [p for p in folder.rglob('*.json') if p.name == 'rows.json']
     assert [p.parent.parent for p in written] == [folder / 'definitions' / 'labels']
 
@@ -261,7 +257,7 @@ def test_a_file_left_by_a_write_cut_off_is_not_read_and_not_removed(
 ) -> None:
     with opened() as (intake, _):
         edit(intake.manager.batch(made), '1', thickness=2.0)
-    path = FolderDefinitions(folder).path(rows_key(made))
+    path = FolderDefinitions(folder).path(ROWS.key(made))
     # A reader cannot tell it from the file of a write of another process.
     left = path.parent / f'.{path.name}.x1y2z3'
     left.write_text('{"half')
@@ -313,8 +309,8 @@ def test_the_labels_are_those_with_a_part_kept_written_back_as_given(
 ) -> None:
     store = FolderDefinitions(folder)
     for label in ('b', 'a.x', 'auto/iofq'):
-        store.save(rows_key(label), {})
-    cut_off = store.path(rows_key('c')).parent
+        store.save(ROWS.key(label), {})
+    cut_off = store.path(ROWS.key('c')).parent
     cut_off.mkdir(parents=True)
     (cut_off / '.rows.json.k3j2h1g0').write_text('{')
 
@@ -329,23 +325,23 @@ def test_a_part_deleted_is_gone_and_its_label_with_its_last_part(
     folder: Path,
 ) -> None:
     store = FolderDefinitions(folder)
-    store.save(rows_key('a'), {})
-    store.save(settings_key('a'), {'x': 1})
+    store.save(ROWS.key('a'), {})
+    store.save(SETTINGS.key('a'), {'x': 1})
 
-    store.delete(rows_key('a'))
-    assert store.load(rows_key('a'), lambda data: data) is None
+    store.delete(ROWS.key('a'))
+    assert store.load(ROWS.key('a'), lambda data: data) is None
     assert store.labels() == ['a']
 
-    store.delete(settings_key('a'))
+    store.delete(SETTINGS.key('a'))
     assert store.labels() == []
 
 
 def test_deleting_a_part_never_kept_does_nothing(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    store.save(rows_key('a'), {})
+    store.save(ROWS.key('a'), {})
 
-    store.delete(rows_key('b'))
-    store.delete(source_key('a'))
+    store.delete(ROWS.key('b'))
+    store.delete(SOURCE.key('a'))
 
     assert store.labels() == ['a']
 
@@ -354,42 +350,42 @@ def test_a_header_is_kept_and_read_back(folder: Path) -> None:
     store = FolderDefinitions(folder)
     header = Header('Sample runs', 'those of May')
 
-    store.save(header_key('a'), header_data(header))
+    HEADER.save(store, 'a', header)
 
-    assert store.load(header_key('a'), header_of) == header
-    assert store.load(header_key('b'), header_of) is None
+    assert HEADER.load(store, 'a') == header
+    assert HEADER.load(store, 'b') is None
 
 
 def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
     folder: Path,
 ) -> None:
     store = FolderDefinitions(folder)
-    store.save(header_key('a'), {'title': 3})
+    store.save(HEADER.key('a'), {'title': 3})
 
     with pytest.raises(ValueError, match=r'header\.json: title: '):
-        store.load(header_key('a'), header_of)
+        HEADER.load(store, 'a')
 
 
 def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> None:
     store = FolderDefinitions(folder)
     made = FromSource('pairs', frozenset({'60340', '0342', '60339'}), follows=True)
-    key = source_key('a')
+    key = SOURCE.key('a')
 
-    store.save(key, source_data(made))
+    store.save(key, SOURCE.dump(made))
 
-    assert source_data(made)['considered'] == ['0342', '60339', '60340']
-    assert store.load(key, source_of) == made
+    assert SOURCE.dump(made)['considered'] == ['0342', '60339', '60340']
+    assert store.load(key, SOURCE.read) == made
     store.save(key, {'source': 'pairs', 'considered': '60339', 'follows': False})
     with pytest.raises(ValueError, match=r'source\.json: considered: '):
-        store.load(key, source_of)
+        store.load(key, SOURCE.read)
     store.save(key, {'source': 'pairs', 'considered': ['60339']})
     with pytest.raises(ValueError, match=r'source\.json: follows: Field required'):
-        store.load(key, source_of)
+        store.load(key, SOURCE.read)
 
 
 def test_a_folder_gets_the_format_with_its_first_definitions(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    store.save(rows_key('a'), {})
+    store.save(ROWS.key('a'), {})
 
     format_file = folder / 'definitions' / 'format.json'
     assert json.loads(format_file.read_text()) == {'format': FORMAT}
@@ -400,7 +396,7 @@ def test_a_folder_gets_the_format_with_its_first_definitions(folder: Path) -> No
 def test_a_folder_of_definitions_of_another_format_is_refused(
     folder: Path, kept: int | None, said: object
 ) -> None:
-    FolderDefinitions(folder).save(rows_key('a'), {})
+    FolderDefinitions(folder).save(ROWS.key('a'), {})
     format_file = folder / 'definitions' / 'format.json'
     if kept is None:
         format_file.unlink()

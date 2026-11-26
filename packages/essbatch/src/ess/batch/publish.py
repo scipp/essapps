@@ -32,7 +32,7 @@ from ess.apps.records import Record
 from ess.apps.scicat import Catalogue, publish
 from ess.apps.writers import About
 
-from .definition import NotKept, Published, Publishing, publish_key, publishing_data
+from .definition import PUBLISH, NotKept, Published, Publishing
 from .export import RowWriter
 from .writing import Writing
 
@@ -144,6 +144,4 @@ class Publisher:
         return self.writing.manager.batch(label).publishing()
 
     def _keep(self, label: str, publishing: Publishing) -> None:
-        self.writing.manager.definitions.save(
-            publish_key(label), publishing_data(publishing)
-        )
+        PUBLISH.save(self.writing.manager.definitions, label, publishing)

@@ -47,19 +47,16 @@ from ess.apps.client import Client
 from ess.spec import WorkflowSpec
 
 from .definition import (
+    HEADER,
+    LABEL_ENTRIES,
+    ROWS,
+    SETTINGS,
     DefinitionStore,
     Header,
     NotKept,
-    header_data,
-    header_key,
-    header_of,
-    label_keys,
-    rows_key,
-    settings_key,
-    template_of,
 )
 from .reduction import Batch
-from .table import frame_of, typed
+from .table import typed
 
 
 def _check_label(label: str) -> None:
@@ -135,7 +132,7 @@ class BatchManager:
         self._staged = staged
         self._headers: dict[str, Header] = {}
         for label in definitions.labels():
-            if (header := definitions.load(header_key(label), header_of)) is not None:
+            if (header := HEADER.load(definitions, label)) is not None:
                 self._headers[label] = header
         self._batches: dict[str, Batch] = {}
         self._version = 0
@@ -224,12 +221,13 @@ class BatchManager:
         # Refused here, before anything is written.
         table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
         batch = self._kept(label, bound, {}, None, fills)
-        _, *written = label_keys(label)  # what to delete if a write is refused
+        # what to delete if a write is refused
+        written = [entry.key(label) for entry in LABEL_ENTRIES[1:]]
         try:
             batch.put(table)
             batch.settings = batch.settable(settings)
-            self.definitions.save(header_key(label), header_data(header))
-            written.insert(0, header_key(label))
+            HEADER.save(self.definitions, label, header)
+            written.insert(0, HEADER.key(label))
         except NotKept:
             with suppress(NotKept):  # the first error is what to say
                 for key in written:
@@ -293,12 +291,12 @@ class BatchManager:
             return batch
         if label not in self._headers:
             raise KeyError(label)
-        template = self.definitions.load(settings_key(label), template_of)
+        template = SETTINGS.load(self.definitions, label)
         if template is None:
             raise ValueError(f'{label}: no settings are kept')
         spec = self.spec_named(template.spec.name)
         rows = self.definitions.load(
-            rows_key(label), lambda data: typed(frame_of(data), spec.params)
+            ROWS.key(label), lambda data: typed(ROWS.read(data), spec.params)
         )
         batch = self._kept(label, spec, template.params, rows, template.blanks)
         self._batches[label] = batch
@@ -338,14 +336,14 @@ class BatchManager:
             header.title if title is None else title,
             header.description if description is None else description,
         )
-        self.definitions.save(header_key(label), header_data(header))
+        HEADER.save(self.definitions, label, header)
         self._headers[label] = header
         self._version += 1
 
     def remove(self, label: str) -> None:
         """
         Forget the batch of ``label`` and remove every entry of it
-        (:func:`~.definition.label_keys`); its records stay, and those running
+        (:data:`~.definition.LABEL_ENTRIES`); its records stay, and those running
         keep running. A ``Batch`` of the label handed out before must not be
         used after: it would write its definitions again. A label that keeps
         entries but no header, as a ``create`` or ``remove`` cut off leaves
@@ -357,11 +355,11 @@ class BatchManager:
         """
         if label not in self._headers and label not in self.definitions.labels():
             raise KeyError(label)
-        header, *parts = label_keys(label)
-        self.definitions.delete(header)
+        header, *parts = LABEL_ENTRIES
+        self.definitions.delete(header.key(label))
         self._headers.pop(label, None)
         self._version += 1
         if (batch := self._batches.pop(label, None)) is not None:
             batch.close()
-        for key in parts:
-            self.definitions.delete(key)
+        for entry in parts:
+            self.definitions.delete(entry.key(label))

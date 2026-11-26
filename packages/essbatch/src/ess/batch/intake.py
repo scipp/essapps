@@ -26,7 +26,7 @@ until :meth:`Intake.stop`, its removal, or another batch that starts to
 follow. :meth:`Intake.step` is one step of Follow on the batch that
 follows::
 
-    made = source_of(label)                                  # source.json
+    made = SOURCE.load(definitions, label)                   # source.json
     done = step(batch(label), sources[made.source], made.considered)  # put, reduce
     source.json = replace(made, considered=done.considered)  # after rows.json;
     # if the step raised: made.considered | the keys of the batch table
@@ -49,13 +49,7 @@ from ess.spec import WorkflowSpec
 
 from . import auto
 from .auto import SourceError, Step
-from .definition import (
-    FromSource,
-    NotKept,
-    source_data,
-    source_key,
-    source_of,
-)
+from .definition import SOURCE, FromSource, NotKept
 from .manager import BatchManager
 from .reduction import Batch
 from .source import Range, RowSource, filled, rows_of
@@ -180,7 +174,7 @@ class Intake:
     def _write_follows(self, label: str, follows: bool) -> None:
         """Write whether the batch of ``label`` follows."""
         made = replace(self._made(label), follows=follows)
-        self.manager.definitions.save(source_key(label), source_data(made))
+        SOURCE.save(self.manager.definitions, label, made)
 
     def stop(self) -> None:
         """
@@ -391,9 +385,7 @@ class Intake:
         try:
             self._follow_instead(
                 before if follow else None,
-                lambda: self.manager.definitions.save(
-                    source_key(batch.label), source_data(made)
-                ),
+                lambda: SOURCE.save(self.manager.definitions, batch.label, made),
             )
         except NotKept:
             with suppress(NotKept):  # the first error is what to say
@@ -410,7 +402,7 @@ class Intake:
         """
         if label not in self.manager.headers():
             raise KeyError(label)
-        return self.manager.definitions.load(source_key(label), source_of)
+        return SOURCE.load(self.manager.definitions, label)
 
     def _made(self, label: str) -> FromSource:
         """
@@ -521,4 +513,4 @@ class Intake:
         """Keep ``considered`` as the keys of the source of ``label``, if changed."""
         if considered != made.considered:
             kept = replace(made, considered=considered)
-            self.manager.definitions.save(source_key(label), source_data(kept))
+            SOURCE.save(self.manager.definitions, label, kept)

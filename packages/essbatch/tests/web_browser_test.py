@@ -26,7 +26,9 @@ import pandas as pd
 import pytest
 import uvicorn
 from ess.batch import Batch, BatchManager, CorrectedFiles, Header, Intake
-from ess.batch.definition import rows_key
+from ess.batch.definition import (
+    ROWS,
+)
 from ess.batch.web import Pages, Shown, create_app
 from ess.batch.web.api import STATIC
 from ess.batch.writing import Writing
@@ -1797,7 +1799,7 @@ def test_a_batch_that_cannot_be_shown_says_why_and_shows_the_list(
     first = BatchManager(client, definitions=refusing)
     first.create(STAGED.name, title='Good', rows=toys.rows(client), label='good')
     first.create(STAGED.name, title='Broken', label='broken')
-    refusing.save(rows_key('broken'), {'nonsense': 1})
+    refusing.save(ROWS.key('broken'), {'nonsense': 1})
     manager = BatchManager(client, definitions=refusing)
     pages = Pages(Intake(manager, sources=SOURCES), files=files, marks=Marks)
     with serve(create_app(pages)) as url:

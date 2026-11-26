@@ -318,7 +318,7 @@ class Batch:
         if to_json(data) == to_json(data_of(self._rows)):
             return
         if self._definitions is not None:
-            self._definitions.save(definition.rows_key(self.label), data)
+            self._definitions.save(definition.ROWS.key(self.label), data)
         self._set(rows)
 
     @property
@@ -438,8 +438,7 @@ class Batch:
         """
         kept = None
         if self._definitions is not None:
-            key = definition.publish_key(self.label)
-            kept = self._definitions.load(key, definition.publishing_of)
+            kept = definition.PUBLISH.load(self._definitions, self.label)
         return definition.Publishing() if kept is None else kept
 
     def published(self) -> dict[str, str]:
@@ -452,10 +451,8 @@ class Batch:
         :attr:`fills` as the blanks of the template.
         """
         if self._definitions is not None:
-            key = definition.settings_key(self.label)
             kept = Template(self.spec, params=settings, blanks=sorted(self.fills))
-            data = definition.template_data(kept)
-            self._definitions.save(key, data)
+            definition.SETTINGS.save(self._definitions, self.label, kept)
 
     def template(self) -> Template:
         """

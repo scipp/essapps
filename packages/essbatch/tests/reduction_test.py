@@ -15,12 +15,12 @@ from ess.batch import (
     FolderDefinitions,
     NotKept,
     RowState,
+    definition,
     earlier_settings,
     left_to_reduce,
     ready,
     rows_of,
 )
-from ess.batch.definition import settings_key, template_of
 from ess.batch.table import as_request, cell_of, data_of
 from pydantic import BaseModel, Field, StrictInt
 
@@ -177,7 +177,7 @@ def test_a_put_keeps_the_settings_at_a_column_added_and_at_a_column_dropped(
         ('sample', 'transmission'),
     )
     assert batch.template().params == settings
-    kept = definitions.load(settings_key('s'), template_of)
+    kept = definition.SETTINGS.load(definitions, 's')
     assert kept == Template(PLAIN, params=settings)
 
 
