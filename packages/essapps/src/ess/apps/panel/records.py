@@ -20,7 +20,7 @@ from .table import Table, with_sidebar
 def describe(client: Client, listing: Listing, record: Record) -> str:
     """
     A record in Markdown: status, spec, submitter and time, outputs, the files and
-    records it reads, params, and why it failed.
+    outputs it reads, params, and why it failed or was cancelled.
     """
     spec = listing.specs.get(record.id)
     status = listing.status[record.id]

@@ -40,7 +40,7 @@ class App:
     A form per spec with a button that submits, and the outputs and records.
 
     ``forms`` holds the forms by spec title. ``message`` shows the outcome of the
-    last submission, once its record has finished.
+    last submission: rejected, submitted, then computed or failed.
 
     Parameters
     ----------
@@ -96,7 +96,7 @@ class App:
         """
         Submits the request of the form shown.
 
-        Returns its record, pending, or ``None`` if the client rejects the
+        Returns its record, or ``None`` if the form or the client rejects the
         request, for example because a field has nothing given.
         """
         try:
