@@ -98,7 +98,8 @@ def publish(
     are the files with a catalogue identifier that the record read, also
     through upstream records. The used software is that of the processes that
     ran the record and its upstream records (:meth:`~ess.apps.Client.software`),
-    with ``unknown`` for a record without any.
+    with ``unknown`` for a record without any. A record has none when its
+    workflow never ended, such as one cancelled or failed at a restart.
 
     ``format`` is the name of the writer of ``files``. The dataset stores it,
     since files of two formats may have the same names, such as ``iofq.h5``.

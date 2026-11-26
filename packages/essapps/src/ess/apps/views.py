@@ -111,8 +111,9 @@ class Views:
         self.feed: list[str] = []
 
     def apply(self, event: Event) -> None:
-        # Only a submission is checked. A start, finish or push that names an
-        # unknown record or accumulator is applied as it is.
+        # Only a submission and the environment of a finish are checked. A
+        # start, finish or push that names an unknown record or accumulator is
+        # applied as it is.
         match event:
             case Submitted():
                 self.spec_digests.update(event.specs)
@@ -122,6 +123,14 @@ class Views:
             case Started():
                 self.started.add(event.record)
             case Finished():
+                if (
+                    event.environment is not None
+                    and event.environment not in self.environments
+                ):
+                    raise ValueError(
+                        f'the finish of record {event.record} names environment '
+                        f'{event.environment}, which the log does not hold'
+                    )
                 self.feed.append(event.record)
                 self.finished[event.record] = event
             case Environment():

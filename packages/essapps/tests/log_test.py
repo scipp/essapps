@@ -512,6 +512,42 @@ def test_a_record_cancelled_before_it_ran_names_no_software(
     assert client.software([running, waiting]) == [SOFTWARE, None]
 
 
+def test_a_record_whose_workflow_failed_names_the_software(files: FakeFiles) -> None:
+    def fail(params: RunsParams) -> ValueOutputs:
+        raise RuntimeError('no beam')
+
+    workspace = Workspace(
+        proposal='p1',
+        files=files,
+        bind=[function_binding(RUNS, fail)],
+        software=lambda: SOFTWARE,
+    )
+    with Client(workspace, submitter='anna', on_close=workspace.close) as client:
+        record = client.submit(RUNS, params={'cans': [], 'runs': [file(run=1)]})
+
+        assert client.wait(record) == Status.FAILED
+        assert client.software(record) == SOFTWARE
+
+
+def test_a_record_failed_at_a_restart_names_no_software(
+    tmp_path: Path,
+    start: Callable[[Path], Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+    entered: threading.Event,
+) -> None:
+    first = start(tmp_path / 'log')
+    loading.clear()
+    running = first.submit(LOAD, params=_sample(1))
+    assert entered.wait(timeout=5)
+
+    again = restart(tmp_path / 'log')
+    loading.set()
+
+    assert again.status(running) == Status.FAILED
+    assert again.software(running) is None
+
+
 def test_other_software_is_logged_as_an_environment_and_old_records_keep_theirs(
     tmp_path: Path, start: Callable[..., Client]
 ) -> None:
@@ -544,6 +580,19 @@ def test_a_workspace_with_the_same_software_logs_no_environment_again(
         e for e in Log.read(tmp_path / 'again') if isinstance(e, Environment)
     ]
     assert environments == [Environment.of(SOFTWARE)]
+
+
+def test_a_finish_naming_an_environment_the_log_lacks_is_refused(
+    tmp_path: Path, start: Callable[[Path], Client]
+) -> None:
+    start(tmp_path / 'log').compute(LOAD, params=_sample(1))
+    lines = (tmp_path / 'log').read_bytes().splitlines(keepends=True)
+    kept = [line for line in lines if b'"kind":"environment"' not in line]
+    assert len(kept) == len(lines) - 1
+    (tmp_path / 'again').write_bytes(b''.join(kept))
+
+    with pytest.raises(ValueError, match='which the log does not hold'):
+        start(tmp_path / 'again')
 
 
 def test_a_refused_call_writes_nothing_to_the_log(

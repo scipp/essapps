@@ -114,8 +114,8 @@ class Finished(BaseModel, frozen=True, extra='forbid'):
     ``failure`` is why it failed, or why the workspace cancelled it. ``omitted``
     names the optional outputs that the workflow of a completed record did not
     return. ``environment`` is the ID of the :class:`Environment` of the process
-    that ran the record, or ``None`` for a record whose workflow did not end in
-    the workspace's process, such as a cancelled one.
+    that ran the record, or ``None`` for a record whose workflow never ended,
+    such as a cancelled record or one that failed at a restart.
     """
 
     kind: Literal['finished'] = 'finished'

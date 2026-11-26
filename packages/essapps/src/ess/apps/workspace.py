@@ -447,14 +447,16 @@ class Workspace(WorkspaceProtocol):
         Without it, the persisted work that goes on fails.
     software:
         Returns the software of this process, which the log holds for each
-        record that runs here. Called once, when the first record finishes.
+        record that runs here. Called once, when the workspace is made, so
+        an error it raises is raised here.
 
     Raises
     ------
     ValueError
         If two bindings have the same spec name and version, or the log holds
-        an event of another proposal or a submission whose spec digest the log
-        lacks. In the second case the log is closed.
+        an event of another proposal, a submission whose spec digest the log
+        lacks, or a finish whose environment the log lacks. A refused log is
+        closed.
     TypeError
         If ``bind`` is not a list of bindings.
     """
@@ -471,8 +473,7 @@ class Workspace(WorkspaceProtocol):
         software: Callable[[], Sequence[str]] = installed_software,
     ) -> None:
         self._proposal = proposal
-        self._software = software
-        self._environment: Environment | None = None
+        self._environment = Environment.of(software())
         self._files = files
         self._store = store
         self._bound: dict[SpecId, _Bound] = {}
@@ -1153,8 +1154,6 @@ class Workspace(WorkspaceProtocol):
         The ID of this process's environment, appended to the log unless the
         log holds it.
         """
-        if self._environment is None:
-            self._environment = Environment.of(self._software())
         if self._environment.id not in self._views.environments:
             self._append_locked(self._environment)
         return self._environment.id

@@ -244,9 +244,10 @@ class RecordStatus:
     store raised, shown with its type.
 
     ``software`` holds the installed distributions of the process that ran the
-    record, as ``name==version``, sorted by name. It is ``None`` while the
-    record is pending, and for a record whose workflow did not end in the
-    workspace's process, such as a cancelled one.
+    record, as ``name==version``, as the workspace's ``software`` callable
+    returned them. The default, ``installed_software``, sorts them by name. It
+    is ``None`` while the record is pending, and for a record whose workflow
+    never ended, such as a cancelled record or one that failed at a restart.
     """
 
     status: Status

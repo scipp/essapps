@@ -42,7 +42,7 @@ A saved graph carries a `requirements` section: operating system, interpreter, e
 For a distribution installed from a git checkout or URL it reads PEP 610 `direct_url.json` and records the commit or archive hash ([from_python L64-L100][pep610]); this needs only `importlib.metadata`.
 `ewoks install` rebuilds an environment from a saved graph, and the main branch (7.0.0rc1, unreleased) adds conda (`conda env export`) next to pip, uv, poetry, and pixi ([conda.py L47][conda]).
 `execute_graph` writes the graph with requirements only when given a destination ([bindings.py L79-L81][save]); most `blissoda` processors give one for each saved scan.
-Our provenance records each installed distribution with its version, without PEP 610 origins ([README, Provenance](../README.md#provenance)), and system story F2 asks for an environment that can be installed again ([system-stories.md](../system-stories.md)).
+In our workspace a finished record names each installed distribution with its version, without PEP 610 origins ([README, Provenance](../README.md#provenance)), and system story F2 asks for an environment that can be installed again ([system-stories.md](../system-stories.md)).
 Ewoks has no task versions: an old run is reproduced by installing its environment, one answer to the question deferred in [#44][i44] of how old spec versions stay runnable.
 
 **At ESRF, the acquisition side decides what to reduce, and with which inputs.**
