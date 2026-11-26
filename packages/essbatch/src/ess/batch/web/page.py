@@ -249,7 +249,8 @@ class Page:
         pages.files.list_again()
         self._columns: tuple[str, ...] | None = None
         self._fit()
-        self.refused: list[FieldError] = []
+        # The reasons of the last reduction refused that a cell or a setting shows.
+        self._refusals: list[FieldError] = []
         self.version = 1
         self.start = uuid.uuid4().hex[:8]
         # What :meth:`_live` gave at the last change of the version.
@@ -418,7 +419,7 @@ class Page:
         problem = view.settings_problem(errors, self.draft.unfit, titles)
         unapplied = self.draft.unapplied()
         marks = self.draft.at_applied(
-            e for e in (*unusable, *self.refused) if not e.entry
+            e for e in (*unusable, *self._refusals) if not e.entry
         )
         empty = batch.empty()
         header = self.pages.intake.manager.headers()[self.label]
@@ -457,7 +458,7 @@ class Page:
             may_be_columns=[
                 n for n in forms.edited(self.draft.fields) if n not in columns
             ],
-            refused=[view.refusal(e, named, titles) for e in self.refused],
+            refused=[view.refusal(e, named, titles) for e in self._refusals],
             follow=self.pages.follow.shown(self.label),
             files_problem=self.pages.files.listing.failure,
             output=view.output(
@@ -496,7 +497,7 @@ class Page:
         published: Mapping[str, str],
     ) -> Row:
         titles = self._titles
-        problems = view.problems(key, (*state.problems, *self.refused), titles)
+        problems = view.problems(key, (*state.problems, *self._refusals), titles)
         record = state.record
         failure = '' if record is None else failures.get(record.id, '')
         reason, changed = view.reason(state, problems, unsubmitted, failure, titles)
@@ -558,9 +559,9 @@ class Page:
 
     def _forget(self, keys: Sequence[str], column: str) -> None:
         """Forget the reasons of a refusal at ``column`` of rows ``keys``."""
-        self.refused = [
+        self._refusals = [
             e
-            for e in self.refused
+            for e in self._refusals
             if not (e.entry in keys and e.loc and str(e.loc[0]) == column)
         ]
 
@@ -644,7 +645,7 @@ class Page:
             change()
         except ValueError as error:
             raise Problem(f'Nothing was changed: {why(error)}.') from None
-        self.refused = [e for e in self.refused if not (e.loc and e.loc[0] == name)]
+        self._refusals = [e for e in self._refusals if not (e.loc and e.loc[0] == name)]
 
     @_action
     def make_column(self, name: str) -> str:
@@ -683,14 +684,14 @@ class Page:
             )
             records = self.batch.reduce(keys)
         except SubmitError as error:
-            self.refused = [e for e in error.errors if self._placed(e, frame.index)]
-            unplaced = [e for e in error.errors if e not in self.refused]
+            self._refusals = [e for e in error.errors if self._placed(e, frame.index)]
+            unplaced = [e for e in error.errors if e not in self._refusals]
             named = names(frame, self.batch.parameter_columns)
-            raise _Refusal(
+            raise _NotReduced(
                 [view.refusal(e, named, self._titles).text for e in unplaced],
-                len(self.refused),
+                len(self._refusals),
             ) from None
-        self.refused = []
+        self._refusals = []
         self._list_again()
         n = len(records)
         return f'Reducing {_rows(n)}.' if n else ''
@@ -749,7 +750,7 @@ class Page:
         self._show_settings()
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
-        self.refused = [e for e in self.refused if e.entry]
+        self._refusals = [e for e in self._refusals if e.entry]
         self.pages.follow.applied(self.label)
         return 'Applied the settings.'
 
@@ -993,7 +994,7 @@ class Page:
         return buffer.getvalue()
 
 
-class _Refusal(Problem):
+class _NotReduced(Problem):
     """
     A reduction refused. It says the reasons that no cell or setting shows,
     such as a row still running; those that one shows are in the state.
