@@ -225,7 +225,7 @@ class Pages:
         """
         A step of Follow on the batch that follows, if one does
         (:meth:`~ess.batch.Intake.step`), and what the page shows
-        of it; then :meth:`Page.stepped <.page.Page.stepped>` of its page if
+        of it; then :meth:`Page.after_step <.page.Page.after_step>` of its page if
         it is open, else :meth:`Runs.list_again <.runs.Runs.list_again>`,
         so that every page and the Runs view see the files that arrived.
         :func:`~.api.create_app` calls it on a timer. What the step raises is
@@ -241,13 +241,13 @@ class Pages:
             try:
                 if (done := self.intake.step()) is None:
                     return
-                self.last_step.stepped(label, done)
+                self.last_step.record_step(label, done)
             except Exception as error:  # the next step tries again
                 self.last_step.failure = step_failure(error)
             if (page := self._pages.get(label)) is None:
                 self.runs.list_again()
             else:
-                page.stepped()
+                page.after_step()
 
     def batches(self) -> Batches:
         """The batches, as the Batches view of each page lists them."""

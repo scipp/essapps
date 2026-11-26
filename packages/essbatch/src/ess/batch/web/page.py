@@ -115,7 +115,7 @@ not follow has no action of Follow. While a batch follows, :meth:`Pages.tick
 source that are new and filled, and reduces the rows that
 :func:`~ess.batch.not_reduced` gives, the rows that are ready and have
 no result, under the lock of all pages, with the batch's settings, whatever
-the form holds; then :meth:`Page.stepped` shows what the step changed, if
+the form holds; then :meth:`Page.after_step` shows what the step changed, if
 the page is open; a page made later shows the batch as it is then. The
 page of the batch that follows says what the last step raised, why rows were
 not reduced, at each such row, whose status stays that of its state, and how
@@ -726,7 +726,7 @@ class Page:
         self.pages.intake.stop()
         return 'Stopped following.'
 
-    def stepped(self) -> None:
+    def after_step(self) -> None:
         """
         Show what a step of Follow on this batch changed: list again once, and
         refresh the forms, since new rows may name files that they do not
@@ -762,7 +762,7 @@ class Page:
         # A refusal of a setting was a refusal of the settings replaced, and
         # Follow tries every row again with these at its next step.
         self._refusals = [e for e in self._refusals if e.request_key]
-        self.pages.last_step.applied(self.label)
+        self.pages.last_step.clear_submit_errors(self.label)
         return 'Applied the settings.'
 
     @_action

@@ -311,9 +311,9 @@ flowchart TD
     pages -->|"step(), create from a source"| intake
     pages -->|"create, remove, counts"| manager
     pages --> runs
-    pages -->|"stepped, failure"| last_step
+    pages -->|"record_step, failure"| last_step
     page -->|"listing, list_again"| runs
-    page -->|"token, shown, unsubmitted, applied"| last_step
+    page -->|"token, shown, unsubmitted, clear_submit_errors"| last_step
     page -->|"offered, take, stop()"| intake
     page -->|"batch(label), change"| manager
     page -->|"put, reduce"| batch

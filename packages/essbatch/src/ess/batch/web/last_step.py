@@ -22,7 +22,7 @@ class LastStep:
     """
     What Follow said at its last step: what the step raised
     (:attr:`failure`), and the label and the last step that did not raise,
-    whose refusals :meth:`applied` empties. What it says of a batch is
+    whose refusals :meth:`clear_submit_errors` empties. What it says of a batch is
     about the batch that follows now (:attr:`~ess.batch.Intake.following`),
     and nothing of another. Its callers hold the lock of all pages.
 
@@ -45,7 +45,7 @@ class LastStep:
         self.failure: str | None = None
         self._last: tuple[str, Step] | None = None
 
-    def stepped(self, label: str, step: Step) -> None:
+    def record_step(self, label: str, step: Step) -> None:
         """Keep ``step`` on the batch of ``label``, which did not raise."""
         self._last = (label, step)
         self.failure = None
@@ -98,7 +98,7 @@ class LastStep:
             if key in step.refused
         }
 
-    def applied(self, label: str) -> None:
+    def clear_submit_errors(self, label: str) -> None:
         """
         Forget why Follow could not submit rows of the batch of ``label``,
         whose page applied settings: its next step tries them with these.
