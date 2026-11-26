@@ -292,7 +292,7 @@ There are no websockets: each action answers with the new `State`, and the page 
 
 ## Layers
 
-The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version` and `files_version` (see [How the page learns of changes](#how-the-page-learns-of-changes)):
+The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version` and `files_version`, and which batch follows (see [How the page learns of changes](#how-the-page-learns-of-changes)):
 
 ```mermaid
 flowchart TD
@@ -300,7 +300,7 @@ flowchart TD
     api["api: create_app, the timer"]
     pages["Pages: one lock, the listing of the files, files_version"]
     page["Page, one per batch: poll compares the versions"]
-    intake["Intake: version"]
+    intake["Intake: following"]
     manager["BatchManager: version"]
     batch["Batch: version"]
     browser -->|HTTP| api
@@ -355,7 +355,7 @@ sequenceDiagram
 ```
 
 `version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
-At each poll the server compares what the page saw at its last version with: `Batch.version` (the batch table, the template, the records of the batch), the position of the listing in the workspace's records, `Pages.files_version` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.version` (the batch that follows), and what the page shows of the last step of Follow (`Pages.follow_token`).
+At each poll the server compares what the page saw at its last version with: `Batch.version` (the batch table and the template), the position of the listing in the workspace's records, `Pages.files_version` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.following` (the batch that follows), and what the page shows of the last step of Follow (`Pages.follow_token`). A record that changed since the listing's position is in the workspace's changes, which the poll reads too.
 `start` is new at each start of the server; a page that sees another one loads again.
 `State.runs` is `Pages.files_version`, the changes of the runs, which all pages share, and `null` if the application corrects no runs; the Runs view asks for `api/runs` when it moves.
 The batches of each run come with the counts (`api/batches/counts`), every 2 s while the Runs view is shown, and not with `api/runs`: Follow adds rows that name runs without a change of the runs.

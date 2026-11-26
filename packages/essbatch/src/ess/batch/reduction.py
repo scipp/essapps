@@ -146,22 +146,17 @@ class LabelRecords:
         self._cursor: int | None = None
         self._seen: set[str] = set()
 
-    def poll(self) -> bool:
+    def poll(self) -> None:
         """
         Bring the result of each member under the label up to date, from the
         proposal's changes; the first call reads every record under the label.
-        Whether any record of the proposal changed since the last call; not
-        at the first.
         """
         if self._cursor is None:
             self._cursor = self.client.changes().cursor
             records = self.client.records(label=self.label)
-            moved = False
         else:
             changes = self.client.changes(after=self._cursor)
             self._cursor = changes.cursor
-            # Any record, since a cell may reference a record under another label.
-            moved = bool(changes.records)
             # A record is in the changes when submitted and when it finishes,
             # so one seen before is not newer than the result held.
             new = [i for i in changes.records if i not in self._seen]
@@ -170,7 +165,6 @@ class LabelRecords:
         self.found |= state.results(records)
         bound = self.client.bound(records) if records else []
         self.unbound.update(r.id for r, b in zip(records, bound, strict=True) if not b)
-        return moved
 
     def known(self, ids: list[str]) -> list[Record]:
         """
@@ -240,15 +234,14 @@ class Batch:
     definitions:
         As given: where the entries of the label are kept, if anywhere.
     version:
-        A number that moves whenever :meth:`frame`, :meth:`template` or
-        :meth:`shown` may give something else: while it is the same, they
-        give the same, but for the files. A :meth:`put` that writes, an
-        assignment of :attr:`settings`, :meth:`make_column`,
-        :meth:`make_setting`, and any change of the proposal's records, which
-        reading it brings in (``client.changes``), move it; a :meth:`put` of
-        an equal table does not. A file that arrives, or that gains a
-        catalogue identifier, can change the state of a row and does not
-        move it.
+        A number that moves whenever :meth:`frame` or :meth:`template` may
+        give something else: while it is the same, they give the same. A
+        :meth:`put` that writes, an assignment of :attr:`settings`,
+        :meth:`make_column` and :meth:`make_setting` move it; a :meth:`put`
+        of an equal table does not. It counts no record and no file: a
+        record that changes is in ``client.changes``, and a file that
+        arrives, or that gains a catalogue identifier, can change the state
+        of a row without a signal.
 
     Raises
     ------
@@ -309,7 +302,6 @@ class Batch:
 
     @property
     def version(self) -> int:
-        self._poll()
         return self._version
 
     @property
@@ -624,7 +616,7 @@ class Batch:
         self, keys: Sequence[str] | None
     ) -> tuple[dict[str, dict[str, Any]], dict[str, Record]]:
         """The cells of ``keys``, or of all, and the result of each that has one."""
-        self._poll()
+        self._records.poll()
         cells = self.cells(keys)
         found = self._records.found
         return cells, {k: found[k] for k in cells if k in found}
@@ -653,10 +645,6 @@ class Batch:
             self._spec_changed(found),
             own=own,
         )
-
-    def _poll(self) -> None:
-        """Bring the records up to date; a change of any record moves the version."""
-        self._version += self._records.poll()
 
     def _spec_changed(self, found: Mapping[str, Record]) -> set[str]:
         """The keys whose result is of another spec than the bound one."""
@@ -808,7 +796,7 @@ class Batch:
         for their member, of the members ``keys`` if given, or of every member,
         whether or not it is a row now.
         """
-        self._poll()
+        self._records.poll()
         found = self._records.found
         chosen = [r for k, r in found.items() if keys is None or k in keys]
         status = self._records.status(chosen)

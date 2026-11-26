@@ -413,12 +413,13 @@ class Page:
     def _live(self) -> tuple[object, ...]:
         """
         What the page shows that changes without an action, each by what
-        counts its changes: the batch (its table, its template and the
-        records), the records listed, the files listed and why they cannot
+        counts its changes or as its value: the batch (its table and its
+        template), the records listed, the files listed and why they cannot
         be (:attr:`Pages.files_version <.pages.Pages.files_version>`), the
-        headers of the batches and which batch follows, and what Follow
-        said of this batch (:meth:`Pages.follow_token
-        <.pages.Pages.follow_token>`).
+        headers of the batches, which batch follows, and what Follow said of
+        this batch (:meth:`Pages.follow_token <.pages.Pages.follow_token>`).
+        A record that changed since the records listed is in the feed that
+        :meth:`poll` reads.
         """
         pages = self.pages
         return (
@@ -426,7 +427,7 @@ class Page:
             pages.listing.cursor,
             pages.files_version,
             pages.intake.manager.version,
-            pages.intake.version,
+            pages.intake.following,
             pages.follow_token(self.label),
         )
 

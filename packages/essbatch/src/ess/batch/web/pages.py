@@ -280,15 +280,15 @@ class Pages:
         """
         A step of Follow on the batch that follows, if one does
         (:meth:`~ess.batch.Intake.step`), and what the page shows
-        of it; then :meth:`Page.stepped <.page.Page.stepped>` of its page.
-        :func:`~.api.create_app` calls it on a timer. What the step raises is
-        said on the page (:meth:`follow_shown`), and the next step tries
-        again.
+        of it; then :meth:`Page.stepped <.page.Page.stepped>` of its page if
+        it is open, else :meth:`list_again`, so that every page and the Runs
+        view see the files that arrived. :func:`~.api.create_app` calls it
+        on a timer. What the step raises is said on the page
+        (:meth:`follow_shown`), and the next step tries again.
         """
         # Under the lock, so that a tick that waited for a request sees what
         # that request did: no step after "Stopped following". What cannot be
-        # said, such as an exception whose text raises, or a page that cannot
-        # be made, must not end the timer.
+        # said, such as an exception whose text raises, must not end the timer.
         with self.lock, suppress(Exception):
             if (label := self.intake.following) is None:
                 return
@@ -299,7 +299,10 @@ class Pages:
                 self._failure = None
             except Exception as error:  # the next step tries again
                 self._failure = step_failure(error)
-            self.page(label).stepped()
+            if (page := self._pages.get(label)) is None:
+                self.list_again()
+            else:
+                page.stepped()
 
     @property
     def listing(self) -> SafeListing:

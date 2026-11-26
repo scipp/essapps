@@ -1282,22 +1282,22 @@ def test_the_version_stays_at_a_read_and_at_a_put_of_an_equal_table(
     assert measured.version == before
 
 
-def test_while_the_version_stays_a_row_reduced_reads_the_same_until_it_finishes(
+def test_a_row_reduced_reads_the_same_until_it_finishes_and_the_version_stays(
     measured: Batch, client: Client, gate: Gate
 ) -> None:
     gate.close()
     records = measured.reduce(['1'])
     version, running = measured.version, _shown(measured)
 
-    assert (measured.version, _shown(measured)) == (version, running)
+    assert _shown(measured) == running
     gate.open()
     client.wait(records)
 
-    assert measured.version != version
     assert measured.shown()[0]['1'].status is Status.COMPLETED
+    assert measured.version == version
 
 
-def test_the_version_moves_when_a_record_that_a_cell_reads_finishes(
+def test_a_record_that_a_cell_reads_is_read_again_when_it_finishes(
     measured: Batch, client: Client, gate: Gate
 ) -> None:
     upstream = Batch(client, PLAIN, label='up', rows=measured.frame())
@@ -1305,13 +1305,12 @@ def test_the_version_moves_when_a_record_that_a_cell_reads_finishes(
     gate.close()
     found = upstream.reduce(['1'])
     edit(measured, '2', offset=cell_of(found['1'].ref('total')))
-    version, running = measured.version, _shown(measured)
+    running = _shown(measured)
 
-    assert (measured.version, _shown(measured)) == (version, running)
+    assert _shown(measured) == running
     gate.open()
     client.wait(found)
 
-    assert measured.version != version
     problems = measured.shown()[0]['2'].problems
     assert [e.msg for e in problems] == ['the record it reads is failed']
 

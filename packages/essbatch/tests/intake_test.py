@@ -554,16 +554,16 @@ def test_a_batch_that_follows_with_a_last_row_is_refused_and_nothing_changes(
 
 
 def test_after_a_stop_no_batch_follows_and_an_intake_made_again_has_none(
-    two: Intake, client: Client, definitions: FolderDefinitions
+    two: Intake, client: Client, definitions: FolderDefinitions, refusing: Refusing
 ) -> None:
     two.stop()
 
     assert two.following is None
     assert two.step() is None
     assert _again(client, definitions).following is None
-    version = two.version
+    saved = list(refusing.saved)
     two.stop()  # none follows: nothing is done
-    assert two.version == version
+    assert refusing.saved == saved
 
 
 def test_a_stopped_batch_gets_no_rows_at_a_step(
@@ -635,11 +635,11 @@ def test_a_batch_told_to_follow_follows_after_a_restart(
 def test_a_batch_that_follows_already_is_left_as_it_is(
     two: Intake, refusing: Refusing
 ) -> None:
-    version, saved = two.version, list(refusing.saved)
+    saved = list(refusing.saved)
 
     two.follow('a')
 
-    assert (two.version, refusing.saved) == (version, saved)
+    assert (two.following, refusing.saved) == ('a', saved)
 
 
 def test_a_batch_whose_source_is_not_registered_cannot_follow(
@@ -742,22 +742,3 @@ def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
         two.stop()
     assert (list(two.manager.headers()), two.following) == (['a', 'b'], 'a')
     assert 'c' not in refusing.labels()
-
-
-@pytest.mark.parametrize(
-    'change',
-    [
-        lambda i: i.create('plain', title='C', source='pairs', follow=True),
-        lambda i: i.stop(),
-        lambda i: i.follow('b'),
-    ],
-    ids=['create', 'stop', 'follow'],
-)
-def test_the_version_moves_at_each_change_of_which_follows(
-    two: Intake, change: Callable[[Intake], object]
-) -> None:
-    before = two.version
-
-    change(two)
-
-    assert two.version != before

@@ -55,7 +55,7 @@ Nothing in the batch layer imports the page or the command.
 |---|---|---|
 | table | `table.py` | the form of a batch table: dtypes, cells, cell to request value and back, `rows.json`, table files |
 | row source | `source.py`: `RowSource`, `rows_of` | the code of the application that makes rows from the files |
-| batch | `reduction.py`: `Batch` | the settings and the batch table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the batch table, the settings or a record changes; the only part that submits to the client |
+| batch | `reduction.py`: `Batch` | the settings and the batch table of one label: `put`, `state`, `reduce`, `cancel`, and `version`, which moves when the batch table or the settings change; the only part that submits to the client |
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |

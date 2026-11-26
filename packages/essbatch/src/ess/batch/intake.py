@@ -110,11 +110,6 @@ class Intake:
     Anything else is an error of the code of the application, such as a
     source that raises.
 
-    :attr:`version` moves whenever :attr:`following` may give something else
-    by a call of this object. A change through the manager, such as a
-    removal, moves :attr:`.manager.BatchManager.version` instead, and
-    :attr:`following` is read again from the definitions after it.
-
     Parameters
     ----------
     manager:
@@ -128,14 +123,8 @@ class Intake:
     ) -> None:
         self.manager = manager
         self.sources = sources
-        self._version = 0
         # The batch that follows, as read when the manager had this version.
         self._read: tuple[int, str | None] | None = None
-
-    @property
-    def version(self) -> int:
-        """Counts the changes of which batch follows, made through this object."""
-        return self._version
 
     @property
     def following(self) -> str | None:
@@ -169,7 +158,6 @@ class Intake:
     def _set_following(self, label: str | None) -> None:
         """Hold ``label`` as the batch that follows, as now written."""
         self._read = (self.manager.version, label)
-        self._version += 1
 
     def _write_follows(self, label: str, follows: bool) -> None:
         """Write whether the batch of ``label`` follows."""
