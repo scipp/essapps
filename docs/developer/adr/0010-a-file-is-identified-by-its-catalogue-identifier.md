@@ -1,6 +1,6 @@
 # ADR 0010: A file is identified by its catalogue identifier, or else by its path
 
-- Status: accepted, implemented (`ess.apps.FolderFiles`, and LoKI's `read_metadata`, which forms the identifier from a raw file), but for what Open names. No file source asks the catalogue: `FolderFiles` takes a file's `pid` from its table.
+- Status: accepted
 - Deciders: Simon
 - Date: 2026-11-13
 
@@ -27,7 +27,7 @@ A raw file carries `entry/entry_identifier_uuid`, and the catalogue lists it as 
 The catalogue identifier is written in full.
 For a raw file, a file source without access to the catalogue forms it from the identifier the file carries.
 An *other file* is one the catalogue does not list, such as a mask, a test file, or a file of another facility.
-A workspace without a folder, made with `local`, gives absolute paths.
+`FolderFiles` without a `root`, such as one given to `local`, gives absolute paths.
 A person still writes `file(run=60339)`.
 
 ## Alternatives considered

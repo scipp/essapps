@@ -7,7 +7,7 @@
 ## Context
 
 A workspace made with `open_folder` stores its history and its persisted outputs in a folder, and a later process reads them, possibly with another version of the technique package installed.
-An outputs class can change under the same spec version:
+Without this decision, an outputs class can change under the same spec version:
 
 ```python
 # iofq/v1 wrote Centre(x=0.5, y=0.25); the package now has, still under v1:
@@ -18,7 +18,7 @@ class Centre(BaseModel):
 client.output(old_record, 'centre')   # Centre(x_mm=0.0, y=0.25), no error
 ```
 
-A version bump instead makes the old outputs unreadable, and a batch shows their rows as not reduced.
+Without this decision, a version bump makes the old outputs unreadable, and a batch shows their rows as not reduced.
 
 ## Decision
 

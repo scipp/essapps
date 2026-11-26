@@ -423,6 +423,19 @@ def test_a_rerun_becomes_the_result(measured: Batch, client: Client) -> None:
     assert measured.state()['1'].record == again['1']
 
 
+def test_a_row_removed_and_added_again_has_its_result_again(
+    measured: Batch, client: Client
+) -> None:
+    records = measured.reduce(['1'])
+    client.wait(records)
+    table = measured.table()
+    measured.set_table(table.drop('1'))
+    measured.set_table(table)
+
+    assert measured.state()['1'].record == records['1']
+    assert measured.state()['1'].status == 'done'
+
+
 def test_an_edited_row_is_outdated_and_left_to_do(
     measured: Batch, client: Client
 ) -> None:

@@ -35,7 +35,7 @@ An instrument's specs and bindings change when its users or its workflow package
 - `essinstruments` (`ess.instruments`) holds the specs and bindings of each instrument, released on its own schedule, with each instrument's workflow package behind an extra such as `[loki]`.
 - An application that science users run is a distribution of its own ([ADR 0014](0014-applications-for-science-users-are-distributions-of-their-own.md)).
 - Names follow the ess monorepo: distribution `essX`, package `ess.X`.
-- `essapps` finds bindings through the entry-point group `ess.apps.workflows`, so a distribution registers its workflows without importing the framework.
+- `essapps` finds bindings through the entry-point group `ess.apps.workflows`, so a distribution registers its workflows without importing the framework. This is not built yet ([#155](https://github.com/scipp/essapps/issues/155)): `essbatch` accepts the bindings with `-b module:BINDINGS`.
 - GUI code has one subpackage per toolkit, and no toolkit-independent GUI package.
 
 ## Alternatives considered

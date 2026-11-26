@@ -31,7 +31,7 @@ A person thinks of a batch as a table: they edit its cells, remove and reduce it
 - **A key is text, unique in the batch, and the index of the table.** It joins a row to its results: the records under the batch's label with that key.
 - **A cell holds one value of plain data, or is empty.** A file and an output are text, such as `run:60339`, and `r17.centre` for the output `centre` of record `r17`.
 - **A column has the dtype of its parameter**, so a wrong value is rejected where it enters the table.
-- **An empty cell is `None`.** A cell has no word for `None`. With no setting, an empty cell means the default of the parameter, or `None` if the parameter accepts `None`. Otherwise the row is incomplete.
+- **A cell has no word for `None`.** A `None` put into a cell empties it. With no setting, an empty cell means the default of the parameter, or `None` if the parameter accepts `None`. Otherwise the row is incomplete.
 - **A column that the source fills gets its value from the cell only.** In a batch made from a source, an empty cell there means that the row waits for its file. The row is incomplete, whatever the settings and the default hold.
 - **The state of a row is computed at each read**, from the table, the settings and the records. A row whose request differs from its result only at settings has status `settings changed`. A row whose own cell changed has status `outdated`. A parameter counts as a setting for a row if it has no column or the row's cell is empty.
 - **The table stores nothing about the files.** A cell that refers to a file not found is marked when the table is shown, and a request with it is rejected.
