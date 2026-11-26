@@ -516,6 +516,25 @@ ran, has returned.
 """
 
 
+@dataclass
+class _Plan:
+    """
+    How a record that has not finished runs, made when it is scheduled.
+
+    ``reads`` are the values it holds as a reader until it starts, which then
+    holds them itself, or finishes without starting. ``waits`` are the records
+    and the states (see :func:`_state_key`) it waits for before it starts.
+    ``compute`` returns its outputs by name, on a worker. ``state`` is the
+    state that the record of a freeze reads, which it holds until it has
+    finished, or ``None``.
+    """
+
+    reads: list[_Read]
+    waits: set[str]
+    compute: Callable[[], dict[str, Any]]
+    state: tuple[_Accumulator, int] | None = None
+
+
 class Workspace(WorkspaceProtocol):
     """
     Checks requests, keeps records, and runs requests of one ``proposal`` (see
@@ -591,15 +610,10 @@ class Workspace(WorkspaceProtocol):
         # a value, as (record ID, name) or (accumulator, number of pushes), to
         # the number of its readers (see _Read)
         self._readers: Counter[_Read] = Counter()
-        # the reverse, for the records that have not started
-        self._unread: dict[str, list[_Read]] = {}
-        # a record that has not started to the records and states it waits for
-        self._waiting: dict[str, set[str]] = {}
+        self._plans: dict[str, _Plan] = {}  # of the records not yet finished
+        # a record or a state (see _state_key) to the records that wait for it
         self._dependents: dict[str, set[str]] = {}
         self._accumulating: set[_Accumulator] = set()  # with steps not yet done
-        self._stage_of: dict[str, _Stage] = {}  # unfinished record ID to its stage
-        # the unfinished record of a freeze to the state it reads
-        self._state_of: dict[str, tuple[_Accumulator, int]] = {}
         # values whose last reader let go, for _let_go's loop to work through
         self._unread_values: deque[_Read] = deque()
         self._letting_go = False
@@ -689,7 +703,7 @@ class Workspace(WorkspaceProtocol):
             else:
                 runs.add(record_id)
         for record_id in (i for i in pending if i in runs):
-            self._schedule(record_id)
+            self._schedule(record_id, self._request_plan(record_id))
 
     def _unreadable(self, record_id: str, runs: Collection[str]) -> str | None:
         """
@@ -829,9 +843,11 @@ class Workspace(WorkspaceProtocol):
                 ],
             )
             for record_id, entry in zip(ids, entries, strict=True):
-                if entry.stage is not None:
-                    self._stage_of[record_id] = self._stages[entry.stage]
-                self._schedule(record_id)
+                if entry.stage is None:
+                    plan = self._request_plan(record_id)
+                else:
+                    plan = self._stage_plan(record_id, self._stages[entry.stage])
+                self._schedule(record_id, plan)
             return [self._views.records[i] for i in ids]
 
     def _log_submission(
@@ -1025,35 +1041,37 @@ class Workspace(WorkspaceProtocol):
 
     # Execution
 
-    def _schedule(self, record_id: str) -> None:
-        """
-        Start the record, or let it wait for what it reads to finish; lock held.
+    def _request_plan(self, record_id: str) -> _Plan:
+        """The plan of a record of a plain request; lock held."""
+        request = self._views.records[record_id].request
+        return self._plan(request, lambda: self._compute(request))
 
-        The record of a freeze reads only the state, which it waits for; the
-        pushes have read the outputs its rows reference. A record through a
-        stage that has staged reads only the outputs its blanks reference. An
-        output is written before its record finishes, so waiting for the record also
-        waits for the write.
+    def _plan(self, read: Request, compute: Callable[[], dict[str, Any]]) -> _Plan:
         """
-        state = self._state_of.get(record_id)
-        if state is None:
-            request = self._views.records[record_id].request
-            if (stage := self._stage_of.get(record_id)) is not None:
-                request = stage.read_part(request)
-            refs = request.upstream()
-            self._unread[record_id] = [(ref.record, ref.output) for ref in refs]
-            waiting = {ref.record for ref in refs} - self._views.finished.keys()
-        else:
-            acc, upto = state
-            self._unread[record_id] = [state]
-            waiting = {_state_key(acc.id, upto)} if acc.added != upto else set()
-        self._readers.update(self._unread[record_id])
-        if not waiting:
+        The plan of a record that reads the outputs ``read`` references, and
+        waits for their records to finish; lock held. An output is written
+        before its record finishes, so waiting for the record also waits for
+        the write.
+        """
+        refs = read.upstream()
+        return _Plan(
+            reads=[(ref.record, ref.output) for ref in refs],
+            waits={ref.record for ref in refs} - self._views.finished.keys(),
+            compute=compute,
+        )
+
+    def _schedule(self, record_id: str, plan: _Plan) -> None:
+        """
+        Start the record, or let it wait for what its plan waits for; lock
+        held. The record holds what the plan reads as a reader.
+        """
+        self._plans[record_id] = plan
+        self._readers.update(plan.reads)
+        if not plan.waits:
             self._executor.submit(self._run, record_id)
             return
-        self._waiting[record_id] = waiting
-        for input_id in waiting:
-            self._dependents.setdefault(input_id, set()).add(record_id)
+        for key in plan.waits:
+            self._dependents.setdefault(key, set()).add(record_id)
 
     def _run(self, record_id: str) -> None:
         """
@@ -1071,65 +1089,43 @@ class Workspace(WorkspaceProtocol):
             if record_id in self._views.finished:
                 return
             self._append(Started(record=record_id))
-            record = self._views.records[record_id]
-            stage = self._stage_of.get(record_id)
-            state = self._state_of.get(record_id)
-            reads = self._unread.pop(record_id)
+            plan = self._plans[record_id]
+            reads, plan.reads = plan.reads, []  # held here from now on
         try:
-            outputs = self._compute(record, stage, state)
+            outputs = plan.compute()
         except Exception as error:  # any failure of a workflow is recorded
             with self._changed:
                 self._finish(record_id, Status.FAILED, _reason(error))
                 self._let_go(reads)
             return
         with self._changed:
-            if state is None:
+            if plan.state is None:
                 self._let_go(reads)
             names = self._views.persisted.get(record_id, ())
         failure = self._write(record_id, {n: outputs[n] for n in names if n in outputs})
         with self._changed:
             self._complete(record_id, outputs, failure)
-            if state is not None:
-                acc, _ = state
+            if plan.state is not None:
+                acc, _ = plan.state
                 if self._views.status(record_id) is Status.COMPLETED:
                     acc.stopped = (
                         f'the accumulator is frozen: read record {record_id} instead'
                     )
                 self._let_go(reads)
 
-    def _compute(
-        self,
-        record: Record,
-        stage: _Stage | None,
-        state: tuple[_Accumulator, int] | None,
-    ) -> dict[str, Any]:
+    def _compute(self, request: Request) -> dict[str, Any]:
         """
-        The outputs a record's workflow returns, or those of the state it
-        reads, by name, an optional output returned as ``None`` left out; no
-        lock. What the workflow read goes out of scope here, so once the
-        caller lets go of the values read, nothing holds them.
+        The outputs the workflow of a plain request returns, by name, an
+        optional output returned as ``None`` left out; no lock. What the
+        workflow read goes out of scope here, so once the caller lets go of
+        the values read, nothing holds them.
         """
-        if state is not None:
-            return dict(state[0].outputs())
-        request = record.request
         bound = self._bound[request.spec]
-        spec = bound.spec
-        if stage is None:
-            params = spec.params.model_construct(
-                **self._typed(request.spec, request.params)
-            )
-            returned = bound.binding.compute(params)
-        else:
-            fixed = {n: v for n, v in request.params.items() if n not in stage.blanks}
-            call = self._staged(
-                stage,
-                lambda: stage.binding.make_stage(
-                    self._typed(request.spec, fixed), stage.template.blanks
-                ),
-            )
-            filled = {n: v for n, v in request.params.items() if n in stage.blanks}
-            returned = call(self._typed(request.spec, filled))
-        return _outputs_of(request.spec, spec.outputs, returned)
+        params = bound.spec.params.model_construct(
+            **self._typed(request.spec, request.params)
+        )
+        returned = bound.binding.compute(params)
+        return _outputs_of(request.spec, bound.spec.outputs, returned)
 
     def _typed(self, spec_id: SpecId, values: Mapping[str, Any]) -> dict[str, Any]:
         """
@@ -1339,14 +1335,13 @@ class Workspace(WorkspaceProtocol):
                     omitted=left_out,
                 )
             )
-            self._let_go(self._unread.pop(finished_id, ()))  # if it never started
-            for key in self._waiting.pop(finished_id, ()):
-                if (dependents := self._dependents.get(key)) is not None:
-                    dependents.discard(finished_id)
-                    if not dependents:
-                        del self._dependents[key]
-            self._stage_of.pop(finished_id, None)
-            self._state_of.pop(finished_id, None)
+            if (plan := self._plans.pop(finished_id, None)) is not None:
+                self._let_go(plan.reads)  # if it never started
+                for key in plan.waits:
+                    if (dependents := self._dependents.get(key)) is not None:
+                        dependents.discard(finished_id)
+                        if not dependents:
+                            del self._dependents[key]
             for dependent in self._dependents.pop(finished_id, set()):
                 if finished is not Status.COMPLETED:
                     todo.append(
@@ -1365,10 +1360,9 @@ class Workspace(WorkspaceProtocol):
 
     def _satisfied(self, record_id: str, key: str) -> None:
         """Start the record once ``key`` was the last thing it waited for; lock held."""
-        waiting = self._waiting[record_id]
-        waiting.discard(key)
-        if not waiting:
-            del self._waiting[record_id]
+        waits = self._plans[record_id].waits
+        waits.discard(key)
+        if not waits:
             self._executor.submit(self._run, record_id)
 
     # What the workspace keeps
@@ -1639,6 +1633,31 @@ class Workspace(WorkspaceProtocol):
             )
         return stage
 
+    def _stage_plan(self, record_id: str, stage: _Stage) -> _Plan:
+        """
+        The plan of a record of a request through the stage; lock held. A
+        record through a stage that has staged reads only the outputs its
+        blanks reference.
+        """
+        request = self._views.records[record_id].request
+        return self._plan(stage.read_part(request), lambda: self._call(stage, request))
+
+    def _call(self, stage: _Stage, request: Request) -> dict[str, Any]:
+        """
+        The outputs the stage's callable returns for a request through it, as
+        :meth:`_compute` gives those of a plain request; no lock.
+        """
+        fixed = {n: v for n, v in request.params.items() if n not in stage.blanks}
+        call = self._staged(
+            stage,
+            lambda: stage.binding.make_stage(
+                self._typed(request.spec, fixed), stage.template.blanks
+            ),
+        )
+        filled = {n: v for n, v in request.params.items() if n in stage.blanks}
+        returned = call(self._typed(request.spec, filled))
+        return _outputs_of(request.spec, stage.binding.spec.outputs, returned)
+
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
         """
         The stage's callable; ``make`` stages the binding, outside the
@@ -1809,13 +1828,26 @@ class Workspace(WorkspaceProtocol):
                     ],
                 )
                 acc.frozen = record_id
-                self._state_of[record_id] = (acc, upto)
-                self._schedule(record_id)
+                self._schedule(record_id, self._state_plan(acc, upto))
                 return self._views.records[record_id]
         finally:
             with self._changed:
                 acc.freezing = False
                 self._let_go([(acc, upto)])
+
+    def _state_plan(self, acc: _Accumulator, upto: int) -> _Plan:
+        """
+        The plan of the record of a freeze of the state after ``upto``
+        pushes; lock held. It reads only the state, which it waits for; the
+        pushes have read the outputs its rows reference.
+        """
+        state = (acc, upto)
+        return _Plan(
+            reads=[state],
+            waits={_state_key(acc.id, upto)} if acc.added != upto else set(),
+            compute=lambda: dict(acc.outputs()),
+            state=state,
+        )
 
     def _queue(self, acc: _Accumulator, values: dict[str, Any]) -> None:
         """
