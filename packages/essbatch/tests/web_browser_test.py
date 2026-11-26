@@ -2197,6 +2197,20 @@ def test_the_launch_page_lists_the_workspaces_of_the_root(
     assert launch.inner_text('#workspaces .description') == 'Day 1'
 
 
+def test_the_open_form_of_a_new_workspace_leaves_no_empty_toolbar(
+    launch: Any, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'test', WorkspaceHeader(Header('Test')))
+    launch.goto(launch.root)
+    launch.wait_for_selector('#workspaces tr.item')
+    assert launch.is_visible('.toolbar')
+
+    launch.click('#new-workspace-open')
+
+    assert launch.is_visible('#new-workspace')
+    assert not launch.is_visible('.toolbar')
+
+
 def test_a_workspace_made_on_the_launch_page_opens_at_its_batch_page(
     launch: Any, launcher: Launcher
 ) -> None:

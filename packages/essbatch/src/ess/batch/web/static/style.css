@@ -210,6 +210,8 @@ main {
   min-height: 48px;
   padding: 8px 12px;
 }
+/* A toolbar whose every action is hidden leaves no empty band. */
+.toolbar:not(:has(> :not([hidden]))) { display: none; }
 .split { display: flex; }
 #reduce {
   position: relative;
