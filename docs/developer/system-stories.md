@@ -27,7 +27,7 @@ Property: the workspace fetches the file from the catalogue once, and the second
 ### A4. Mistaken copy into the shared service
 
 Actor: user of the shared service. Goal: remove a file that should not have left their machine.
-Property: a local file reaches the service only when a request that names it is submitted. After its removal, no copy of its bytes remains in the service: not in storage, caches, or the processes that run stages.
+Property: a local file reaches the service only when a request that refers to it is submitted. After its removal, no copy of its bytes remains in the service: not in storage, caches, or the processes that run stages.
 
 ## B. Manual and interactive reduction
 

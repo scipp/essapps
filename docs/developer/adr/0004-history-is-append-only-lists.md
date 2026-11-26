@@ -6,7 +6,7 @@
 
 ## Context
 
-A record names a spec, every parameter value, and its outputs.
+A record holds the ID of its spec, every parameter value, and the names of its outputs.
 A record never changes, only its status, which is set once.
 Pushes are only added.
 So history only grows until it is dropped.
@@ -27,7 +27,7 @@ And a proposal has no defined end, while users need their records for days to we
 History is five lists, each only appended to: records, opened accumulators, starts, finishes, and pushes.
 A record never changes. Its finish sets its status, and a record without one is pending.
 The record of a freeze is stored as the accumulator and its number of pushes, so it takes a constant amount of history.
-Output values are not history, and history names no file of the store.
+Output values are not history, and history refers to no file of the store.
 The changes to a proposal's records have one order, which a client reads from a position (`client.changes`).
 A history that a process holds without a person, such as the automatic reduction's, is dropped as a whole once its proposal has been idle for the retention period, days to weeks.
 The framework deletes nothing in a folder that a person opened.
@@ -36,7 +36,7 @@ How a deployment stores the lists is its choice. `ess.apps.Workspace` appends th
 ## Alternatives considered
 
 - **History defined as one event log, with records and labels as views.** Only the change feed needs an order, and it would tie a hosted workspace to a log.
-- **A history held without a person kept as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
+- **A history held without a person stored as long as the proposal.** That may be forever, a second record of what ran next to SciCat.
 - **Each record dropped by age, keeping the older records that a remaining record reads.** The automatic reduction would reduce again every row whose records were dropped.
 - **A proposal's history dropped a fixed time after its last record.** An automatic reduction that sees no new file for that long would reduce every row again, and a client still in use would lose its records.
 - **The record of a freeze stored with every row, in storage that shares repeated rows.** Every layer above the store still handles each row twice.

@@ -34,7 +34,7 @@ So this decision restricts a person as little as it can.
 ## Alternatives considered
 
 - **One batch per workspace, with a range of rows shown** ([#223](https://github.com/scipp/essapps/issues/223)). It bounds the cost of the page and solves neither problem 1 nor 2: the batch still has one set of settings.
-- **Each row holds all its settings.** A page would have to show and edit settings per row. A batch per series gives the same with the settings a batch already has.
+- **Each row holds all its settings.** A page would have to show and edit settings per row. A batch per series does the same with the settings a batch already has.
 - **Batches that split the rows between them.** It is a rule to enforce, and it forbids reducing one series with two sets of settings to compare them.
 - **The manager owns the timer of Follow.** The manager would get a thread, a timer and a lock next to the definitions it writes.
 - **Follow as a flag of each batch.** A run would be reduced once per batch that follows. A single value can become a set later, while a flag per batch is hard to take back.

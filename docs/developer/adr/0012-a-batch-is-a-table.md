@@ -11,7 +11,7 @@ The terms are those of [batch.md, "Terms"](../../../packages/essbatch/docs/batch
 
 Before this decision, the rows of a batch were stored nowhere.
 Each read of a batch asked the source for every row (a *scan*).
-It kept the rows in the batch's *scope*, a slice of an index that the source gave each row.
+It limited the rows to the batch's *scope*, a slice of an index that the source assigned to each row.
 Then it applied what a person had edited, stored in `edits.json` as added, edited, cleared and removed cells, by key.
 A batch was defined by how its rows are made, and six problems followed:
 
@@ -59,6 +59,6 @@ A person thinks of a batch as a table: they edit its cells, remove and reduce it
 - An empty cell depends on the settings, outside the table. So a table file needs the settings file to show what a row was reduced with.
 - A cell emptied after its row was reduced counts its value as a setting, and the row has status `settings changed`.
 - A row made from wrong metadata stays until a person removes it, and a correction of a run changes no batch.
-- Removing a row keeps its records under the label. They show again if a row with that key is added.
+- Removing a row leaves its records under the label. They show again if a row with that key is added.
 - `set_table` writes the whole table at each change.
 - A table file is the table, so the command and the page translate nothing.

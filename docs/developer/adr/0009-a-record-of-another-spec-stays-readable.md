@@ -22,7 +22,7 @@ Without this decision, a version bump makes the old outputs unreadable, and a ba
 
 ## Decision
 
-A record names its spec by name, version, and *digest*, a hash of the name, type, and requiredness of every field of the spec's models.
+A record identifies its spec by name, version, and *digest*, a hash of the name, type, and requiredness of every field of the spec's models.
 Titles, descriptions, and defaults are not part of the digest, and callers still write `SpecId(name, version)`.
 A record is *of the bound spec* if the workspace has a binding with the same three, and otherwise *of an unbound spec*.
 A record of an unbound spec stays in history, and its outputs are read as stored scipp data, without the classes that made them.

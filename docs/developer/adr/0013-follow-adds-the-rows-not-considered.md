@@ -41,7 +41,7 @@ To add rows without a memory, a step brings back a row that a person removed.
 - **A mark over files.** A transmission run is a new file and no new row, and it completes a row whose own file is old. The step compares rows either way, so it remembers the keys of rows.
 - **Add a row at once and fill its empty cells later.** It would fill a cell again that a person emptied. For a parameter that accepts `None`, an empty cell is a value (ADR 0012), so "not listed yet" and "none" would look the same.
 - **A step changes cells that have a value**, so that a transmission run measured again reaches the earlier rows. It needs to know who wrote each cell, and results change without anyone asking. A person can do it for the rows they choose.
-- **A scope stored in the header**: a slice of an index that the source gives each row. The choice of rows at making gives its start. It needs no end, since the next batch is made from the source and follows instead.
+- **A scope stored in the header**: a slice of an index that the source assigns to each row. The choice of rows at making sets its start. It needs no end, since the next batch is made from the source and follows instead.
 - **Follow as a switch on the page of each batch.** The next batch would take two actions. A person who turns it on for an earlier batch may not expect it to add the rows that another batch added since.
 - **A row is added once it can be reduced**, instead of once it is complete. A column that the source does not fill would hold the row back forever, and a parameter that accepts `None` would let a row in before its file is listed.
 
@@ -53,4 +53,4 @@ To add rows without a memory, a step brings back a row that a person removed.
 - To try settings on a few rows first, a person makes a batch without Follow, then the batch that follows with "Start with the settings of" the first. The rows tried are reduced again in the second batch.
 - A batch made with Follow is stepped within seconds, so the rows chosen at making are reduced with the settings it was made with.
 - `seen_keys` grows by one key for each row that the source ever made.
-- A source whose keys change, by a change of its code, gives every row a key that is not seen, and a step adds them all.
+- A source whose keys change, by a change of its code, assigns every row a key that is not seen, and a step adds them all.

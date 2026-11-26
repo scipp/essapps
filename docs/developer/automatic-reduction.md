@@ -44,13 +44,13 @@ What only `submit` rejects, and how a batch row meets it:
 | an output whose data do not fit the field | a cell refers to the wrong output |
 
 `Batch.reduce` also rejects a row that is still running, which happens when another client submitted it between `state` and `reduce`.
-`submit` rejects a `persist` that names an output the spec lacks, or a workspace without a store.
+`submit` rejects a `persist` that lists an output the spec lacks, or a workspace without a store.
 For a staged batch, it rejects a stage that stopped, was released, or holds other values.
 `Batch` then opens a new stage and submits again.
 
 `Batch.reduce` submits all rows or none, as a person needs it.
-A step instead drops the rows that the `SubmitError` names (`FieldError.request_key`), and submits the rest.
-An error that names no row rejects every row of the step.
+A step instead drops the rows whose keys the `SubmitError` contains (`FieldError.request_key`), and submits the rest.
+An error without a row key rejects every row of the step.
 If the workspace does not accept the settings, `Batch.state()` raises a `SubmitError`, and the step submits nothing.
 Its `submit_errors` then holds the reason for every ready row without a result, such as `{'1': 'unknown spec sans-iofq/v1'}` after an upgrade removed the spec (E2).
 

@@ -6,7 +6,7 @@
 
 ## Context
 
-A person names a file as `file(run=60339)`, and the file source resolves the name to the file's *identity*, which the record keeps and provenance lists.
+A person refers to a file as `file(run=60339)`, and the file source resolves the name to the file's *identity*, which the record holds and provenance lists.
 With paths as identities:
 
 - A moved folder changes every identity, so the automatic reduction reduces its runs again.
@@ -27,7 +27,7 @@ A raw file carries `entry/entry_identifier_uuid`, and the catalogue lists it as 
 The catalogue identifier is written in full.
 For a raw file, a file source without access to the catalogue forms it from the identifier the file carries.
 An *other file* is one the catalogue does not list, such as a mask, a test file, or a file of another facility.
-`FolderFiles` without a `root`, such as one given to `local`, gives absolute paths.
+`FolderFiles` without a `root`, such as one given to `local`, identifies such a file by its absolute path.
 A person still writes `file(run=60339)`.
 
 ## Alternatives considered
@@ -37,8 +37,8 @@ A person still writes `file(run=60339)`.
 
 ## Consequences
 
-- A moved folder, and a second file source, give a raw file the same identity.
-- Provenance lists raw files as the catalogue names them.
+- A moved folder, or a second file source, leaves the identity of a raw file unchanged.
+- Provenance lists raw files by their catalogue identifiers.
 - A file source reads the identifier from a raw file, or gets it from the catalogue.
 - A file first listed without its catalogue identifier and later with it changes identity: the automatic reduction reduces it again, and the records made before name an identity the file source no longer knows.
 - Identities are in the log, so changing them changes the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
@@ -46,4 +46,4 @@ A person still writes `file(run=60339)`.
 ## Open
 
 - Whether every raw file in user operation carries the identifier, and whether a file the catalogue lists can still be unreadable. To be asked of the teams that run the file writer and the catalogue.
-- A catalogue dataset that holds several files cannot be represented, since two rows with one `pid` are refused. Raw files have one file per dataset.
+- A catalogue dataset that holds several files cannot be represented, since `FolderFiles` raises `ValueError` for two rows with one `pid`. Raw files have one file per dataset.

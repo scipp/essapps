@@ -52,7 +52,7 @@ packages/
 
 ## Alternatives considered
 
-- **Batch stays in `essapps`**, as ADR 0007's rule gives. The name `essapps` stays one for developers and users at once, and the users' command is named after the framework.
+- **Batch stays in `essapps`**, as ADR 0007's rule implies. The name `essapps` stays one for developers and users at once, and the users' command is named after the framework.
 - **`ess.batch` as a second package of the distribution `essapps`.** It gives the package its name without a second distribution, but breaks ADR 0007's naming rule (distribution `essX`, package `ess.X`), and the framework would still be released with each change to the application.
 - **The core renamed instead**, for example to `ess.workspace`. "Framework for ESS data-reduction applications" describes the core well once the applications are out of it; the name was vague only while it held the main application too.
 - **A command `essapps` for single reductions next to `essbatch`.** It would repeat the folder, the template, the writers and the files table of the batch command, with parameters as command-line options, which are awkward for nested groups.

@@ -18,7 +18,7 @@ The workspace holds a stage or an accumulator until a client releases it or the 
 Every client that holds the object may call through it, push into it, and read it.
 No client call lists stages and accumulators or reopens one by its ID, and they do not appear in the changes.
 Creating one over a binding that does not serve it raises.
-[ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) give the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) gives the binding's side.
+[ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) state the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) states the binding's side.
 
 ## Stage
 
@@ -37,7 +37,7 @@ A file name in the template is resolved when the stage is created, so the stage 
 
 ## Accumulator
 
-A *table* is a list parameter that the spec names in `tables=` ([params.md](../../packages/essspec/docs/params.md#tables-several-runs)), and its elements are *rows*.
+A *table* is a list parameter that the spec lists in `tables=` ([params.md](../../packages/essspec/docs/params.md#tables-several-runs)), and its elements are *rows*.
 An accumulator is created from a template whose blanks are tables:
 
 ```python
@@ -100,7 +100,7 @@ cut = client.submit(CUT, params={'position': Position(index=0), 'volume': final.
 ```
 
 A request, a template, and a push never reference an accumulator, only the record of its freeze.
-`submit` raises a `SubmitError` for a reference to an accumulator, and the message names the record of its freeze if there is one.
+`submit` raises a `SubmitError` for a reference to an accumulator, and the message contains the ID of the record of its freeze if there is one.
 A failed push stops the accumulator for good.
 So a controller that should skip a run whose reduction failed waits for that reduction's record before it pushes.
 [`WorkspaceProtocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules of `freeze`, `release`, and a stopped accumulator.
@@ -120,7 +120,7 @@ A row that fails when it runs stops the accumulator, as any failing push does.
 
 ## Symmetries
 
-Each symmetry names a change that a caller may make without changing the outputs:
+Each symmetry is a change that a caller may make without changing the outputs:
 
 | Symmetry | The caller may change | Unchanged | Held by |
 |---|---|---|---|
