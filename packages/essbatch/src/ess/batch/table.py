@@ -14,7 +14,7 @@ and notes, any other column::
 
 A key is text, not empty, and unique, and no column is named :data:`KEY`.
 A column of a parameter has the dtype that :func:`dtypes` reads from the type
-of the parameter, with ``field_types.unwrapped`` and ``field_types.split``::
+of the parameter, with ``field_types.shape``::
 
     the parameter takes                                   dtype
     a file, an output, a file or an output                string
@@ -114,6 +114,7 @@ from pydantic_core import to_json, to_jsonable_python
 
 from ess.apps.files import file, replace_at_once
 from ess.spec import FileRef, OutputRef, field_types
+from ess.spec.field_types import Choice, FileKind, Group, Scalar
 
 KEY = 'key'
 """The name of the index of a batch table: the key of each row."""
@@ -157,7 +158,7 @@ class _Parameter:
     """What a parameter takes, as a cell gives it."""
 
     many: bool  # a list of what the other fields say
-    inline: Any  # the part that a request writes, None if only an output
+    inline: Scalar | Group | Choice | FileKind | None  # None if only an output
     file: bool
     output: bool
 
@@ -172,31 +173,28 @@ def _text(tp: Any) -> bool:
 
 
 def _parameter(name: str, info: FieldInfo) -> _Parameter:
-    metadata = field_types.field_metadata(info)
-    tp, _, metadata = field_types.unwrapped(info.annotation, metadata)
-    many = get_origin(tp) is list
+    field = field_types.shape(info.annotation, field_types.field_metadata(info))
+    many = field.element is not None
     if many:
-        tp, _, metadata = field_types.unwrapped(get_args(tp)[0])
-    inline, inline_metadata, referenced = field_types.split(tp, *metadata)
-    if referenced and _text(inline):
+        field = field_types.shape(field.element)
+    inline = field.inline
+    if field.referenced and isinstance(inline, Scalar) and _text(inline.type):
         raise ValueError(
             f'{name}: takes text or an output, and a cell cannot tell the two apart'
         )
-    is_file = (
-        inline is not None
-        and field_types.file_marker(inline, *inline_metadata) is not None
+    return _Parameter(
+        many, inline, isinstance(inline, FileKind), bool(field.referenced)
     )
-    return _Parameter(many, inline, is_file, bool(referenced))
 
 
 def _dtype(parameter: _Parameter) -> str:
-    tp = parameter.inline
     if parameter.many:
         return 'object'
-    if parameter.file or tp is None:
+    if parameter.file or parameter.inline is None:
         return 'string'
-    if parameter.output:
+    if parameter.output or not isinstance(parameter.inline, Scalar):
         return 'object'
+    tp = parameter.inline.type
     if tp is bool:
         return 'boolean'
     if tp is int:
