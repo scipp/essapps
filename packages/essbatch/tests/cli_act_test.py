@@ -175,7 +175,7 @@ def test_follow_exits_with_3_if_a_row_failed_and_says_why(
 
     said = capsys.readouterr()
     assert 'failed 5 (' in said.out
-    assert '1 row of x not done: show -l x says why' in said.err
+    assert '1 row of x not done: show -l x states why' in said.err
 
 
 @pytest.mark.parametrize(

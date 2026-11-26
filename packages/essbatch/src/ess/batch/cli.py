@@ -5,14 +5,14 @@ The command ``essbatch``: an application of the batch layer, as the page is.
 Its help, :data:`_HELP` and the description of each command, is the
 documentation for a person who operates batches (ADR 0014).
 
-A command is a function of :class:`_Context` that gives a :data:`_Result`, and
+A command is a function of :class:`_Context` that returns a :data:`_Result`, and
 an item of :data:`_COMMANDS` that names it with its arguments and checks.
 The commands are thin: the rules are those of ``BatchManager``, ``Intake``
 and ``Batch``, as the page applies them, so a label is one batch whoever
 works on it.
 
 One process works on a folder at a time: a command that opens the folder
-refuses one that another process holds. ``files`` does not open the folder,
+fails on one that another process holds. ``files`` does not open the folder,
 so it runs while ``follow`` holds it. The loop of ``follow`` ends at the
 first SIGINT, SIGTERM or SIGHUP, or after ``--steps``, once the reductions
 that run have ended; a second signal ends the process at once
@@ -735,7 +735,7 @@ def _follow(given: _Context) -> int:
     states, _ = intake.manager.batch(label).shown()
     if left := sum(s.status != 'done' for s in states.values()):
         sys.stderr.write(
-            f'{_count(left, "row")} of {label} not done: show -l {label} says why\n'
+            f'{_count(left, "row")} of {label} not done: show -l {label} states why\n'
         )
         return 3
     return 0
@@ -1360,7 +1360,7 @@ def _parser() -> argparse.ArgumentParser:
         '--catalogue',
         metavar='MODULE:NAME',
         help='a function from the proposal to the catalogue to publish to '
-        '(ess.apps.scicat.Catalogue), for publish; output-options takes the '
+        '(ess.apps.scicat.Catalogue), for publish; output-options reads the '
         'default owner and contact from it',
     )
     parser.add_argument(
@@ -1383,7 +1383,7 @@ def _parser() -> argparse.ArgumentParser:
         dest='command',
         required=True,
         metavar='COMMAND',
-        help='a command above; COMMAND --help says more',
+        help='a command above; COMMAND --help explains it',
     )
     for name, command in _COMMANDS.items():
         sub = commands.add_parser(name, description=command.description)

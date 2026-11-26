@@ -51,7 +51,7 @@ def params_and_missing(
     fields: Fields, parameter_columns: Collection[str] = ()
 ) -> tuple[dict[str, Any], list[FieldError]]:
     """
-    :meth:`~ess.apps.Fields.params_and_missing` of a form of settings, except
+    :meth:`~ess.apps.fields.Fields.params_and_missing` of a form of settings, except
     that a field of ``parameter_columns`` left unset as a whole is not missing.
     """
     given, missing = fields.params_and_missing()
