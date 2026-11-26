@@ -59,7 +59,7 @@ Nothing in the batch layer imports the page or the command.
 | state | `state.py`: `RowState`, the rules | where each row stands; the rules are functions from the states of rows to keys |
 | step | `auto.py`: `step`, `Step` | one step of Follow on one batch: add rows of the source, reduce rows |
 | manager | `manager.py`: `BatchManager` | the batches of a workspace: make one from a batch table, list, change, remove; it knows no row source |
-| `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, offer and take its rows; which batch follows, and its step; `seen_keys` |
+| `Intake` | `intake.py`: `Intake` | rows of a row source into a batch: make a batch from a source, list its available rows and add them; which batch follows, and its step; `seen_keys` |
 | definitions | `definition.py`: `DefinitionStore`, `FolderDefinitions` | what a workspace keeps besides files and records (table below) |
 | writing | `writing.py`: `Writing` | how the results of a batch are written: the output options of a batch (a format, outputs, and what a person says of them, `ess.apps.writers.DatasetMetadata`), and the writers of each spec (`ess.apps.writers.Writer`); the download of the page, `export -l` and publishing write by it |
 | publisher | `publish.py`: `Publisher` | the results of a batch into SciCat, one derived dataset per row (`ess.apps.scicat`) with the files that `Writing` writes: which results may be published, and what was published |
@@ -72,10 +72,9 @@ Nothing in the batch layer imports the page or the command.
 | batch | one spec reduced for many samples: a header (title, description), a template (`ess.apps.Template`: the spec and the settings, kept as `settings.json`) and a batch table |
 | label | the name of a batch, unique in a workspace: its folder in the definitions, the label of its records, its address on the page and for the command; `batch.label` |
 | setting | the value of a parameter for the batch: one item of `batch.settings`, by the name of the parameter |
-| batch table | the rows of a batch, one per reduction: one `pandas.DataFrame` (below) |
 | result of a row | the newest record under the label with the row's key as member |
 | row source | code of the application that makes rows from the files (a `RowSource`) |
-| complete, waits | a row of a source is complete once it has a value in each parameter that the source fills (`RowSource.source_columns`, kept as `batch.source_columns`); until then it waits |
+| complete, incomplete | a row of a source is complete once it has a value in each parameter that the source fills (`RowSource.source_columns`, kept as `batch.source_columns`); until then it is incomplete |
 | seen, `seen_keys` | the keys of its source that a batch has taken, left out when it was made, or had in its batch table at a step (`source.json`) |
 | Follow, the batch that follows | Follow is a step every few seconds on the batch that follows (`intake.following`): add the rows of its source that are complete and not seen, then reduce the rows that are ready and have no result |
 
