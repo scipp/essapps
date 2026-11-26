@@ -32,7 +32,7 @@ from ess.apps.testing import (
     FakeFiles,
     FakeStore,
     StagedFunction,
-    kept_rows,
+    list_driver,
     read_file,
 )
 from ess.spec import (
@@ -234,7 +234,7 @@ def bind(
     return [
         function_binding(LOAD, load),
         function_binding(SHIFT, shift),
-        kept_rows(TOTAL, total),
+        list_driver(TOTAL, total),
         function_binding(LIST, lambda p: Listed(value=[read_file(p.sample)])),
         function_binding(BOX, box),
         function_binding(

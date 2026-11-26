@@ -256,9 +256,9 @@ class StagedFunction:
         return lambda given: self.function(instance(self.spec, {**values, **given}))
 
 
-class KeptRows:
+class ListDriver:
     """
-    A driver that keeps the rows pushed into each table of ``spec``, and at
+    A driver that holds the rows pushed into each table of ``spec``, and at
     each read calls ``function`` with an instance of the spec's params model,
     of the fixed values and the rows so far.
     """
@@ -282,9 +282,9 @@ class KeptRows:
         return self._function(instance(self._spec, {**self._fixed, **rows}))
 
 
-def kept_rows(spec: Spec, function: Callable[[Any], BaseModel]) -> DriverBinding:
+def list_driver(spec: Spec, function: Callable[[Any], BaseModel]) -> DriverBinding:
     """
-    A ``DriverBinding`` whose drivers keep the rows (:class:`KeptRows`):
+    A ``DriverBinding`` whose drivers hold the rows in lists (:class:`ListDriver`):
     ``function`` takes the params, as ``function_binding`` takes, each table
     as lists of every row so far.
 
@@ -292,4 +292,4 @@ def kept_rows(spec: Spec, function: Callable[[Any], BaseModel]) -> DriverBinding
     recommended driver: each read computes over every row again. A package
     writes its own driver, which decides how rows combine.
     """
-    return DriverBinding(spec, functools.partial(KeptRows, spec, function))
+    return DriverBinding(spec, functools.partial(ListDriver, spec, function))

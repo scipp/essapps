@@ -23,7 +23,7 @@ from ess.apps import (
     file,
     local,
 )
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
+from ess.apps.testing import FakeFiles, StagedFunction, list_driver, read_file
 from ess.spec import (
     DriverBinding,
     NoParams,
@@ -171,10 +171,10 @@ def client(files: FakeFiles) -> Iterator[Client]:
         files=files,
         bind=[
             StagedFunction(SCALE, scale),
-            kept_rows(TOTAL, total),
+            list_driver(TOTAL, total),
             function_binding(MAKE, make),
             StagedFunction(USE, use),
-            kept_rows(USE_MANY, use_many),
+            list_driver(USE_MANY, use_many),
             Counting(COUNT, Count),
         ],
     ) as client:

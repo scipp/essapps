@@ -25,7 +25,7 @@ from ess.apps import (
     file,
     local,
 )
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
+from ess.apps.testing import FakeFiles, StagedFunction, list_driver
 from ess.spec import Binding, File, OutputRef, Referenced, RunFile, function_binding
 
 from . import toys
@@ -80,7 +80,7 @@ def windows(files: FakeFiles) -> Iterator[Client]:
     bind = [
         function_binding(toys.LOAD, toys.load_run),
         StagedFunction(WINDOWS, widths),
-        kept_rows(WINDOWS_ROWS, widths),
+        list_driver(WINDOWS_ROWS, widths),
     ]
     with local(proposal='p1', files=files, bind=bind) as client:
         yield client

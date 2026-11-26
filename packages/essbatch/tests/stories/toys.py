@@ -27,7 +27,7 @@ from ess.apps import (
 )
 from ess.apps.testing import (
     StagedFunction,
-    kept_rows,
+    list_driver,
     read_file,
 )
 from ess.spec import (
@@ -533,13 +533,13 @@ TOYS: dict[SpecId, Binding[Any, Any]] = {
         function_binding(CONTRIBUTE, contribute),
         function_binding(ANGLE, angle),
         function_binding(CUT, cut),
-        kept_rows(STITCH, stitch),
+        list_driver(STITCH, stitch),
         function_binding(EXPORT, export),
         function_binding(PARTS_SUM, parts_sum),
         summing(VOLUME, volume),
         function_binding(SLICER, slicer),
-        kept_rows(SLICES, sliced),
-        kept_rows(CENTRED_MULTI, centred),
+        list_driver(SLICES, sliced),
+        list_driver(CENTRED_MULTI, centred),
     ]
 }
 

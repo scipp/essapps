@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel, Field, model_validator
 
 from ess.apps import Client, SubmitError, Template, Workspace, file
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
+from ess.apps.testing import FakeFiles, StagedFunction, list_driver, read_file
 from ess.spec import MaskFile, RunFile, WorkflowSpec, function_binding
 
 
@@ -126,7 +126,7 @@ def client(files: FakeFiles) -> Iterator[Client]:
     bindings = [
         function_binding(RUN, lambda p: Outputs(total=Total(value=read_file(p.run)))),
         StagedFunction(SAMPLE, _sample),
-        kept_rows(TABLE, _table),
+        list_driver(TABLE, _table),
         function_binding(CHANNELS, _channels),
         function_binding(CHECKED, lambda p: Outputs(total=Total(value=0.0))),
     ]

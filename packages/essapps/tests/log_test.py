@@ -38,7 +38,7 @@ from ess.apps.log import (
     Started,
     Submitted,
 )
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
+from ess.apps.testing import FakeFiles, StagedFunction, list_driver, read_file
 from ess.spec import (
     FileRef,
     OutputRef,
@@ -176,8 +176,8 @@ def start(
     def start(path: Path) -> Client:
         bind = [
             StagedFunction(LOAD, load),
-            kept_rows(TOTAL, total),
-            kept_rows(RUNS, runs),
+            list_driver(TOTAL, total),
+            list_driver(RUNS, runs),
         ]
         workspaces.append(
             Workspace(proposal='p1', files=files, bind=bind, log=Log(path))

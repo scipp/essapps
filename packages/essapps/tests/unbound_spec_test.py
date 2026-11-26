@@ -26,7 +26,7 @@ from ess.apps import (
 )
 from ess.apps.folder import open_folder
 from ess.apps.log import Finished, Log, Started, Submitted
-from ess.apps.testing import kept_rows
+from ess.apps.testing import list_driver
 from ess.spec import Binding, Referenced, WorkflowSpec, function_binding
 
 COUNTS = sc.DataArray(sc.arange('q', 4.0), coords={'q': sc.arange('q', 5.0)})
@@ -341,7 +341,7 @@ SUM = WorkflowSpec(
 def test_a_freeze_is_of_the_bound_spec_that_its_accumulator_was_opened_with(
     folder: Path,
 ) -> None:
-    bind = [kept_rows(SUM, lambda p: Sum(total=sum(p.parts)))]
+    bind = [list_driver(SUM, lambda p: Sum(total=sum(p.parts)))]
     with open_folder(folder, bind) as client:
         accumulator = client.accumulator(Template(SUM, blanks=('parts',)))
         accumulator.push(parts=[1.0, 2.0])
