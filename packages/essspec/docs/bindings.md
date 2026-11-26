@@ -1,6 +1,9 @@
 # Writing a binding
 
-A *binding* is what the workspace (`ess.apps.Workspace`, which runs requests) calls to compute the requests of a spec ([params.md](params.md)).
+This page is for a workflow author who has written a spec ([params.md](params.md)).
+After reading it you can write the binding that computes the spec's requests, and test it.
+
+A *binding* is what the workspace (`ess.apps.Workspace`, which runs requests) calls to compute the requests of a spec.
 A workflow package writes one binding per spec, from a function, a sciline pipeline, or a driver:
 
 ```python
@@ -12,22 +15,23 @@ single = PipelineBinding(IOFQ, make_pipeline, keys={'sample': (Filename[SampleRu
 multi = DriverBinding(IOFQ_MULTI, IofQDriver)
 ```
 
-Each binding serves some of a client's actions.
-Making a stage or an accumulator over a binding that does not serve it is refused:
+Each kind of binding serves some of a client's actions.
+The workspace rejects a stage or an accumulator over a binding that does not serve it:
 
 | Binding | Plain request | Stage | Accumulator |
 |---|---|---|---|
-| `function_binding` | `compute` | refused | refused |
-| `PipelineBinding` | `compute` | `make_stage` | refused |
-| `DriverBinding` | `compute` | refused | `make_accumulator` |
+| `function_binding` | `compute` | no | no |
+| `PipelineBinding` | `compute` | `make_stage` | no |
+| `DriverBinding` | `compute` | no | `make_accumulator` |
 
-[roles/workflow-authors.ipynb](../../../docs/developer/roles/workflow-authors.ipynb) walks through a spec, its bindings, and a driver on a running example, [roles/toy_sans.py](../../../docs/developer/roles/toy_sans.py).
+[roles/workflow-authors.ipynb](../../../docs/developer/roles/workflow-authors.ipynb) walks through a spec, its bindings and a driver on a running example, [roles/toy_sans.py](../../../docs/developer/roles/toy_sans.py).
 [accumulators.md](../../../docs/developer/accumulators.md) describes stages and accumulators from the client's side.
 
-## What a binding gets
+## What a binding receives
 
 A plain request calls `compute(params)` with an instance of the spec's params model.
-A stage or an accumulator is made from some values only, so `make_stage` and `make_accumulator` get the values by name, and the names of the *blanks*, the parameters left for later calls or pushes:
+A stage or an accumulator is created from some values only.
+So `make_stage` and `make_accumulator` receive the values by name, and the names of the *blanks*, the parameters left for later calls or pushes:
 
 ```python
 binding.make_stage(
@@ -39,7 +43,7 @@ binding.make_stage(
 
 Every value is of its field's type, whether the request gave it inline or by reference:
 
-| Field | The binding gets |
+| Field | The binding receives |
 |---|---|
 | a group, `Reduction` | an instance of `Reduction` |
 | `Referenced[T]` | the `T` that the referenced record computed |
@@ -47,16 +51,21 @@ Every value is of its field's type, whether the request gave it inline or by ref
 | a table, `list[SampleRunFile]` | the list of its rows, each a `Path` |
 
 The workspace reads the data of each reference, and resolves each file, before it calls the binding.
-`compute` gets every parameter, with the defaults of the model filled in, and so do `make_pipeline` and `make_driver` for the fixed values.
-A check across parameters is the binding's, since the params model has no validators ([params.md, When values are validated](params.md#when-values-are-validated)).
+`compute` receives every parameter, with the defaults of the model filled in.
+So do `make_pipeline` and `make_driver`, for the fixed values.
+A check across parameters belongs to the binding, since the params model has no validators ([params.md](params.md#when-values-are-validated)).
 
 A binding returns an instance of the outputs model.
-An output that the spec declares optional, `X | None`, is left out by being `None`.
+An optional output, `X | None`, is left out by being `None`.
+
+A binding is pure.
+It modifies no value it receives, returns no output that shares memory with one, and returns the same outputs for the same values.
+The workspace may call it from several threads at once ([Threading](#threading)).
 
 ## A function
 
 `function_binding` serves plain requests only.
-It fits drafts in notebooks, and workflows that hold nothing worth keeping between calls:
+It suits drafts in notebooks, and workflows that hold nothing worth keeping between calls:
 
 ```python
 def iofq(params: IofQParams) -> IofQOutputs:
@@ -71,7 +80,7 @@ It serves no stage, since a stage over a function would hold nothing.
 ## A pipeline
 
 `PipelineBinding(spec, make_pipeline, keys=...)` serves plain requests and stages over a sciline pipeline.
-`make_pipeline` makes the pipeline from the fixed values, by name, with defaults filled in, so that the graph may depend on them.
+`make_pipeline` creates the pipeline from the fixed values, by name, with defaults filled in, so that the graph may depend on them.
 The binding sets each value at its key and computes each output at its key.
 
 ### Parameters and keys
@@ -83,17 +92,17 @@ Each parameter sets the key of its type, without `Annotated` metadata:
 | `reduction: Reduction` | `Reduction` |
 | `transmission: Referenced[ComputedTransmission]` | `ComputedTransmission` |
 | `runs: list[Run]` | `list[Run]`, to the whole list |
-| `beam_centre: Annotated[GivenCentre \| FindCentre, ...]` | `GivenCentre` or `FindCentre`, the member the value is (see Unions) |
+| `beam_centre: Annotated[GivenCentre \| FindCentre, ...]` | `GivenCentre` or `FindCentre`, by the value (see [Unions](#unions)) |
 | `centre: BeamCentre \| Referenced[BeamCentre]` | `BeamCentre`: the members are of one class |
 | `sample: SampleRunFile` | none of its own: needs `keys=` |
 | `bins: int` | none of its own: needs `keys=` |
-| `direct_beam: RunFile \| None` | none: needs `keys={'direct_beam': ()}` (see `None`) |
+| `direct_beam: RunFile \| None` | none: needs `keys={'direct_beam': ()}` (see [`None`](#none)) |
 
 Each output is computed at the key of its type without `| None`, such as `IofQ` for `iofq: IofQ`.
 
 A parameter whose type, or element type for a list, is neither a group nor a union of groups needs `keys=`, since its class names no role.
-The binding refuses it without one: no provider would read a key such as `int` or `Path`, and the value would have no effect.
-A file sets the workflow's own key of the file's path, so that a provider takes a plain path, as esssans' providers take `Filename[SampleRun]`:
+Without it, `PipelineBinding` raises `ValueError`: no provider would read a key such as `int` or `Path`, and the value would have no effect.
+A file sets the workflow's own key of the file's path, so that a provider accepts a plain path, as esssans' providers accept `Filename[SampleRun]`:
 
 ```python
 class IofQParams(BaseModel):
@@ -106,7 +115,7 @@ PipelineBinding(IOFQ, make_pipeline,
 
 ### `keys=`
 
-`keys=` gives a tuple of keys for a parameter or an output, by name:
+`keys=` maps a parameter or an output, by name, to a tuple of keys:
 
 | Value | For |
 |---|---|
@@ -114,22 +123,22 @@ PipelineBinding(IOFQ, make_pipeline,
 | `(K1, K2, ...)` | a union of groups: a key for each member, in the order of the union |
 | `()` | a parameter that sets no key |
 
-It names keys of the workflow's own, such as the key at which the graph computes an output:
+The keys are the workflow's own, such as the key at which the graph computes an output:
 
 ```python
 PipelineBinding(IOFQ, make_pipeline, keys={'iofq': (BackgroundSubtractedIofQ,)})
 ```
 
-`binding.keys` gives the keys of every parameter and output, with those of `keys=` and those from the types.
+`binding.keys` returns the keys of every parameter and output, from `keys=` and from the types.
 
 No two fields, parameters or outputs, share a key, over all members of a union.
-An output computed at a parameter's key would be the value that the binding was given, and an output must not share memory with one.
-Two parameters of one class each get a key with `keys=`, or a class of their own, `class Can(Run): ...`.
+An output computed at a parameter's key would be the value that the binding received, and an output must not share memory with one.
+Two parameters of one class each need a key from `keys=`, or a class of their own, `class Can(Run): ...`.
 An output that reports the beam centre given or found has a key of its own, such as `UsedCentre`, which a provider computes from `GivenCentre`.
 
 ### Groups and adapters
 
-A group is one key, so a provider takes it apart.
+A group is one key, so a provider splits it into its fields.
 For a value in another shape, `make_pipeline` inserts an adapter provider, such as one that makes the output group `IofQ` from the workflow's array:
 
 ```python
@@ -142,6 +151,7 @@ def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     return pipeline
 ```
 
+Files that vary independently are separate parameters ([params.md](params.md#what-a-field-may-be)).
 
 ### Unions
 
@@ -167,8 +177,7 @@ That always works, since a union is never a blank.
 
 ### `None`
 
-A parameter typed `X | None` sets no key, and `make_pipeline` says what `None` means.
-Each value of a union sets one key, but `None` has no key to set.
+A parameter typed `X | None` sets no key, and `make_pipeline` defines what `None` means.
 Setting `X` to `None` would replace a provider of `X`.
 Setting nothing would leave the meaning of `None` to whatever the pipeline holds or computes at `X`.
 So `keys=` gives such a parameter no key, `()`:
@@ -177,7 +186,7 @@ So `keys=` gives such a parameter no key, `()`:
 def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
     pipeline = sciline.Pipeline(providers)
     if fixed['direct_beam'] is None:
-        pipeline[sans.DirectBeam] = None          # esssans' providers take None
+        pipeline[sans.DirectBeam] = None          # esssans' providers accept None
     else:
         pipeline[sans.DirectBeamFilename] = fixed['direct_beam']
     return pipeline
@@ -187,24 +196,23 @@ PipelineBinding(SPEC, make_pipeline, keys={'direct_beam': ()})
 
 The same holds for a union typed `U | None`.
 
-An optional output, `X | None`, means that the graph may lack it, not that a provider returns `None`.
-It is computed if the pipeline has a value or a provider for its key, and is `None` otherwise.
+An optional output, `X | None`, is computed if the pipeline has a value or a provider at its key, and is `None` otherwise.
 
 ### Defaults and values held in a pipeline
 
 Defaults belong to the spec.
-`make_pipeline` holds no value at a key that a parameter's key leads to: the value replaces the provider that would read the parameter, and the request's value has no effect.
+`make_pipeline` holds no value at a key that a parameter's key leads to.
+Such a value replaces the provider that would read the parameter, so the request's value has no effect.
 The binding cannot check this, since the provider is gone from the graph.
 `make_pipeline` replaces such a value with a provider, `pipeline.insert(...)`, such as an adapter from the spec's group to the workflow's key.
 
-A value held at the key of a parameter itself is harmless, since the binding sets the request's value over it (but see Edge cases for unions).
+A value held at the key of a parameter itself is harmless, since the binding sets the request's value over it.
+Unions are the exception ([Edge cases](#edge-cases)).
 
-### Purity and copying
-
-The author of the pipeline promises that it is pure: it modifies no value it is given, and returns the same results for the same values.
+### Copying
 
 `make_pipeline` may return a pipeline that it holds, since the binding copies the pipeline before it sets values in it.
-`make_pipeline` itself sets no value in a pipeline that it holds: a value set for one request would stay for the next.
+`make_pipeline` itself sets no value in a pipeline that it holds, since a value set for one request would remain for the next.
 
 ### Stages
 
@@ -212,14 +220,15 @@ A stage cuts the pipeline of the fixed values at the keys of the blanks.
 It computes what does not depend on the blanks on its first call, and holds it for later calls.
 A plain request is a stage with no blanks, called once.
 
-`make_pipeline` gets no blank, so a field that changes the graph cannot be a blank.
+`make_pipeline` receives no blank, so a field that changes the graph cannot be a blank.
 A parameter that sets no key cannot be a blank, nor can a union of groups, since its key may depend on its value.
 `make_stage` raises `ValueError` for either.
 
 ## A driver
 
-A *driver* is the object behind an accumulator: tables are pushed into it, and it gives the outputs over the rows so far.
-The workflow package writes it, for one spec, and it holds everything an accumulator keeps.
+A *driver* is the object behind an accumulator.
+Tables are pushed into it, and it returns the outputs over the rows so far.
+The workflow package writes it for one spec, and it holds all state of the accumulator.
 A driver is a sciline driver in the sense of [sciline ADR 0003](https://github.com/scipp/sciline/pull/245):
 
 ```python
@@ -229,22 +238,24 @@ class Driver(Protocol):
 ```
 
 `DriverBinding(spec, make_driver)` serves plain requests and accumulators over a spec with tables.
-`make_driver` makes a driver from the fixed values that are not tables, by name.
+`make_driver` creates a driver from the fixed values that are not tables, by name.
 An accumulator gets a driver of its own.
-The binding pushes the rows of each table in the fixed values, such as a can run fixed by the client's template, one push per table, and skips a table without rows.
-Each push of the client then calls `push` once per table, with its rows, and each state read calls `outputs`.
-A plain request is an accumulator with no blanks, read once: it too computes with a driver from `make_driver`.
+The binding first pushes the rows of each table in the fixed values, such as a can run fixed by the client's template, one push per table.
+It skips a table without rows.
+Each push of the client then calls `push` once per table, with its rows, and each read of the state calls `outputs`.
+A plain request is an accumulator with no blanks, read once, so it too computes with a driver from `make_driver`.
 
 ### What a driver promises
 
-- `outputs()` gives the outputs of every row pushed so far, however the rows were grouped into pushes, and whatever the order of pushes into different tables.
-- Within a table, the rows keep the order in which they were pushed.
-- `push` does not modify a value it is given. A driver that adds into the first contribution copies it first, so that adding never changes a value that another record returned.
+- `outputs()` returns the outputs of every row pushed so far, however the rows were grouped into pushes, and whatever the order of pushes into different tables.
+- Within a table, the order of the rows is the order in which they were pushed.
+- `push` does not modify a value it receives. A driver that adds into the first contribution copies it first, so that adding never changes a value that another record returned.
 - An output that the spec declares optional may be `None`.
-- A driver may refuse a state, such as one whose runs it cannot combine yet, by raising in `outputs()`. Later pushes may make the state valid.
+- A driver may reject a state, such as one whose runs it cannot combine yet, by raising in `outputs()`. Later pushes may make the state valid.
 
-A driver computes the contribution of every row of a push, what the row adds to the driver's sums, before it adds any.
-A row that fails then leaves the sums as they were, and the part that computes a contribution touches no state of the driver, so it may run on several threads.
+Compute the contribution of every row of a push, what the row adds to the driver's sums, before adding any.
+A row that fails then leaves the sums as they were.
+The code that computes a contribution touches no state of the driver, so it may run on several threads.
 A push that raises still stops the accumulator, since the workspace cannot tell whether the driver holds part of its rows.
 
 ### What the caller promises
@@ -278,15 +289,16 @@ class IofQDriver:
 multi = DriverBinding(IOFQ_MULTI, IofQDriver)
 ```
 
-`a + b` makes a new sum, so no value the driver was given is modified.
-Summing numerators and denominators apart, and dividing once, is what makes a sum of runs correct; a sum of normalized curves would not be.
+`a + b` makes a new sum, so no value the driver received is modified.
+Summing numerators and denominators separately, and dividing once, makes a sum of runs correct.
+A sum of normalized curves would not be.
 
-A workflow that needs every row at once, such as a stitch of runs, writes a driver that keeps its rows and computes over all of them at each read.
+A workflow that needs every row at once, such as a stitch of runs, writes a driver that holds its rows and computes over all of them at each read.
 
 ### Reusing the single-run pipeline
 
 A driver may compute each row with the pipeline of the single-run binding.
-`single.pipeline(fixed)` gives the graph that a stage of `single` cuts, and `single.keys[table]` the key at which a row goes in:
+`single.pipeline(fixed)` returns the graph that a stage of `single` cuts, and `single.keys[table]` the key at which a row goes in:
 
 ```python
 class IofQDriver:
@@ -301,13 +313,13 @@ class IofQDriver:
 ```
 
 [roles/toy_sans.py](../../../docs/developer/roles/toy_sans.py) has the whole driver.
-A driver passes the fixed values that it is made with to `pipeline`, so a table of the multi-run spec cannot shape the graph, as a blank cannot.
+A driver passes the fixed values that it is created with to `pipeline`, so a table of the multi-run spec cannot shape the graph, as a blank cannot.
 A table whose single-run parameter is a union of several classes has a key per member, so a driver cannot cut the graph at one key for its rows.
 A table of `X | Referenced[X]` has one key.
 
 ### Calling a driver by hand
 
-Code that calls a driver itself keeps the order of the workspace, and is done with the outputs of a state before it pushes:
+Code that calls a driver itself follows the order of the workspace, and is done with the outputs of a state before it pushes:
 
 ```python
 driver = binding.make_accumulator(fixed, blanks=('runs',))
@@ -317,11 +329,11 @@ for run in runs:                                  # each the local path of a run
     show(counts['q', 0])                          # done with it before the next push
 ```
 
-A driver needs no spec, workspace, or client, so a package uses and tests it as plain code.
+A driver needs no spec, workspace or client, so a package uses and tests it as plain code.
 
 ## Threading
 
-The workspace may make and call bindings from several threads at once:
+The workspace may create and call bindings from several threads at once:
 
 | Call | From several threads at once |
 |---|---|
@@ -335,7 +347,7 @@ Since no caller modifies a value, sharing is safe.
 
 ## Testing the symmetries
 
-`ess.spec.testing` checks the symmetries that a workflow package keeps ([accumulators.md, Symmetries](../../../docs/developer/accumulators.md#symmetries)).
+`ess.spec.testing` checks the symmetries that a binding promises ([accumulators.md, Symmetries](../../../docs/developer/accumulators.md#symmetries)).
 Each check computes the same outputs in two ways and compares them, so it needs no known result:
 
 ```python
@@ -349,19 +361,19 @@ check_caching(single, {'transmission': settings['transmission'], 'sample': run_1
 check_arrival_and_order(IofQDriver, settings, {'sample': [run_101, run_102], 'can': [run_110]})
 ```
 
-Values are those that the binding gets: data read, files as local paths.
+Values are those that the binding receives: data read, files as local paths.
 Outputs are compared up to `rtol`, since adding in another order rounds differently.
 `check_one_row` and `check_caching` also check that no output shares memory with a value given, for values backed by numpy.
 
-Repeat a call after others in `check_caching`, as bins 2, 1, and 2 again above, to find a stage whose calls change what it holds.
+Repeat a call after others in `check_caching`, as bins 2, 1 and 2 again above, to find a stage whose calls change what it holds.
 `check_arrival_and_order` compares the driver with itself, so it does not prove the outputs right.
-Only `check_one_row`, against the single-run binding, compares with an independent reference.
+Only `check_one_row` compares with an independent reference, the single-run binding.
 
 ## Edge cases
 
 **Subclasses in a union.** An instance of a subclass of a member sets that member's key, such as an output of a subclass of `T` at `Referenced[T]`.
 
-**A union of one class.** A union whose members are of one class is that class to the binding, with one key, and not a union, so it may be a blank:
+**A union of one class.** A union whose members are of one class is that class to the binding, with one key, so it may be a blank:
 
 ```python
 centre: BeamCentre | Referenced[BeamCentre]       # keys: (BeamCentre,)
@@ -372,14 +384,14 @@ beam_centre: (
 ```
 
 **One key for all members.** A union's own `keys=` may give its members one key, `(K, K)`: the value of either member is then set at `K`.
-The union is still not a blank, since `make_pipeline` may branch on its value.
+The union still cannot be a blank, since `make_pipeline` may branch on its value.
 
-**A union in a list.** A union in a list, such as a table, sets no key of its own: the list's key holds it, and a provider tells its rows apart.
+**A union in a list.** A union in a list, such as a table, sets no key of its own: the list's key holds it, and a provider distinguishes its rows.
 
 **A value held at a key of a union.** A union whose members have keys of their own is one where a held value does harm: one member sets the key, the others do not.
 If the pipeline of the beam-centre example held a default `GivenCentre`, the tag `'find'` would set `FindCentre`, but `iofq` would read the held default, and `find_centre` would never run.
 The binding cannot tell which key leads to which, since the held value has replaced the provider that would show it.
-So `pipeline` refuses a value held at any key of such a union.
+So `pipeline` raises `ValueError` for a value held at any key of such a union.
 
 **Outputs at a shared type.** An output that a provider returns as `X | None` needs `keys=`, since the binding computes the key `X`.
 An output typed `sc.DataArray` is computed at the key `sc.DataArray`, so two such outputs need `keys=`.
