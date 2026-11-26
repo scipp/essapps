@@ -509,7 +509,7 @@ class _Accumulator:
             del self.driver
 
 
-def _state_key(accumulator_id: str, upto: int) -> str:
+def _freeze_wait_key(accumulator_id: str, upto: int) -> str:
     """What the record of a freeze of the state after ``upto`` pushes waits for."""
     return f'{accumulator_id}[:{upto}]'
 
@@ -539,7 +539,7 @@ class _Plan:
 
     ``reads`` are the values it holds as a reader until it starts, which then
     holds them itself, or finishes without starting. ``depends_on`` are the records
-    and the states (see :func:`_state_key`) it waits for before it starts.
+    and the states (see :func:`_freeze_wait_key`) it waits for before it starts.
     ``compute`` returns its outputs by name, on a worker. ``state`` is the
     state that the record of a freeze reads, which it holds until it has
     finished, or ``None``.
@@ -626,7 +626,7 @@ class Workspace(WorkspaceProtocol):
         # a value to the number of its readers (see _Read)
         self._readers: Counter[_Read] = Counter()
         self._plans: dict[str, _Plan] = {}  # of the records not yet finished
-        # a record or a state (see _state_key) to the records that wait for it
+        # a record or a state (see _freeze_wait_key) to the records that wait for it
         self._dependents: dict[str, set[str]] = {}
         self._accumulating: set[_Accumulator] = set()  # with steps not yet done
         # values whose last reader let go, for _let_go_locked's loop to work through
@@ -1874,7 +1874,7 @@ class Workspace(WorkspaceProtocol):
         state = _StateKey(acc, upto)
         return _Plan(
             reads=[state],
-            depends_on={_state_key(acc.id, upto)} if acc.added != upto else set(),
+            depends_on={_freeze_wait_key(acc.id, upto)} if acc.added != upto else set(),
             compute=lambda: dict(acc.outputs()),
             state=state,
         )
@@ -1948,8 +1948,10 @@ class Workspace(WorkspaceProtocol):
             acc.added = 0 if acc.added is None else acc.added + 1
             acc.busy = False
             self._let_go_locked(reads)
-            for record_id in self._dependents.pop(_state_key(acc.id, acc.added), ()):
-                self._satisfied_locked(record_id, _state_key(acc.id, acc.added))
+            for record_id in self._dependents.pop(
+                _freeze_wait_key(acc.id, acc.added), ()
+            ):
+                self._satisfied_locked(record_id, _freeze_wait_key(acc.id, acc.added))
             self._advance_locked(acc)
 
     def _stop_locked(self, acc: _Accumulator, failure: str) -> None:
@@ -1967,7 +1969,7 @@ class Workspace(WorkspaceProtocol):
         for step in steps:
             self._let_go_locked(step.reads)
         for upto in range(len(self._views.pushes.get(acc.id, ())) + 1):
-            for record_id in self._dependents.pop(_state_key(acc.id, upto), ()):
+            for record_id in self._dependents.pop(_freeze_wait_key(acc.id, upto), ()):
                 self._finish_locked(record_id, Status.FAILED, acc.stopped)
         if not self._readers[_StateKey(acc, acc.added)]:
             acc.end_locked()
