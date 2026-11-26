@@ -581,12 +581,29 @@ class Client:
         """
         return [s.software for s in self._statuses(records)]
 
+    @_shaped
+    def cleared(self, records: list[Record]) -> list[bool]:
+        """
+        Whether the outputs of each record are cleared.
+
+        See :class:`~ess.apps.RecordStatus`.
+        """
+        return [s.cleared for s in self._statuses(records)]
+
     def _statuses(self, records: list[Record]) -> list[RecordStatus]:
         return self._workspace.status([r.id for r in records])
 
     def cancel(self, records: _Items[Record]) -> None:
         """See :meth:`~ess.apps.protocol.WorkspaceProtocol.cancel`."""
         self._workspace.cancel([r.id for r in _items(records)])
+
+    def clear(self, records: _Items[Record]) -> None:
+        """
+        Drops the outputs of the records, in memory and in the store.
+
+        See :meth:`~ess.apps.protocol.WorkspaceProtocol.clear`.
+        """
+        self._workspace.clear([r.id for r in _items(records)])
 
     # Stages, accumulators, and releases
 

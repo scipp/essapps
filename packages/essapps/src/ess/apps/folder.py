@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import csv
 import io
+import shutil
 import threading
 import warnings
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +59,10 @@ class FolderStore:
         path = self.path(record, output)
         path.parent.mkdir(parents=True, exist_ok=True)
         hdf5.write(value, path)
+
+    def delete(self, record: str) -> None:
+        with suppress(FileNotFoundError):
+            shutil.rmtree(self._directory / record)
 
     def read(self, record: str, output: str, tp: Any | None) -> Any:
         path = self.path(record, output)

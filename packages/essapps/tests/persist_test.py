@@ -457,6 +457,48 @@ def test_closing_a_local_client_waits_until_what_is_persisted_is_written(
     assert (load.id, 'value') in store
 
 
+def test_clearing_a_record_held_in_memory_lets_go_of_its_values(
+    client: Client, boxes: list[weakref.ref[Box]]
+) -> None:
+    box = client.compute(BOX, params=_sample(1))
+
+    client.clear(box)
+
+    gc.collect()
+    assert boxes[0]() is None
+
+
+class PausedStore(FakeStore):
+    """A fake store whose reads wait until ``go`` is set; ``reading`` is set then."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.go = threading.Event()
+        self.go.set()
+        self.reading = threading.Event()
+
+    def read(self, record: str, output: str, tp: Any) -> Any:
+        self.reading.set()
+        assert self.go.wait(timeout=5), 'a test left the reads paused'
+        return super().read(record, output, tp)
+
+
+def test_a_read_that_a_clear_overtakes_raises_that_the_outputs_are_cleared(
+    files: FakeFiles, bind: list[Binding]
+) -> None:
+    store = PausedStore()
+    with local(proposal='p1', files=files, bind=bind, store=store) as client:
+        load = client.compute(LOAD, params=_sample(1), persist=True)
+        store.go.clear()
+        with ThreadPoolExecutor() as pool:
+            read = pool.submit(client.output, load, 'value')
+            assert store.reading.wait(timeout=5)
+            client.clear(load)
+            store.go.set()
+            with pytest.raises(NotReadable, match='its outputs are cleared'):
+                read.result(timeout=5)
+
+
 def test_a_record_lets_go_of_its_references_before_its_write(
     client: Client, store: GatedStore, boxes: list[weakref.ref[Box]]
 ) -> None:
@@ -772,6 +814,33 @@ def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(
         f'the workspace restarted: record {kept.id} output value was not persisted'
     )
     assert again.output(calls[1], 'value') == Amount(value=4.0)
+
+
+def test_a_restart_fails_a_call_through_a_stage_whose_fixed_value_was_cleared(
+    tmp_path: Path,
+    start: Callable[..., Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+) -> None:
+    first = start(tmp_path / 'log', workers=1)
+    stored = first.compute(LOAD, params=_sample(2), persist=('value',))
+    stage = first.stage(
+        Template(OFFSET, params={'source': stored.ref('value')}, blanks=('shift',))
+    )
+    first.compute(stage, params={'shift': stored.ref('value')})  # stages it
+    loading.clear()
+    first.submit(LOAD, params=_sample(1))  # holds the only worker
+    offset = first.submit(LOAD, params=_sample(2))
+    call = first.submit(stage, params={'shift': offset.ref('value')}, persist=True)
+    first.clear(stored)  # the staged call no longer reads it
+
+    again = restart(tmp_path / 'log')
+    loading.set()
+
+    assert again.wait(call) is Status.FAILED
+    assert again.failure(call) == (
+        f'the workspace restarted: record {stored.id}: its outputs are cleared'
+    )
 
 
 def test_a_restart_fails_a_record_that_was_running_and_does_not_run_it_again(

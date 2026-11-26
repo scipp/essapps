@@ -27,7 +27,8 @@ An output value may be large. It is available only while one of these holds it:
 - a push, a stage, or an accumulator's template that references it, until the
   binding has received it, or until the push, stage, or accumulator is
   released, stopped, or dropped;
-- the store, for a persisted output, until the proposal's history is dropped.
+- the store, for a persisted output, until its record is cleared
+  (:meth:`~WorkspaceProtocol.clear`) or the proposal's history is dropped.
 
 A record object or a reference holds nothing. A value that is gone does not
 come back. An output is written to the store only if a submission or a freeze
@@ -211,8 +212,25 @@ class WorkspaceProtocol(Protocol):
 
     def status(self, ids: Sequence[str]) -> list[RecordStatus]:
         """
-        The status of each record now, why it failed, if it did, and the
-        software that ran it.
+        The status of each record now, why it failed, if it did, the software
+        that ran it, and whether its outputs are cleared.
+        """
+        ...
+
+    def clear(self, ids: Sequence[str]) -> None:
+        """
+        Drops every output of the records from memory and deletes it from the
+        store.
+
+        A cleared record keeps its request, its status and its provenance. A
+        read of its outputs raises ``NotReadable``, and :meth:`submit` rejects
+        a reference to them, each with ``its outputs are cleared``. The outputs
+        are computed again by a new record of the same request. Clearing a
+        cleared record again deletes what the store still holds of it.
+
+        Raises ``ValueError``, and clears nothing, if a record is pending or a
+        pending record, a stage or an accumulator reads its outputs. The
+        message names the record.
         """
         ...
 
@@ -237,11 +255,12 @@ class WorkspaceProtocol(Protocol):
         The IDs of the records that changed after position ``after`` of the
         proposal's feed, and the position to pass next.
 
-        A record enters the feed when it is submitted and when it finishes. The
-        client holds its position, so ``after=0`` replays the proposal from its
-        start. A reply holds each ID once, in the order of its first change in
-        the range. It holds no values: a record's status only moves forward, so
-        a client reads the current status of what changed.
+        A record enters the feed when it is submitted, when it finishes, and
+        when its outputs are cleared. The client holds its position, so
+        ``after=0`` replays the proposal from its start. A reply holds each ID
+        once, in the order of its first change in the range. It holds no
+        values: a record's status only moves forward, so a client reads the
+        current status of what changed.
 
         Accumulators, pushes, and releases are not in the feed. A client learns
         that a value is gone from :meth:`readable`, or when a read raises
@@ -550,12 +569,20 @@ class Store(Protocol):
     A value is found by the record's ID and the output's name, so history names
     no file. The format of each output type and the layout of the store are the
     store's own. A store may hold values that no history names, such as those of
-    a record cancelled while it was written. Nothing reads them, and they are
-    deleted with the proposal's area.
+    a record cancelled while it was written, or that it names as cleared, if
+    the process ended before they were deleted. Nothing reads them, and they
+    are deleted with the proposal's area.
     """
 
     def write(self, record: str, output: str, value: Any) -> None:
         """Writes the value of an output. Raises if it cannot."""
+        ...
+
+    def delete(self, record: str) -> None:
+        """
+        Deletes every output of the record. Does nothing for a record of which
+        the store holds none. Raises if it cannot.
+        """
         ...
 
     def read(self, record: str, output: str, tp: Any | None) -> Any:

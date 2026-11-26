@@ -213,6 +213,11 @@ class FakeStore:
         with self._lock:
             self._values[(record, output)] = copy.deepcopy(value)
 
+    def delete(self, record: str) -> None:
+        with self._lock:
+            for key in [k for k in self._values if k[0] == record]:
+                del self._values[key]
+
     def read(self, record: str, output: str, tp: Any | None) -> Any:
         with self._lock:
             value = copy.deepcopy(self._values[(record, output)])

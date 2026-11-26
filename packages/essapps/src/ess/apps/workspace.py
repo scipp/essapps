@@ -83,6 +83,15 @@ A workflow reads an output from memory if the workspace holds it there, and
 from the store otherwise. Persisted outputs are written once the workflow has
 returned, and the record completes after the write.
 
+Clearing
+--------
+A clear is refused while an output of the record has a reader, so no workflow
+and no step loses a value it waits for. It appends ``Cleared`` before it
+deletes from the store. A crash between the two leaves files that the log calls
+cleared, not a completed record without files. The delete runs without the
+lock. A client's read that took the record before the clear may find the file
+gone, and raises as if it came after.
+
 Waits
 -----
 A record waits for the records it references (``_Plan.depends_on``), and so for
@@ -153,6 +162,7 @@ from .client import Client
 from .errors import NotReadable, RecordFailed, Stopped, SubmitError
 from .files import Selector, readable
 from .log import (
+    Cleared,
     Environment,
     Event,
     Finished,
@@ -232,6 +242,10 @@ def _outputs_of(
 
 def _not_returned(where: str) -> NotReadable:
     return NotReadable(f'{where}: the workflow did not return it')
+
+
+def _cleared(record_id: str) -> str:
+    return f'record {record_id}: its outputs are cleared'
 
 
 def _element(value: Any, ref: OutputRef) -> Any:
@@ -614,6 +628,8 @@ class Workspace(WorkspaceProtocol):
                 continue
             if (status := views.status(ref.record)) is not Status.COMPLETED:
                 return f'record {ref.record} {status}'
+            if ref.record in views.cleared:
+                return _cleared(ref.record)
             if views.omitted((ref.record, ref.output)):
                 return f'{where}: the workflow did not return it'
             if not views.persists((ref.record, ref.output)):
@@ -861,6 +877,8 @@ class Workspace(WorkspaceProtocol):
         status = self._views.status(record_id)
         if status in (Status.FAILED, Status.CANCELLED):
             return f'record {record_id} {status}'
+        if record_id in self._views.cleared:
+            return _cleared(record_id)
         held = record_id in self._in_memory or key in stage_reads
         if not held and not self._views.persists(key):
             return f'record {record_id} is neither in memory nor persisted'
@@ -1003,6 +1021,10 @@ class Workspace(WorkspaceProtocol):
         try:
             value = self._store.read(ref.record, ref.output, tp)
         except LookupError as error:
+            with self._changed:  # a read that a clear overtook
+                cleared = ref.record in self._views.cleared
+            if cleared:
+                raise NotReadable(_cleared(ref.record)) from None
             raise NotReadable(
                 f'{ref}: the store no longer holds it: {error}'
             ) from error
@@ -1208,6 +1230,39 @@ class Workspace(WorkspaceProtocol):
                 self._record_locked(record_id)
                 self._finish_locked(record_id, Status.CANCELLED)
 
+    def clear(self, ids: Sequence[str]) -> None:
+        with self._changed:
+            self._check_running()
+            for record_id in ids:
+                self._record_locked(record_id)
+                if (problem := self._clear_problem_locked(record_id)) is not None:
+                    raise ValueError(problem)
+            todo = [i for i in dict.fromkeys(ids) if i not in self._views.cleared]
+            if todo:
+                self._append_locked(Cleared(records=tuple(todo)))
+            for record_id in todo:
+                self._in_memory.discard(record_id)
+                for name in self._views.records.outputs(record_id):
+                    self._outputs.pop((record_id, name), None)
+        if self._store is not None:
+            for record_id in dict.fromkeys(ids):
+                self._store.delete(record_id)
+
+    def _clear_problem_locked(self, record_id: str) -> str | None:
+        """Why the outputs of a record may not be cleared now, or ``None``."""
+        if record_id not in self._views.finished:
+            return f'record {record_id} is pending'
+        names = self._views.records.outputs(record_id)
+        if not any(self._readers[_OutputKey(record_id, n)] for n in names):
+            return None
+        for pending in self._plans:
+            if pending not in self._views.states and any(
+                ref.record == record_id
+                for ref in self._views.records[pending].request.upstream()
+            ):
+                return f'record {record_id} is read by pending record {pending}'
+        return f'record {record_id} is read by an open stage or accumulator'
+
     def bound(self, ids: Sequence[str]) -> list[bool]:
         with self._changed:
             self._check_running()
@@ -1323,6 +1378,9 @@ class Workspace(WorkspaceProtocol):
         output that may not be read.
         """
         views, record_id = self._views, record.id
+        # a failed record raises RecordFailed below, cleared or not
+        if record_id in views.cleared and views.status(record_id) is Status.COMPLETED:
+            raise NotReadable(_cleared(record_id))
         if names is None:
             in_memory = record_id in self._in_memory
             held = [
