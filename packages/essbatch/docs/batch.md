@@ -91,13 +91,13 @@ The batch table of the example below, as `batch.table()` returns it:
 | a note column | any other column (`run`, `name`); never part of a request |
 | a cell | plain data, such as `'run:60339'`, `2.0`, `['run:1', 'run:2']`, or empty |
 
-A batch table holds only what goes into the reductions.
+A batch table holds no results.
 The results are records, joined to the rows by key where they are shown or exported.
 Any other table is named with what it is of, such as "the rows of a source".
 
 ### Errors
 
-The batch layer refuses what is asked with `ValueError`, a label that no batch has with `KeyError`, and a write that the definitions refuse with `DefinitionWriteError`.
+The batch layer raises `ValueError` for a request it rejects, `KeyError` for a label that no batch has, and `DefinitionWriteError` if the definitions cannot be written.
 `Batch.state` and `Batch.reduce` raise `SubmitError` of `ess.apps` when the workspace rejects the settings or a row.
 
 ## One example followed through
@@ -141,17 +141,17 @@ batch.reduce(['60339', '60340'])      # {key: Record}
 
 ```python
 batch.settings = {**batch.settings, 'thickness': 1.5}
-batch.make_column('thickness')        # empty cells; every row takes 1.5, no request changes
+batch.make_column('thickness')        # empty cells; every row uses 1.5, no request changes
 table = batch.table()
 table.loc['60340', 'thickness'] = 2.0
-batch.set_table(table)                # row 60340 is outdated; 60339 still takes 1.5
+batch.set_table(table)                # row 60340 is outdated; 60339 still uses 1.5
 ```
 
 Rows 60339 and 60340 were reduced in step 2 with the default 1.0, so after the assignment both have status `settings changed`.
 `make_column` changes no status.
 After `set_table`, row 60340 has status `outdated`, since its cell 2.0 differs from its result. Row 60339 stays `settings changed`.
-`settings.json` holds `thickness: 1.5`, and a row added later takes 1.5 until its cell is set.
-`batch.set_table(table.drop(columns='thickness'))` drops the column, and every row takes 1.5 again.
+`settings.json` holds `thickness: 1.5`, and a row added later uses 1.5 until its cell is set.
+`batch.set_table(table.drop(columns='thickness'))` drops the column, and every row uses 1.5 again.
 
 **4. Follow adds a row once its transmission run is listed.** The page calls `intake.step()` every few seconds.
 
@@ -226,9 +226,9 @@ SAMPLE_RUNS = RowSource(pair_by_sample, source_columns=('sample', 'sample_transm
 
 ## Cells and their dtypes
 
-`table.dtypes(spec.params)` gives the dtype of each parameter column:
+`table.dtypes(spec.params)` returns the dtype of each parameter column:
 
-| The parameter takes | dtype | A cell |
+| The parameter accepts | dtype | A cell |
 |---|---|---|
 | a file, an output, a file or an output; text, a `Literal` or an enum of text, a time, a date | `string` | `'run:60339'` |
 | a number | `Float64` | `2.0` |
@@ -236,10 +236,10 @@ SAMPLE_RUNS = RowSource(pair_by_sample, source_columns=('sample', 'sample_transm
 | a truth value | `boolean` | `True` |
 | a list, a group, a value or an output, anything else | `object` | `['run:1', 'run:2']` |
 
-A parameter that takes text or an output is refused, since a cell cannot tell the two apart.
-`set_table` refuses a cell of another kind than its column, with a `ValueError` that names the key and the column.
+A spec with a parameter that accepts text or an output makes `dtypes` raise `ValueError`, since a cell cannot tell the two apart.
+`set_table` raises `ValueError` for a cell of another kind than its column, naming the key and the column.
 
-`as_request` converts a cell at a parameter that takes:
+`as_request` converts a cell at a parameter that accepts:
 
 ```python
 # a file
@@ -294,7 +294,7 @@ In [the batch table](#the-batch-table) with `batch.settings == {'thickness': 1.5
 A parameter column without a value (`MISSING`) is the problem `empty` of the row: the row is incomplete, and is not reduced.
 A required parameter without a column, a setting or a default makes the workspace reject the settings: `batch.state` raises `SubmitError`, and no row can run.
 A row added by hand before its transmission run is listed has an empty cell at `sample_transmission`. Without the second branch, it would be reduced with the transmission run of another sample, from the settings.
-A table has no word for `None`: an empty cell takes `None` only by the last branch.
+A table has no word for `None`: an empty cell has the value `None` only by the last branch.
 
 ```python
 batch.settings = {'thickness': 2.0, 'q': {...}}  # one setting per parameter
@@ -302,7 +302,7 @@ batch.make_column('thickness')                    # rows may set their own; no c
 table = batch.table(); table.loc['60340', 'thickness'] = 1.5; batch.set_table(table)
 batch.cells(['60339', '60340'])                   # {'60339': {..., 'thickness': 2.0}, '60340': {..., 'thickness': 1.5}}
 batch.values('thickness')                         # {'60339': 2.0, '60340': 1.5}: each value, by its first row
-batch.make_setting('thickness')                   # ValueError: the rows take different values
+batch.make_setting('thickness')                   # ValueError: the rows use different values
 batch.make_setting('thickness', '60340')          # the column goes; the setting is 1.5
 ```
 
@@ -338,7 +338,7 @@ stateDiagram-v2
     running --> cancelled: cancel
     state "settings changed" as settings_changed
     state "with a result" as result {
-        done --> settings_changed: a setting that it takes changed
+        done --> settings_changed: a setting that it uses changed
         done --> outdated: a cell given another value
         settings_changed --> outdated: a cell given another value
         failed
@@ -356,9 +356,9 @@ A row with a problem has status `incomplete` unless it is `running`, also when i
 
 The rules, such as `left_to_reduce` and `not_reduced`, are functions from the states to keys, in `ess.batch.state`.
 A change of settings applies to the rows not reduced yet.
-A `done` row that takes the setting, also at a column where its cell is empty, gets status `settings changed`.
+A `done` row that uses the setting, also at a column where its cell is empty, gets status `settings changed`.
 A change of a cell applies to its row: it gets status `outdated`.
-Which cells are empty is read from the batch table now, so a row whose cell was emptied after it was reduced counts the value it then takes as a setting.
+Which cells are empty is read from the batch table now, so a row whose cell was emptied after it was reduced counts the value it then uses as a setting.
 A person reduces `left_to_reduce`, or chooses the rows.
 The page and the command choose with `to_reduce`.
 
@@ -395,8 +395,6 @@ intake.create(..., choose=Range(later=True), follow=True)
 intake.row_source(batch.label)           # 'sample-runs'; None for a batch made without a source: it cannot follow
 ```
 
-`intake.create` lists the source once, then makes the batch with the manager; its docstring sketches how.
-
 ## Follow
 
 The life of a batch made from a source:
@@ -419,9 +417,9 @@ intake.following              # its label, or None
 intake.stop()                 # none follows
 intake.follow(label)          # this batch follows; the batch that followed stops
 done = intake.step()          # a Step, or None if none follows
-done.submit_errors            # why rows were refused, by key; they do not hold back the others
+done.submit_errors            # why rows were rejected, by key; they do not hold back the others
 intake.available_rows(label)  # the rows of the source that the batch table lacks, with a boolean column `incomplete`
-intake.add_rows(label, keys)  # put these rows as the source gives them now, also seen ones; then mark them seen
+intake.add_rows(label, keys)  # add these rows as the source makes them now, also seen ones; then mark them seen
 ```
 
 A step (`auto.step(batch, source, seen_keys)`), as code:
@@ -492,11 +490,11 @@ key,sample,thickness,binning,name
 60340,run:60340,,,NA
 ```
 
-- `table.write_table(table, path)` is the only writer, and `table.read_table(path, spec.params)` the only reader that gives a batch table. `table.read_text(path)` reads a table file as text, without a spec.
+- `table.write_table(table, path)` writes a table file, and `table.read_table(path, spec.params)` reads it as a batch table. `table.read_text(path)` reads a table file as text, without a spec.
 - A list or a group is JSON text. Empty is the only missing marker, so `NA` in a note column is text.
 - `read_table` reads columns with their dtypes, and drops `status`, `record`, `failure` and `published`, which `frames.with_results` adds.
 - A note column of a `.csv` or `.tsv` file is text, so `0342` stays `'0342'`. A note column of a `.xlsx` file keeps the type of its cells if that is text, a number, a whole number or true/false; else it is text.
-- A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row takes its setting, or the settings are rejected if there is none.
+- A header that is not exactly a parameter name, such as `Sample`, is read as a note column, and `sample` has no column: every row uses its setting, or the settings are rejected if there is none.
 
 ## Chains
 
@@ -540,7 +538,7 @@ So whether a batch follows goes with its label: a batch made again with the labe
 A process that stops between these writes leaves no batch that follows.
 A process that stops between the header and the `source.json` of `intake.create` leaves a batch made without a source, which neither offers rows nor follows.
 
-`FolderDefinitions` rejects a folder with labels and no `format.json`, or of another format, with a `ValueError` that says "make a new folder".
+`FolderDefinitions` rejects a folder with labels and no `format.json`, or of another format, with a `ValueError` that ends "make a new folder".
 A folder read with the wrong meaning would reduce rows with wrong values, and no folder is migrated.
 
 ## Testing an application

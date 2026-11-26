@@ -204,7 +204,7 @@ parent.mount('/batch', batch)
 - One `Batch` object per label. Another `Batch` of the page's label writes its whole batch table at each change, over that of the page.
 - One user. Two open pages of one batch show and edit the same state.
 - One lock for all pages. A request waits while a step of Follow runs on another batch, and while results are published, uploads included.
-- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so it can be removed only in code.
+- A batch that cannot be shown, such as one whose table cannot be read, has no tab **Batch**, so the page cannot remove it. `essbatch remove` can, while the server is stopped.
 - The confirmations are the browser's dialogs (`confirm`).
 
 ## Browser tests
