@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The provenance of a record as a graph: the record, each record it read
-through all references (``client.provenance``), and their files, with an
-arrow from each to the records whose requests name it, labelled by the
-place of the parameter it is given at, as a refusal names it: ``sample``,
-``runs[2]``.
+The provenance of a record as a graph: the record, the records it read, and their files.
 
-Files are in the first column, and each record is a column to the right of
-the rightmost of what it reads, so arrows point right.
+An arrow points from a file or record to each record whose request refers to it.
+Its label is the position of the parameter, such as ``sample`` or ``runs[2]``.
+
+Files are in the first column. Each record is one column right of the rightmost
+node it reads, so every arrow points right.
 """
 
 from __future__ import annotations
@@ -46,10 +45,10 @@ _EDGE_COLOR = '#888888'
 
 class Graph:
     """
-    The provenance graph of the record shown, and below it the node
-    picked, by clicking it or with :meth:`pick`. ``nodes`` lists the files
-    and records of the graph, and ``edges`` each arrow: from a file or
-    record, to a record, and the places of the parameters it is given at.
+    The provenance graph of a record, and below it the node picked.
+
+    A click on a node or :meth:`pick` picks it. ``edges`` holds each arrow as
+    its start, its end and its label.
     """
 
     def __init__(self, client: Client) -> None:
@@ -62,7 +61,7 @@ class Graph:
         self.detail = pn.pane.Markdown('', sizing_mode='stretch_width')
 
     def show(self, record: Record, listing: Listing) -> None:
-        """Show the provenance of ``record``."""
+        """Shows the provenance of ``record``."""
         self._record = record
         self._listing = listing
         provenance = self._client.provenance(record)
@@ -86,7 +85,7 @@ class Graph:
             place(r.id)
         self.nodes = [*provenance.files(), *reversed(records)]
         keys = [n if isinstance(n, FileRef) else n.id for n in self.nodes]
-        # The places of an edge: those where a record reads one file or record.
+        # The positions at which a record reads one file or record.
         edges: dict[tuple[Any, str], list[str]] = defaultdict(list)
         for r in records:
             for k, where in reads[r.id]:
@@ -103,12 +102,12 @@ class Graph:
         self.pick(picked)
 
     def refresh(self, listing: Listing) -> None:
-        """Show the record shown again, with the statuses of ``listing``."""
+        """Shows the same record again, with the statuses of ``listing``."""
         if self._record is not None:
             self.show(self._record, listing)
 
     def pick(self, node: Node) -> None:
-        """Show a node of the graph below it."""
+        """Shows a node of the graph below it."""
         self._picked = node
         if isinstance(node, Record):
             self.detail.object = describe(self._client, self._listing, node)
@@ -236,15 +235,13 @@ def layout[K: Hashable](
     column: Mapping[K, int], edges: list[tuple[K, K]], sweeps: int = 4
 ) -> tuple[dict[K, Point], list[list[Point]]]:
     """
-    Where each node is drawn, in its column, and the path of each edge, as a
-    layered graph is drawn (Sugiyama).
+    The point of each node and the path of each edge, in a layered (Sugiyama) layout.
 
-    Where an edge spans more than one column, it bends at a point in each
-    column between, which takes a place there as a node does, so that it
-    passes beside the nodes of that column. The places of each column are
-    ordered by the mean place of their neighbours in the column to the left,
-    then to the right, ``sweeps`` times, which removes most crossings of edges.
-    A column is centred on 0.
+    An edge that spans several columns bends once in each column between. Each
+    bend takes a place in its column, as a node does, so the edge passes beside
+    the nodes there. Each of ``sweeps`` passes sorts the places of each column by
+    the mean place of their neighbours, left to right, then right to left. This
+    removes most crossings. Each column is centred on 0.
 
     Parameters
     ----------

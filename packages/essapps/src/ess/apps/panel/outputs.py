@@ -1,9 +1,8 @@
 """
-The outputs of the proposal's records, by type: what a scientist picks, to
-plot it, to see where it came from, or to remove it.
+The outputs of the proposal's records, listed by type, to plot or remove.
 
-Each output is to be a group, so that its type says what it is,
-``BeamCentre``, where an array's type says only ``DataArray``.
+An output should be a group, so that its type shows what it is, such as
+``BeamCentre``. The type of an array shows only ``DataArray``.
 """
 
 from __future__ import annotations
@@ -34,15 +33,18 @@ Plots = Mapping[SpecId, Mapping[str, Plot]]
 
 class Outputs:
     """
-    A sidebar with a table of the outputs of the proposal's records, grouped by
-    type, newest first, and below it the output selected. Beside the sidebar are
-    its plot, the plots configured for its spec, or its provenance graph, as
-    ``views`` picks.
+    A table of the outputs of the proposal's records, and the output selected.
 
-    An output is listed while a request of the client may reference it, so
-    while its record is pending or completed, and when its record has failed,
-    until removed. ``refresh`` is called once an output is removed; by
-    default it lists the outputs again.
+    Beside the table is the view that ``views`` picks: the plot, a plot
+    configured for the record's spec, or the provenance graph.
+
+    An output is listed while a request may refer to it, so while its record is
+    pending or completed. The output of a failed record is listed until removed.
+
+    Parameters
+    ----------
+    refresh:
+        Called once an output is removed. By default, lists the outputs again.
     """
 
     def __init__(
@@ -90,14 +92,15 @@ class Outputs:
         return self._records[record], name
 
     def select(self, record: Record, name: str) -> None:
-        """Select the output ``name`` of ``record``."""
+        """Selects the output ``name`` of ``record``."""
         self.table.select((record.id, name))
 
     def refresh(self, listing: Listing) -> None:
         """
-        List the outputs again. The output selected stays so if listed, and
-        is shown again, which draws its plots again, only if its status
-        changed.
+        Lists the outputs of ``listing``.
+
+        The output selected stays selected if listed. Its plots are drawn again
+        only if its status changed.
         """
         self._listing = listing
         self._records = {r.id: r for r in listing.records}
@@ -118,7 +121,7 @@ class Outputs:
             self.graph.refresh(listing)
 
     def _show(self) -> None:
-        """Show the output selected, and its view; nothing if none is."""
+        """Shows the output selected and its view, or nothing if none is."""
         selected = self.selected
         self.remove_button.disabled = selected is None
         self._fields = {}
@@ -130,8 +133,9 @@ class Outputs:
 
     def _describe(self, record: Record, name: str) -> str:
         """
-        The text about an output; reads what it is once its record has
-        completed, and keeps its fields to draw.
+        The Markdown about an output.
+
+        Sets ``_fields`` once its record has completed.
         """
         listing = self._listing
         spec = listing.specs.get(record.id)
@@ -153,8 +157,9 @@ class Outputs:
 
     def _offer_views(self, record: Record) -> None:
         """
-        Offer the plots configured for the record's spec between the plot and
-        the provenance graph; pick the plot if the pick is not offered.
+        Offers the plots configured for the record's spec, if it is bound.
+
+        Picks the plot if the view picked is not offered.
         """
         bound = record.id in self._listing.specs
         configured = self._plots.get(record.spec, {}) if bound else {}
@@ -185,7 +190,7 @@ class Outputs:
             self.view.objects = self._plot(record, name)
 
     def _configured(self, record: Record, view: str) -> Any:
-        """A plot configured for the spec of ``record``; the failure as text."""
+        """A plot configured for the spec of ``record``, or its failure as text."""
         if self._listing.status[record.id] is not Status.COMPLETED:
             return pn.pane.Markdown('')
         try:
@@ -205,7 +210,7 @@ class Outputs:
         label = self._listing.output_label(record.ref(name))
         if record.id in self._listing.specs:
             group = self._listing.is_group(record, name)
-        else:  # read as stored, only the value tells: a DataGroup is given by key
+        else:  # read as stored: only the value shows whether it is a group
             group = set(self._fields) != {name}
         arrays = {
             (f'{label} {n}' if group else label): (n if group else None, info)
@@ -220,14 +225,15 @@ class Outputs:
         views: list[Any] = [cut.view for cut in cuts]
         plain = {t: f for t, (f, i) in arrays.items() if not slider_dims(i.sizes)}
         if plain:
-            # The cut of a field is read with the rest of the output, whole.
+            # Drawn from the first cut, which holds whole each field that lacks
+            # the dimensions of its sliders.
             value = cuts[0].value if cuts else self._client.output(record, name)
             if value is not None:
                 views = [_figure(t, _field(value, f)) for t, f in plain.items()] + views
         return views
 
     def remove(self) -> None:
-        """Release the record of the output selected, and stop listing it."""
+        """Releases the record of the output selected, and stops listing it."""
         if (selected := self.selected) is None:
             return
         record, _ = selected
@@ -244,11 +250,11 @@ class Outputs:
 
 class _Cut:
     """
-    An array field of more than two dimensions: a slider for each dimension
-    but the last two, and the plot of the cut they pick. Moving a slider reads
-    the cut and draws it, once the slider is released.
+    The sliders of an array field of more than two dimensions, and the plot of
+    the cut they pick.
 
-    ``value`` is the output as last read.
+    A slider reads and draws the cut once it is released. ``value`` holds the
+    output as last read.
     """
 
     def __init__(
@@ -276,7 +282,7 @@ class _Cut:
         self.draw()
 
     def draw(self) -> None:
-        """Read the cut at the positions of the sliders, and draw it."""
+        """Reads the cut at the positions of the sliders, and draws it."""
         select = {dim: slider.value for dim, slider in self.sliders.items()}
         where = ', '.join(f'{dim}={i}' for dim, i in select.items())
         try:
@@ -290,10 +296,7 @@ class _Cut:
 
 
 def _field(value: Any, field: str | None) -> Any:
-    """
-    The array ``field`` of a group, or of a ``DataGroup`` read as stored; the
-    array itself if no field is named.
-    """
+    """The array ``field`` of a group or a ``DataGroup``, or ``value`` for ``None``."""
     if field is None:
         return value
     return value[field] if isinstance(value, sc.DataGroup) else getattr(value, field)
@@ -301,7 +304,7 @@ def _field(value: Any, field: str | None) -> Any:
 
 def _about(info: FieldInfo) -> str | None:
     """
-    The description of an output, or the first paragraph of the docstring of
+    The description of an output, else the first paragraph of the docstring of
     its type if that is a group.
     """
     if info.description:
@@ -318,7 +321,7 @@ def _summary(fields: Mapping[str, Any]) -> str:
 
 
 def _brief(value: Any) -> str:
-    """An array by its sizes, unit, and coordinates; any other value as it is."""
+    """An array by its sizes, unit and coordinates, any other value by its repr."""
     if isinstance(value, ArrayInfo):
         unit = '' if value.unit is None else f' [{value.unit}]'
         sizes = ', '.join(f'{d}: {n}' for d, n in value.sizes.items())

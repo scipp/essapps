@@ -1,14 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A minimal app on a client, in three tabs: a form for each spec the workspace
-runs with a button that submits, the outputs of the proposal's records, and the
-records themselves.
+A minimal app on a client: a form per spec, the outputs, and the records.
 
-The client tells no one what changed, so the app asks: :meth:`App.poll` asks
-for the changes since the last listing, a record of another client of the
-proposal among them, and lists only the records that changed again. A periodic
-callback of Panel calls it while the app is served.
+The client does not notify anyone of changes. So a periodic callback calls
+:meth:`App.poll`, which lists again the records changed since the last listing.
+These include the records of other clients.
 """
 
 from __future__ import annotations
@@ -28,8 +25,9 @@ from .records import Records
 
 class Tab(Protocol):
     """
-    A tab that an application adds. It is made up to date with the client; the
-    app calls :meth:`refresh` with each new listing.
+    A tab that an application adds to the app.
+
+    The app calls :meth:`refresh` with each new listing.
     """
 
     def refresh(self, listing: Listing) -> None: ...
@@ -39,13 +37,17 @@ class Tab(Protocol):
 
 class App:
     """
-    A form per spec, a button that submits, and the outputs of the proposal's
-    records. ``plots`` are the plots configured for a spec, as :class:`Outputs`
-    takes them. ``tabs`` holds the tabs of the application by title, shown before
-    the app's own.
+    A form per spec with a button that submits, and the outputs and records.
 
     ``forms`` holds the forms by spec title. ``message`` shows the outcome of the
     last submission, once its record has finished.
+
+    Parameters
+    ----------
+    plots:
+        The plots configured for each spec, as :class:`Outputs` accepts them.
+    tabs:
+        The application's own tabs by title, shown before those of the app.
     """
 
     def __init__(
@@ -92,8 +94,10 @@ class App:
 
     def submit(self) -> Record | None:
         """
-        Submit the shown form's request; its record, pending, or ``None`` if
-        it is refused, or if a field of the form has nothing given.
+        Submits the request of the form shown.
+
+        Returns its record, pending, or ``None`` if the client rejects the
+        request, for example because a field has nothing given.
         """
         try:
             record = self.client.submit(self.spec, params=self.form.params)
@@ -110,8 +114,9 @@ class App:
 
     def poll(self) -> None:
         """
-        List the records again if any changed, and show the outcome of the
-        last submission once it is listed finished.
+        Lists the records again if any changed.
+
+        Shows the outcome of the last submission once it is listed as finished.
         """
         if self.client.changes(after=self._listing.cursor).records:
             self.refresh()
@@ -127,14 +132,11 @@ class App:
         self._submitted = None
 
     def refresh(self) -> Listing:
-        """
-        List the records that changed again, in the pickers, the outputs, and
-        the records; what is listed.
-        """
+        """Lists again the records that changed, in every tab. Returns the listing."""
         return self._show_listing(Listing(self.client, previous=self._listing))
 
     def _refresh_all(self) -> Listing:
-        """List every record again, as after a release, which is not a change."""
+        """Lists every record again, as after a release, which ``changes`` omits."""
         return self._show_listing(Listing(self.client))
 
     def _show_listing(self, listing: Listing) -> Listing:

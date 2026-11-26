@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Selections: the part of an output that a read with ``select=`` copies (see
-:meth:`ess.apps.protocol.WorkspaceProtocol.outputs`). Neither function needs
+The part of an output that a read with ``select=`` copies.
+
+See :meth:`ess.apps.protocol.WorkspaceProtocol.outputs`. Neither function needs
 the workspace's lock or state.
 """
 
@@ -24,11 +25,12 @@ def check_select(
     spec: WorkflowSpec[Any, Any] | None, names: Sequence[str] | None
 ) -> None:
     """
-    Refuse a selection unless it names outputs, each declared by ``spec`` as
-    an array or as a group with an array field. A selection names the
-    dimensions of the outputs it reads, so it reads only outputs named.
-    ``spec`` is ``None`` for a record of an unbound spec, whose outputs read as
-    stored are checked by slicing.
+    Raises ``ValueError`` if a selection may not read the outputs ``names``.
+
+    A selection slices by dimension, so it needs the names of the outputs. Each
+    output that ``spec`` declares must be an array or a group with an array
+    field. ``spec`` is ``None`` for a record of an unbound spec. Its outputs are
+    checked when sliced.
     """
     if names is None:
         raise ValueError('select= needs the name of an output')
@@ -45,15 +47,14 @@ def check_select(
 
 def selected(value: Any, select: Selection) -> Any:
     """
-    A copy of the part of an array, or of a group, that ``select`` names.
+    A copy of the part of an array or a group that ``select`` picks.
 
-    An array is a value with named dimensions that slices as
-    ``value[dim, index]``, such as a scipp variable or data array. A
-    group is a pydantic model, or a mapping, such as the ``sc.DataGroup`` of an
-    output read as stored. Of a group, each dimension slices the array fields
-    that have it, and every other field is copied whole. Unlike a
-    ``sc.DataGroup``, a group refuses a dimension that no array field has, with
-    ``ValueError``.
+    An array slices as ``value[dim, index]``, such as a scipp variable or data
+    array. A group is a pydantic model or a mapping, such as the ``sc.DataGroup``
+    of an output read as stored. Each dimension slices the array fields of a
+    group that have it, and other fields are copied whole. Unlike
+    ``sc.DataGroup``, a group raises ``ValueError`` for a dimension that no array
+    field has.
     """
     if not isinstance(value, BaseModel | Mapping):
         for dim, index in select.items():

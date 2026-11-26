@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The proposal's records, for a look below the outputs.
+The proposal's records, as a table and in Markdown.
 """
 
 from __future__ import annotations
@@ -19,8 +19,8 @@ from .table import Table, with_sidebar
 
 def describe(client: Client, listing: Listing, record: Record) -> str:
     """
-    A record in Markdown: its status, spec, who submitted it and when, its
-    outputs, what its request names, its params, and why it failed.
+    A record in Markdown: status, spec, submitter and time, outputs, the files and
+    records it reads, params, and why it failed.
     """
     spec = listing.specs.get(record.id)
     status = listing.status[record.id]
@@ -45,10 +45,7 @@ def describe(client: Client, listing: Listing, record: Record) -> str:
 
 
 class Records:
-    """
-    A table with a row per record of the proposal, newest first, and beside it
-    the record selected.
-    """
+    """A table of the proposal's records, newest first, and the record selected."""
 
     def __init__(self, client: Client, listing: Listing) -> None:
         self._client = client
@@ -61,7 +58,7 @@ class Records:
         self.refresh(listing)
 
     def refresh(self, listing: Listing) -> None:
-        """List the records again."""
+        """Lists the records of ``listing``."""
         self._listing = listing
         self._records = {r.id: r for r in listing.records}
         self.table.set(
@@ -82,7 +79,7 @@ class Records:
         return None if selected is None else self._records[selected]
 
     def select(self, record: Record) -> None:
-        """Select ``record``."""
+        """Selects ``record``."""
         self.table.select(record.id)
 
     def _show(self) -> None:

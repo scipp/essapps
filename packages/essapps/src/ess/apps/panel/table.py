@@ -13,8 +13,9 @@ import panel as pn
 
 def with_sidebar(sidebar: list[Any], main: list[Any]) -> pn.Row:
     """
-    A column of fixed width beside one that takes the rest, each scrolling by
-    itself, so that a table to select from stays in view of what is selected.
+    A column of fixed width beside one that fills the rest, each scrolling alone.
+
+    This way a table stays in view beside what is selected in it.
     """
     return pn.Row(
         pn.Column(*sidebar, width=440, scroll=True, sizing_mode='stretch_height'),
@@ -25,13 +26,12 @@ def with_sidebar(sidebar: list[Any], main: list[Any]) -> pn.Row:
 
 class Table[K]:
     """
-    A table with a row per key, of which one may be selected, or several with
-    ``selectable=True``.
+    A table with a row per key, of which one may be selected.
 
-    ``show`` is called when the row selected changes: another key, none, or
-    other values in the row of the same key. Setting the rows again keeps
-    the key selected, if it has a row, so ``show`` is not called while that
-    row stays the same, though rows before it come and go.
+    ``selectable=True`` allows several. ``show`` is called when the selection
+    changes: another key, none, or new values in the selected row. :meth:`set`
+    keeps the selected keys that still have a row. So ``show`` is not called
+    while the selected row stays the same, even as rows before it come and go.
     """
 
     def __init__(
@@ -66,15 +66,15 @@ class Table[K]:
         return [self._keys[i] for i in self.widget.selection]
 
     def select(self, key: K | None) -> None:
-        """Select the row of ``key``; none for ``None``."""
+        """Selects the row of ``key``, or none for ``None``."""
         self.select_keys([] if key is None else [key])
 
     def select_keys(self, keys: list[K]) -> None:
-        """Select the rows of ``keys``."""
+        """Selects the rows of ``keys``."""
         self.widget.selection = [self._keys.index(key) for key in keys]
 
     def set(self, rows: Mapping[K, Mapping[str, str]]) -> None:
-        """Set the rows, the values of each by column."""
+        """Sets the rows, each as its values by column."""
         selected = self.selected_keys
         self._setting = True
         try:
