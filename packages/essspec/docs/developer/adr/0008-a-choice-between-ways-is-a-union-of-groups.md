@@ -18,30 +18,10 @@ The spec must state these choices so that:
 - a workflow outputs a value without knowing which specs take it, and the output fits each field `Referenced[T]` of its class, such as a found centre at `beam_centre: BeamCentre | Referenced[BeamCentre]`;
 - a `PipelineBinding` sets sciline keys from which sciline picks the providers, without a provider that takes the choice apart.
 
-Terms from [ADR 0001](0001-minimal-workflow-spec.md) and the developer README:
-
-- A *group* is a pydantic model, written as a JSON object of its fields. The params model is a group, and a field of it is a *parameter*.
-- Each field, at any depth, is typed from a closed list, the *field types*: a *scalar*, such as a `float` or a `Literal`; a file field; a group; a union of groups; `Referenced[T]`; a union of members written inline and members `Referenced[...]`; `X | None`; or `list[X]`. Any other type, such as `sc.DataArray` or `tuple[float, float]`, is refused.
-- A *table* is a list parameter whose elements an accumulator takes a push at a time; an element of a table is a *row*.
-- A *reference to an output* names an output of a record, such as `finder.ref('centre')`.
-- `Referenced[T]` types a field that a reference to an output fills, with data that fit the group `T`. A reference *fits* the field when the output's class is `T` or a subclass of it. A request writes a field of any other type, inline or as a file. The framework does not look inside `T`, so a group that holds an `sc.DataArray` is a `T`.
-- A *file field* is a field that a file fills, typed `Annotated[Path, File(**metadata)]`, such as `RunFile`, which `ess.spec` provides. A request writes a *file* there as `file(...)`, which the workspace (`ess.apps.Workspace`, which runs requests) resolves when the request is submitted. The params model, and so the binding, holds the file's local path, a `Path`.
-- A *template* is a request with some parameters left open, its *blanks*; the values it gives are its *fixed values*. A *plain request* gives every value.
-- A *stage* is a template that the workspace keeps: it computes what does not depend on the blanks once, and the rest at each call.
-
-Terms of `PipelineBinding`, which computes a spec with a sciline pipeline:
-
-- `make_pipeline` is the function given to `PipelineBinding`. It gets the fixed values by name, never a blank, and returns a pipeline.
-- A *key* is the sciline key that the binding sets from a parameter's value.
-- A pipeline *holds a value* at a key when `pipeline[K] = v` was set, rather than a provider of `K` inserted. A *workflow factory*, such as esssans' `LokiAtLarmorTutorialWorkflow()`, returns a pipeline that holds some values as defaults.
-- A key *leads to* another when a chain of providers computes the second from the first.
-
-Terms of this ADR:
-
-- A *tag* is the field that names an alternative of a union, such as `kind: Literal['find']`.
-- "Typed `X | None`" means a type that admits `None`; it is not the same as *optional* in ADR 0001, which means "has a default".
 
 ## Decision
+
+[params.md](../../params.md) states the rules of unions and `None` in a spec, and [bindings.md](../../bindings.md) how `PipelineBinding` keys them. This ADR keeps the reasons.
 
 **A choice between ways is a discriminated union of groups.**
 A field, at any depth, may be a union whose alternatives are groups, each with a tag:
@@ -92,43 +72,6 @@ An alternative written inline is a group that a request writes.
 A group that holds data no request writes, such as an `sc.DataArray`, is a member `Referenced[...]`, which needs no tag.
 So the discriminator sits on the union of the members written inline, `Annotated[A | B, Field(discriminator='kind')] | Referenced[C]`, since a reference has no tag.
 
-At each field, the spec author picks the ways it takes:
-
-```python
-beam_centre: BeamCentre = BeamCentre()                            # typed in
-beam_centre: BeamCentre | Referenced[BeamCentre] = BeamCentre()   # typed in, or from a record: finder.ref('centre')
-beam_centre: Annotated[GivenCentre | FindCentre, Field(discriminator='kind')] = GivenCentre()
-                                                                  # typed in, or found in this graph
-beam_centre: (                                                    # typed in, found in this graph, or from a record
-    Annotated[GivenCentre | FindCentre, Field(discriminator='kind')]
-    | Referenced[BeamCentre]
-) = GivenCentre()
-```
-
-A transmission is the one in the sample run's file, typed in, computed from a transmission run in this graph, or computed by another workflow, such as a transmission reduction that outputs `ComputedTransmission`.
-One declaration states all four ways:
-
-```python
-class FromFile(BaseModel):                # an alternative without fields
-    kind: Literal['file'] = Field('file', title="From the sample's file")
-
-class TransmissionFraction(BaseModel):
-    kind: Literal['given'] = 'given'
-    value: float = Field(gt=0, le=1)
-
-class FromRun(BaseModel):                 # computed from a transmission run in this graph
-    kind: Literal['run'] = 'run'
-    run: RunFile                          # a file field
-
-transmission: (
-    Annotated[FromFile | TransmissionFraction | FromRun, Field(discriminator='kind')]
-    | Referenced[ComputedTransmission]    # holds an sc.DataArray: t611.ref('transmission')
-) = FromFile()
-```
-
-A field may also take a file or a reference to an output, such as a normalization that some users read from the catalogue and others compute:
-`normalization: RunFile | Referenced[ComputedNormalization] | None`, with `RunFile` the type of a file field.
-The binding gets the file's local path or the group, and reads the file itself.
 
 **`X | None` means *without X*.**
 `mask: Referenced[PixelMask] | None = None` applies no mask for `None`; `direct_beam: RunFile | None`, the file of the direct-beam run, applies no direct-beam correction.
@@ -139,14 +82,6 @@ transmission: Annotated[FromFile | TransmissionFraction, Field(discriminator='ki
 # not: transmission: TransmissionFraction | None = None   # None: the one in the run's file
 ```
 
-A UI shows a group as its fields; a field `Referenced[T]` as a picker of records; a union as one choice between its members, each alternative with its fields and a member `Referenced[...]` as "From a record"; and a type `X | None` as a choice that adds the way "None" to the ways of `X`, at any depth:
-
-```
-Beam centre: (•) Given  ( ) From a record      x [0.012] y [-0.003]
-Transmission: (•) From the sample's file  ( ) Given  ( ) From a run  ( ) From a record
-Direct beam: (•) A file  ( ) None              [run 60340 ▾]
-Mask: ( ) From a record  (•) None
-```
 
 The title of an alternative's tag labels it in the choice, and the tag's description explains it; the schema titles a tag without a title by its value, `'given'` as "Given".
 A choice offers "From a record" at each field that a reference fills, also while no output fits.
@@ -174,38 +109,12 @@ A step whose omission changes what a reader of the output must do with it, such 
 **`PipelineBinding` sets one key per member of a union parameter, chosen by the value's class.**
 A union parameter has a key for each member, the member's class: `binding.keys['beam_centre'] == (GivenCentre, FindCentre)`.
 The binding sets the key of the member nearest to the value's class, the first class of `type(value).__mro__` that is a member, so sciline picks the providers.
-The workspace makes each value by the type of its source, so a value written inline is of the alternative its tag names, and the data of a reference are of a referenced member or a subclass of one:
-
-```python
-def find_centre(settings: FindCentre, sample: SampleData) -> GivenCentre: ...
-
-PipelineBinding(IOFQ, lambda fixed: sciline.Pipeline([find_centre, ..., iofq]))
-# a GivenCentre -> pipeline[GivenCentre] = value   (replaces find_centre)
-# a FindCentre  -> pipeline[FindCentre] = value    (find_centre computes GivenCentre)
-```
-
-With `| Referenced[ComputedCentre]`, the keys are `(GivenCentre, FindCentre, ComputedCentre)`.
-A union whose members are of one class, such as `BeamCentre | Referenced[BeamCentre]`, is that class to the binding, with one key, and not a union.
-`keys=` may give the members one key, `(K, K)`, which every value then sets.
-A union in a list parameter sets no key of its own: the list's key holds it, and a provider tells its elements apart.
 
 **`PipelineBinding` sets no key for a parameter typed `X | None`; `make_pipeline` says what `None` means.**
 Every value of a union sets the key of a member that the request chose; `None` names no key.
 Setting `X` to `None` would replace a provider of `X`.
 Setting nothing would leave the meaning of `None` to whatever the pipeline does without a value at `X`, which in a workflow factory is typically "compute X", not "without X".
 So `keys=` gives such a parameter `()`, and the binding refuses it otherwise, with a message that says so:
-
-```python
-def make_pipeline(fixed: Mapping[str, Any]) -> sciline.Pipeline:
-    pipeline = sciline.Pipeline(providers)     # made for this call, never one it keeps
-    if fixed['direct_beam'] is None:
-        pipeline[sans.DirectBeam] = None       # esssans' key; its providers take None: no correction
-    else:
-        pipeline[sans.DirectBeamFilename] = fixed['direct_beam']
-    return pipeline
-
-PipelineBinding(IOFQ, make_pipeline, keys={'direct_beam': ()})
-```
 
 **Neither a union nor a parameter typed `X | None` is a blank of a `PipelineBinding` stage.**
 A union's key may depend on each value's class, and `make_pipeline`, which gets no blank, may branch on it; this holds for `(K, K)` too, so that the rule has no exception.
