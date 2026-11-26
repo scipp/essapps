@@ -183,7 +183,14 @@ class WorkspaceProtocol(Protocol):
         ``resolve`` does not check whether referenced outputs may be read,
         stages, ``persist``, or anything that shows only when the workflow
         runs, such as a file that cannot be read. So :meth:`submit` may still
-        reject a request that ``resolve`` accepts. ``docs/developer/README.md``,
+        reject a request that ``resolve`` accepts.
+
+        Resolving a resolved request returns the same request, and
+        ``resolve([record.request]) == [record.request]`` for a record of the
+        bound spec. A file that gains a catalogue identifier later gets another
+        identity.
+        So a request that names it by run number then resolves to another value
+        than an older record holds. ``docs/developer/README.md``,
         "Requests and records", shows how to compare a resolved request with a
         record's.
         """
