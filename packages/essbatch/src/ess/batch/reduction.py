@@ -590,8 +590,8 @@ class Batch:
 
         With ``compare=False``, nothing is resolved: each row has the problems
         of its cells as given, its status, and whether its result is of
-        another spec. :attr:`RowState.changed` is then ``None``, and so is
-        :attr:`RowState.outdated` unless the result is of another spec. It is
+        an unbound spec. :attr:`RowState.changed` is then ``None``, and so is
+        :attr:`RowState.outdated` unless the result is of an unbound spec. It is
         what :meth:`reduce` checks before it submits.
 
         Raises ``SubmitError`` if the settings are refused, with reasons that
@@ -622,7 +622,7 @@ class Batch:
         column where the row gives its own value, the batch's setting, and
         where its cell is empty, the value that the row took. Raises
         ``ValueError`` naming the row (:func:`~.table.row_names`) if it has no
-        result, or one of another spec, whose settings this one does not take;
+        result, or one of an unbound spec, whose settings this one does not take;
         ``KeyError`` if the table has no row ``key``.
         """
         row = self.shown([key])[0][key]
@@ -675,7 +675,7 @@ class Batch:
         )
 
     def _spec_changed(self, found: Mapping[str, Record]) -> set[str]:
-        """The keys whose result is of another spec than the bound one."""
+        """The keys whose result is of an unbound spec."""
         spec = SpecId.of(self.spec)
         return {
             key

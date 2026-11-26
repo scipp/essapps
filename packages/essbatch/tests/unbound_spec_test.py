@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A batch on a folder whose records are of another spec than the one bound."""
+"""A batch on a folder whose records are of an unbound spec."""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -83,7 +83,7 @@ def batch_of(tmp_path: Path) -> Callable[[list[Binding]], Batch]:
 
 
 @pytest.mark.parametrize('another', sorted(OTHERS))
-def test_a_batch_shows_a_row_whose_result_is_of_another_spec_as_outdated(
+def test_a_batch_shows_a_row_whose_result_is_of_an_unbound_spec_as_outdated(
     batch_of: Callable[[list[Binding]], Batch], another: str
 ) -> None:
     batch = batch_of(OTHERS[another])

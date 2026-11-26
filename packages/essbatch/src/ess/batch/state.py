@@ -11,7 +11,7 @@ A row's *result* is the newest record under the batch's label with the row's
 key as its member, of any spec (:func:`results`). The row's request now differs
 from its result's at the parameters that :attr:`RowState.changed` names, found
 with :func:`changed_names` on both as a record holds them. A result is *outdated*
-(:attr:`RowState.outdated`) if it is of another spec than the one bound
+(:attr:`RowState.outdated`) if it is of an unbound spec
 (:attr:`RowState.spec_changed`), or if the request changed at any parameter
 (:func:`row_states`).
 
@@ -75,8 +75,8 @@ class RowState:
     names the parameters at which the row's request now differs from the
     request of its result, both as a record holds them, and is ``None`` if they
     were not compared, as in what ``Batch.state(compare=False)`` gives.
-    ``spec_changed`` is true if the result is of another spec than the one
-    bound. ``outdated`` is true if the result is of another spec, or if the
+    ``spec_changed`` is true if the result is of an unbound spec.
+    ``outdated`` is true if the result is of an unbound spec, or if the
     request changed; ``None`` if that is not known, since the requests were not
     compared. ``settings_changed`` is true if the row is ready and its
     completed result differs from its request only at settings: not at a
@@ -191,7 +191,7 @@ def row_states(
     at which a row differs from its result, ``None`` if the rows were not
     compared with their results, ``refused`` the reasons a row's cells were
     refused when resolved, ``spec_changed`` the keys whose result is of
-    another spec, and ``overrides`` the columns at which each row's cell holds a
+    an unbound spec, and ``overrides`` the columns at which each row's cell holds a
     value, by key.
     """
     refused = refused or {}
