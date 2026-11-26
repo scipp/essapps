@@ -33,6 +33,7 @@ from ess.batch import (
     Intake,
     WorkspaceHeader,
     create_workspace,
+    file_sources,
     workspaces,
 )
 from ess.batch.definition import TABLE
@@ -2209,7 +2210,7 @@ def test_a_workspace_made_on_the_launch_page_opens_at_its_batch_page(
     launch.wait_for_url(f'{launch.root}workspaces/test/batches/*/')
 
     assert launch.input_value('#batch-title') == 'Pairs'
-    assert workspaces(launcher.root) == {'test': WorkspaceHeader(Header('Test'))}
+    assert workspaces(launcher.root) == ['test']
 
 
 def test_a_click_on_a_workspace_opens_its_batch_page(
@@ -2238,11 +2239,59 @@ def test_a_workspace_is_removed_after_a_confirmation_that_says_what_goes(
 
     launch.on('dialog', answer)
     launch.click('#workspaces tr:has-text("Commissioning") button.remove')
-    launch.wait_for_timeout(200)
-    kept = folder.exists()
+    launch.evaluate('0')  # once the page runs again, the dismissal sent nothing
+    kept = (launch.locator('#workspaces tr.item').count(), folder.exists())
     launch.click('#workspaces tr:has-text("Commissioning") button.remove')
     launch.wait_for_selector('#workspaces td.hint:text-is("No workspace yet.")')
 
-    assert kept
+    assert kept == (1, True)
     assert not folder.exists()
     assert 'the batches, the history and the stored outputs' in asked[0]
+
+
+def test_an_open_workspace_is_closed_on_the_launch_page(
+    launch: Any, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    launch.goto(launch.root)
+    launch.click('#workspaces a:text-is("Commissioning")')
+    launch.wait_for_url(f'{launch.root}workspaces/commissioning/batches/*/')
+    launch.goto(launch.root)
+    row = launch.locator('#workspaces tr:has-text("Commissioning")')
+    row.locator('td:text-is("open")').wait_for()
+
+    row.locator('button.close').click()
+    launch.wait_for_selector('#toast:text-is("Closed Commissioning.")')
+
+    assert row.locator('td:nth-child(4)').inner_text() == ''
+    assert row.locator('button.close').count() == 0
+
+
+def test_the_batch_page_of_a_workspace_links_back_to_the_launch_page(
+    launch: Any, launcher: Launcher
+) -> None:
+    create_workspace(launcher.root, 'commissioning', CATALOGUED)
+    launch.goto(f'{launch.root}workspaces/commissioning/')
+    launch.wait_for_url(f'{launch.root}workspaces/commissioning/batches/*/')
+
+    launch.click('#home')
+
+    launch.wait_for_url(launch.root)
+    launch.wait_for_selector('#workspaces tr.item')
+
+
+def test_the_form_hides_the_file_source_if_one_is_allowed(
+    browser: Any, tmp_path: Path
+) -> None:
+    def build(*_: object) -> NoReturn:
+        raise AssertionError('no workspace is opened')
+
+    one = Launcher(tmp_path, build, bind=[], allowed=file_sources(['local']))
+    with serve(create_launch_app(one)) as root:
+        page = watched(browser)
+        page.goto(root)
+        page.wait_for_selector('#new-workspace:not([hidden])')  # no workspace yet
+
+        assert page.locator('#new-files-field').is_hidden()
+        page.close()
+    assert page.errors == []

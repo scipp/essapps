@@ -116,6 +116,8 @@ header.top {
   background: var(--panel);
 }
 header.top h1 { font-size: 15px; }
+.home { color: var(--accent-dark); text-decoration: none; }
+.home::before { content: "\2190  "; }
 .views { display: flex; gap: 0; }
 .views button {
   height: 30px;

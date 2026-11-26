@@ -675,7 +675,7 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
         (['export', 'nope.csv', 'out'], 'nope.csv: no such file'),
         (
             ['-b', 'cli_toys_batch_files:BINDINGS', '-w', 'nope', 'specs'],
-            'no files.csv',
+            'nope has no workspace.json: "essbatch -w nope files" writes it',
         ),
         (
             [*SOURCES, 'rows', 'p'],

@@ -6,7 +6,7 @@
 // the list of batches, Back or Forward, happens in place (see `show`). The
 // root without a batch, and the page of a batch that cannot be shown, show
 // the workspace instead (see `showWorkspace`).
-import {h, get, post, query, save} from './dom.js';
+import {h, get, post, query, save, toast} from './dom.js';
 import {Grid, cellColumns, statusClass, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
 import {fillList, headerFields, headerOf, listRow, onChoose} from './list.js';
@@ -210,15 +210,6 @@ function showMessage(title, items = [], key = '') {
 function hideMessage() {
   $('message').hidden = true;
   shownMessage = '';
-}
-
-let toastTimer;
-function toast(text) {
-  const box = $('toast');
-  box.textContent = text;
-  box.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (box.hidden = true), 3500);
 }
 
 // Showing the state
@@ -1561,6 +1552,16 @@ async function showWorkspace(why = '') {
   if (runs !== null) loadRuns();
 }
 
+// The link of the header to the page that lists the workspaces, if the
+// server names one.
+async function linkHome() {
+  const {ok, body} = await get('home', root()).catch(() => ({ok: false}));
+  if (!ok || body.url === null) return;
+  $('home').href = new URL(body.url, root()).href;
+  $('home').hidden = false;
+}
+
 wire();
+linkHome();
 if (shownLabel()) poll();
 else showWorkspace();

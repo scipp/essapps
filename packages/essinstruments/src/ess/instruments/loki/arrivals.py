@@ -25,7 +25,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ess.batch import file_sources, open_workspace
+from ess.batch import (
+    Header,
+    WorkspaceHeader,
+    file_sources,
+    open_workspace,
+    write_workspace_header,
+)
 from ess.batch.web.api import STATIC, create_app, every
 from ess.loki import data
 
@@ -218,8 +224,10 @@ def main() -> None:
     if directory.exists() and any(directory.iterdir()):
         parser.exit(1, f'{directory} is not empty\n')
     instrument = Instrument(directory)
+    header = WorkspaceHeader(Header(directory.name))
+    write_workspace_header(directory, header)
     client, files, definitions = open_workspace(
-        directory, BINDINGS, allowed=file_sources(['local'])
+        directory, header, BINDINGS, allowed=file_sources(['local'])
     )
     _say(f'folder {directory}; reducing the detector and the masks')
     with client:

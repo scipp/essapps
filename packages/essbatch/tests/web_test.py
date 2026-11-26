@@ -2925,6 +2925,20 @@ def test_a_page_handed_out_before_its_batch_is_removed_answers_missing(
         page.relist()
 
 
+def test_a_page_handed_out_before_the_pages_closed_is_rejected(
+    http: TestClient, pages: Pages
+) -> None:
+    # As a request does that found the batch, then waited for the lock while
+    # the workspace closed: it submits nothing and writes no definition.
+    page = pages.page('scan')
+
+    pages.close()
+
+    for request in (page.relist, lambda: pages.remove('scan'), pages.batches):
+        with pytest.raises(Rejected, match='The workspace is closed'):
+            request()
+
+
 def test_a_batch_made_again_under_a_removed_label_gets_a_new_page(
     http: TestClient, pages: Pages, intake: Intake
 ) -> None:

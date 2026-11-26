@@ -8,14 +8,14 @@ See ``README.md`` next to this file.
 """
 
 from .api import create_app, serve
-from .launch import Launcher, OpenPages, create_launch_app
+from .launch import Build, Launcher, create_launch_app
 from .page import Draw, Page, Shown
 from .pages import Pages
 
 __all__ = [
+    'Build',
     'Draw',
     'Launcher',
-    'OpenPages',
     'Page',
     'Pages',
     'Shown',

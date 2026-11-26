@@ -502,17 +502,25 @@ class Notice(BaseModel):
     notice: str
 
 
+class Home(BaseModel):
+    """The URL of the page that the header links to; ``None`` if none."""
+
+    url: str | None
+
+
 class WorkspaceRow(BaseModel):
     """
     A workspace of the root folder. ``problem`` states why it cannot be
-    opened; ``open`` is true once it is open in this server.
+    opened; ``open`` is true while it is open in this server. If its
+    ``workspace.json`` cannot be read, its title is ``name``, and its proposal
+    and file source are ``None``.
     """
 
     name: str
     title: str
     description: str
-    proposal: str
-    files: str
+    proposal: str | None
+    files: str | None
     open: bool
     problem: str | None
 
@@ -524,7 +532,7 @@ class WorkspaceList(BaseModel):
     """
 
     application: str
-    sources: list[str]
+    allowed: list[str]
     rows: list[WorkspaceRow]
 
 

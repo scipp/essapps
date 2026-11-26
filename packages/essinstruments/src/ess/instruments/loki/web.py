@@ -9,22 +9,23 @@ root folder. It needs the extra ``[loki-app]``::
 
 ``http://localhost:8000/`` lists the workspace folders in ``ROOT``
 (:func:`ess.batch.workspaces`), makes a new one, and opens one at
-``/workspaces/<name>/``. A workspace stays open until the server stops or the
-workspace is removed.
+``/workspaces/<name>/``. A workspace stays open until it is closed or removed on
+that page, or the server stops. Close it there before ``essbatch`` works on it.
 
-The proposal of a workspace and where its runs are listed are in its
-``workspace.json`` (``packages/essbatch/docs/batch.md``, "Workspaces of a root
-folder"). By default the page opens a local workspace, whose ``files.csv`` lists the
-run, role and sample of each file, as ``essbatch files`` writes it. A workspace
+The proposal and the file source of a workspace are in its ``workspace.json``
+(``packages/essbatch/docs/batch.md``, "Workspaces of a root folder"). By default
+the server allows the file source ``local``: the ``files.csv`` of the folder lists
+the run, role and sample of each file, as ``essbatch files`` writes it. A workspace
 made on the page lists no run until then::
 
     cd ROOT/NAME
     essbatch files ess.instruments.loki.files:read_metadata -o files.csv
 
-``--scicat staging.ess`` offers workspaces whose runs are the raw datasets of the
-proposal in that SciCat (:class:`~ess.apps.scicat.ScicatFiles`). The server logs in
-to each profile at its start, as :mod:`.scicat` describes. ``--no-local`` refuses
-local workspaces, for a page that offers SciCat only. SciCat states no role, so the
+``--scicat staging.ess`` allows the file source ``scicat:staging.ess``: the raw
+datasets of the proposal in that SciCat (:class:`~ess.apps.scicat.ScicatFiles`).
+The server logs in to each profile at its start, as :mod:`.scicat` describes, and
+does not log in again once the login expires. ``--no-local`` refuses local
+workspaces, for a server that allows SciCat only. SciCat states no role, so the
 Runs view shows the runs without one until a person sets it. A run is read from the
 path SciCat states, such as ``/ess/raw/...``. So reducing works only where that path
 is mounted.
@@ -65,8 +66,7 @@ row each. So it makes no batch of I(Q) when it opens the workspace: make it with
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 
@@ -76,9 +76,8 @@ from ess.batch import (
     FileSources,
     FolderDefinitions,
     Intake,
+    WorkspaceHeader,
     file_sources,
-    open_workspace,
-    read_workspace_header,
 )
 from ess.batch.web import Launcher, Pages, create_launch_app, plots, serve
 from fastapi import FastAPI
@@ -163,31 +162,32 @@ def build(
     return pages
 
 
-def launch(root: Path, sources: FileSources, *, interval: float = 5.0) -> FastAPI:
+def launch(root: Path, allowed: FileSources, *, interval: float = 5.0) -> FastAPI:
     """
     Returns the app of the launch page of the workspaces of ``root``, which
-    opens a workspace of each of ``sources``.
+    opens workspaces whose file source is in ``allowed``.
     """
 
-    @contextmanager
-    def open_pages(folder: Path) -> Iterator[Pages]:
-        client, files, definitions = open_workspace(folder, BINDINGS, allowed=sources)
-        local = read_workspace_header(folder).files == 'local'
-        with client:
-            yield build(
-                client,
-                files,
-                definitions,
-                folder=folder.name,
-                interval=interval,
-                first='sample-runs' if local else 'raw-runs',
-            )
+    def pages(
+        client: Client,
+        files: CorrectedFiles,
+        definitions: FolderDefinitions,
+        header: WorkspaceHeader,
+    ) -> Pages:
+        return build(
+            client,
+            files,
+            definitions,
+            folder=header.header.title,
+            interval=interval,
+            first='sample-runs' if header.files == 'local' else 'raw-runs',
+        )
 
-    launcher = Launcher(root, open_pages, sources=sources.keys(), title='LoKI I(Q)')
+    launcher = Launcher(root, pages, bind=BINDINGS, allowed=allowed, title='LoKI I(Q)')
     return create_launch_app(launcher)
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description='Serve the LoKI batch pages.')
     parser.add_argument('root', type=Path, help='the folder of the workspaces')
     parser.add_argument('--port', type=int, default=8000)
@@ -203,21 +203,31 @@ def main() -> None:
         metavar='PROFILE',
         action='append',
         default=[],
-        help="offer workspaces whose runs are in the SciCat of PROFILE, such as "
-        "'staging.ess' (needs the extra scicat); may be given several times",
+        help="allow the file source scicat:PROFILE, the raw datasets of the "
+        "proposal in the SciCat of PROFILE, such as 'staging.ess' (needs the extra "
+        "scicat); may be given several times",
     )
     parser.add_argument(
         '--no-local',
         action='store_true',
-        help='refuse workspaces whose runs are in their files.csv',
+        help='do not allow the file source local, the files.csv of the folder',
     )
-    args = parser.parse_args()
-    offered = [] if args.no_local else ['local']
-    offered += [f'scicat:{profile}' for profile in args.scicat]
-    if not offered:
+    args = parser.parse_args(argv)
+    names = [] if args.no_local else ['local']
+    names += [f'scicat:{profile}' for profile in args.scicat]
+    if not names:
         parser.error('--no-local needs --scicat')
-    sources = file_sources(offered)  # logs in to each profile now
-    serve(launch(args.root, sources, interval=args.interval), port=args.port)
+    allowed = file_sources(names)
+    if args.scicat:  # now, not at the first request of a workspace
+        from ess.apps.scicat import login  # needs the extra scicat
+
+        profile = ''
+        try:
+            for profile in args.scicat:
+                login(profile)
+        except Exception as error:  # scitacean raises many kinds
+            parser.exit(1, f'Cannot log in to SciCat {profile}: {error}\n')
+    serve(launch(args.root, allowed, interval=args.interval), port=args.port)
 
 
 if __name__ == '__main__':

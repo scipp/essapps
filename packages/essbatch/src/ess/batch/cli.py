@@ -45,12 +45,13 @@ from ess.apps.client import Client
 from ess.apps.errors import Stopped, SubmitError, error_text
 from ess.apps.files import replace_at_once
 from ess.apps.folder import described, folder_files, scan_folder
+from ess.apps.log import Log, Opened, Submitted
 from ess.apps.records import Record, Status
 from ess.apps.writers import Writer
 from ess.spec import Binding
 
 from . import frames
-from .definition import DefinitionWriteError, FolderDefinitions
+from .definition import DefinitionWriteError, FolderDefinitions, Header
 from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
 from .manager import BatchManager
@@ -96,7 +97,7 @@ A first session, in this order. Each command has its own --help:
                                   # and sample of each run from a run table
     essbatch -c package.module:CATALOGUE files --proposal P -o files.csv
                                   # or the raw files of proposal P in SciCat;
-                                  # --proposal writes P to workspace.json
+                                  # files writes workspace.json if missing
     $B specs                      # the reductions: name, version, title, outputs
     $B template SPEC -o t.yaml    # a template of SPEC: what each parameter accepts
     $B sources                    # the row sources: what each fills, and how
@@ -158,11 +159,12 @@ one of two ways:
 A run corrected on the page (its Runs view) stores the correction in the
 folder, not in files.csv. The commands see it too, either way.
 
-workspace.json of the folder holds its proposal and where its files are
-listed: "local", in files.csv, or "scicat:PROFILE", the raw datasets of the
-proposal in SciCat, with a login to the scitacean profile PROFILE. "files
---proposal P" writes it, and so does a launch page when it makes a folder. A
-folder without it is local, of the proposal "local".
+workspace.json of the folder holds its proposal and its file source: "local",
+the files of files.csv, or "scicat:PROFILE", the raw datasets of the proposal
+in SciCat, with a login to the scitacean profile PROFILE at the first query.
+Every command but files needs it. files writes it if it is missing, with the
+proposal of --proposal, else "local", and the file source "local"; so does a
+launch page when it makes a folder.
 
 The status of a row:
     ready             no result yet; it can be reduced, unless the settings are invalid
@@ -420,20 +422,27 @@ def _files(given: _Context) -> pd.DataFrame:
     """
     The files table of the folder (``files.csv``): of the files of the folder
     that READ knows, or, without READ, of the raw files of the proposal in the
-    catalogue of ``-c``. With ``--proposal``, the folder's ``workspace.json``
-    holds the proposal afterwards.
+    catalogue of ``-c``.
+
+    Writes the folder's ``workspace.json`` if it is missing, with the proposal
+    of ``--proposal``, else ``local``. That proposal must be the one of
+    ``workspace.json`` if there is one, else of the history in ``log.jsonl``.
     """
     args = given.args
+    folder = args.workspace
     if args.run_table is None and args.output is not None and args.output.exists():
         raise _UsageError(f'{args.output} exists, and may hold what a person added')
-    header = read_workspace_header(args.workspace)
-    written = (args.workspace / WORKSPACE_FILE).is_file()
-    if written and args.proposal not in (None, header.proposal):
-        raise _UsageError(
-            f'{args.workspace / WORKSPACE_FILE} holds the proposal '
-            f'{header.proposal}, not {args.proposal}'
-        )
-    proposal = header.proposal if args.proposal is None else args.proposal
+    written = (folder / WORKSPACE_FILE).is_file()
+    if written:
+        proposal = read_workspace_header(folder).proposal
+        if args.proposal not in (None, proposal):
+            raise _UsageError(
+                f'{folder / WORKSPACE_FILE} holds the proposal {proposal}, '
+                f'not {args.proposal}'
+            )
+    else:
+        proposal = 'local' if args.proposal is None else args.proposal
+        _check_history(folder / 'log.jsonl', proposal)
     if args.read is None:
         rows = _catalogue_files(given, proposal)
     else:
@@ -447,11 +456,26 @@ def _files(given: _Context) -> pd.DataFrame:
     files = pd.DataFrame(rows, dtype=str).fillna('')
     if args.run_table is not None:
         files = described(files, read_text(args.run_table))
-    if not written and args.proposal is not None:
-        write_workspace_header(
-            args.workspace, WorkspaceHeader(header.header, args.proposal)
-        )
+    if not written:
+        header = Header(folder.resolve().name)
+        write_workspace_header(folder, WorkspaceHeader(header, proposal))
     return files
+
+
+def _check_history(log: Path, proposal: str) -> None:
+    """
+    ``_UsageError`` if the log file ``log`` holds history of another proposal
+    than ``proposal``. Reads the file without holding it.
+    """
+    if not log.is_file():
+        return
+    events = Log.read(log)
+    logged = {e.proposal for e in events if isinstance(e, Submitted | Opened)}
+    if other := sorted(logged - {proposal}):
+        raise _UsageError(
+            f'{log} holds history of the proposal {", ".join(other)}, not '
+            f'{proposal}; give that one with --proposal'
+        )
 
 
 def _catalogue_files(given: _Context, proposal: str) -> list[dict[str, Any]]:
@@ -1011,9 +1035,10 @@ def _files_arguments(command: argparse.ArgumentParser) -> None:
     )
     command.add_argument(
         '--proposal',
-        help='the proposal of the folder, written to its workspace.json; the '
-        'later commands on the folder read it from there (default: local, or '
-        'that of workspace.json)',
+        help='the proposal of the folder, written to its workspace.json if that '
+        'is missing; the later commands on the folder read it from there. It '
+        'must be that of workspace.json if there is one, else of the history '
+        'in log.jsonl (default: that of workspace.json, else local)',
     )
     command.add_argument(
         '--with',
@@ -1270,8 +1295,9 @@ _COMMANDS = {
         'per file that READ knows, or, without READ, per raw file of the '
         'proposal in the catalogue of -c (SciCat), at the path of its dataset, '
         'such as /ess/raw/... The folder then opens only where that path is '
-        'mounted. --proposal P writes P to workspace.json of the folder, which '
-        'every later command reads. Without --with, it does not overwrite an -o '
+        'mounted. If workspace.json of the folder is missing, it writes it, '
+        'with the proposal of --proposal, else local, and the file source local; '
+        'every later command reads it. Without --with, it does not overwrite an -o '
         'that exists, since a person may have added to it. It replaces -o at '
         'once and does not open the folder, so it runs while follow holds the '
         'folder, and follow then sees the runs it adds.',
@@ -1548,9 +1574,10 @@ def _opened(given: _Context, command: _Command) -> _Result:
     bind = _bindings(args.bind)
     folder = args.workspace
     table = folder / 'files.csv'
-    if not (table.is_file() or (folder / WORKSPACE_FILE).is_file()):
-        raise _UsageError(f'{folder}: no files.csv; the command files writes it')
-    header = read_workspace_header(folder)
+    try:
+        header = read_workspace_header(folder)
+    except ValueError as error:  # such as none: names the command that writes it
+        raise _UsageError(str(error)) from None
     if header.files == 'local' and table.is_file():
         try:  # as read once, so that a files table in error is rejected
             folder_files(folder)
@@ -1558,14 +1585,9 @@ def _opened(given: _Context, command: _Command) -> _Result:
             raise ValueError(f'files.csv lists {error}, which does not exist') from None
         except ValueError as error:
             raise ValueError(f'files.csv: {error}') from None
+    allowed = file_sources([header.files])  # logs in at the first query
     try:
-        allowed = file_sources([header.files])
-    except ValueError:  # no file source of that name: rejected, exit status 2
-        raise
-    except Exception as error:  # a login to SciCat may fail in many ways
-        raise _CommandError(f'{header.files}: {error_text(error)}') from None
-    try:
-        client, _, definitions = open_workspace(folder, bind, allowed=allowed)
+        client, _, definitions = open_workspace(folder, header, bind, allowed=allowed)
     except RuntimeError as error:  # another process holds the folder
         raise _CommandError(str(error)) from None
     with client:

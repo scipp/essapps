@@ -3,6 +3,7 @@
 """The command ``essbatch files``, and a ``files.csv`` in error."""
 
 import sys
+from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from ess.batch import (
 from ess.batch.cli import main
 
 from ess.apps.folder import folder_files
+from ess.apps.log import Log, Submitted
 from ess.apps.scicat_testing import FakeCatalogue
 from ess.spec import FileRef
 
@@ -150,14 +152,19 @@ def test_main_writes_the_table_of_files_that_a_later_command_opens_the_folder_wi
     assert (scanned, reduced) == (0, 0)
 
 
-def test_files_with_a_proposal_writes_it_to_the_workspace_header(
-    folder: Path, by_stem: str
+@pytest.mark.parametrize(
+    ('given', 'proposal'), [([], 'local'), (['--proposal', 'p1'], 'p1')]
+)
+def test_files_writes_the_workspace_header_if_it_is_missing(
+    folder: Path, by_stem: str, given: list[str], proposal: str
 ) -> None:
-    code = main(['-w', str(folder), 'files', by_stem, '--proposal', 'p1'])
+    (folder / 'workspace.json').unlink()
+
+    code = main(['-w', str(folder), 'files', by_stem, *given])
 
     assert code == 0
     assert read_workspace_header(folder) == WorkspaceHeader(
-        Header(folder.name), proposal='p1'
+        Header(folder.name), proposal=proposal
     )
 
 
@@ -172,6 +179,45 @@ def test_files_with_another_proposal_than_the_workspace_header_is_refused(
 
     assert exit_.value.code == 2
     assert read_workspace_header(folder) == written
+
+
+@pytest.mark.parametrize('given', [[], ['--proposal', 'p2']])
+def test_files_with_another_proposal_than_the_history_is_refused(
+    folder: Path, by_stem: str, given: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    (folder / 'workspace.json').unlink()
+    with Log(folder / 'log.jsonl') as log:
+        submitted = Submitted(
+            time=datetime.now(UTC), proposal='p1', submitter='anna', records=()
+        )
+        log.append(submitted)
+
+    with pytest.raises(SystemExit) as exit_:
+        main(['-w', str(folder), 'files', by_stem, *given])
+
+    assert exit_.value.code == 2
+    assert 'log.jsonl holds history of the proposal p1, not ' in capsys.readouterr().err
+    assert not (folder / 'workspace.json').exists()
+
+
+def test_a_command_on_a_workspace_of_scicat_logs_in_only_to_list_files(
+    folder: Path, command: list[str]
+) -> None:
+    catalogued = WorkspaceHeader(Header('Runs'), 'p1', 'scicat:no-such-profile')
+    write_workspace_header(folder, catalogued)
+
+    assert main([*command, 'specs']) == 0
+
+
+def test_a_command_on_a_workspace_of_an_unknown_file_source_is_refused(
+    folder: Path, command: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_workspace_header(folder, WorkspaceHeader(Header('Runs'), 'p1', 'ftp:x'))
+
+    assert main([*command, 'specs']) == 2
+    assert "'ftp:x': a file source is 'local' or 'scicat:PROFILE'" in (
+        capsys.readouterr().err
+    )
 
 
 CATALOGUE = '''
