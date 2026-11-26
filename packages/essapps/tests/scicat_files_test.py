@@ -1,103 +1,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
-from scitacean import PID, Profile, ScicatCommError, model
-from scitacean.testing.client import FakeClient, FakeScicatClient
+from scitacean import ScicatCommError
 
 from ess.apps.files import Selector
-from ess.apps.scicat import ScicatFiles
+from ess.apps.scicat import ScicatFiles, scan_catalogue
+from ess.apps.scicat_testing import PROPOSAL
+from ess.apps.scicat_testing import FakeCatalogue as Catalogue
 from ess.spec import FileRef
-
-PROPOSAL = '336349'
-START = datetime(2026, 11, 25, 10, tzinfo=UTC)
-
-
-class QueryingScicat(FakeScicatClient):
-    """
-    scitacean's fake, answering ``query_datasets`` by equal fields, and
-    counting the queries in ``main.asked``.
-    """
-
-    main: 'Catalogue'
-
-    def query_datasets(
-        self, fields: dict[str, Any], **kwargs: Any
-    ) -> list[model.DownloadDataset]:
-        self.main.asked.append('datasets')
-        if 'query_datasets' in self.main.disabled:
-            raise self.main.disabled['query_datasets']
-        return [
-            d.model_copy(deep=True)
-            for d in self.main.datasets.values()
-            if all(getattr(d, k) == v for k, v in fields.items())
-        ]
-
-    def get_dataset_model(
-        self, pid: PID, *args: Any, **kwargs: Any
-    ) -> model.DownloadDataset:
-        self.main.asked.append(f'files of {pid}')
-        return super().get_dataset_model(pid, *args, **kwargs)
-
-
-class Catalogue(FakeClient):
-    """A SciCat in memory that answers queries, and lists those it was asked."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self.asked: list[str] = []
-
-    @property
-    def scicat(self) -> QueryingScicat:
-        return QueryingScicat(self, url='https://scicat.invalid/api/v3')
-
-    def add(
-        self,
-        run: int | None,
-        *,
-        minutes: int | None = None,
-        proposal: str = PROPOSAL,
-        files: tuple[str, ...] = ('loki_{run}.hdf',),
-        sample: str | None = None,
-        name: str = 'title {run} - Proposal:{proposal} - Run: {run}',
-    ) -> FileRef:
-        """
-        A raw dataset of ``run``, started ``minutes`` after ``START``, named as
-        the ingestor names it unless ``name`` is given.
-        """
-        pid = PID(prefix='20.500.12269', pid=f'{proposal}-{run}-{len(self.datasets)}')
-        self.datasets[pid] = model.DownloadDataset(
-            pid=pid,
-            type='raw',
-            proposalIds=[proposal],
-            runNumber=None if run is None else str(run),
-            datasetName=name.format(run=run, proposal=proposal),
-            startTime=None if minutes is None else START + timedelta(minutes=minutes),
-            sourceFolder=f'/ess/data/loki/{proposal}',
-            scientificMetadata=(
-                {} if sample is None else {'sample_name': {'value': sample}}
-            ),
-        )
-        self.orig_datablocks[pid] = [
-            model.DownloadOrigDatablock(
-                datasetId=pid,
-                dataFileList=[
-                    model.DownloadDataFile(path=f.format(run=run), size=1, time=START)
-                    for f in files
-                ],
-            )
-        ]
-        return FileRef(file=f'pid:{pid}')
 
 
 @pytest.fixture
 def catalogue() -> Catalogue:
-    return Catalogue(
-        profile=Profile(url='https://scicat.invalid/api/v3', file_transfer=None)
-    )
+    return Catalogue()
 
 
 @pytest.fixture
@@ -275,3 +192,42 @@ def test_a_file_list_that_the_catalogue_did_not_give_is_asked_for_again(
     del catalogue.disabled['get_dataset_model']
 
     assert files.path(ref) == Path('/ess/raw/run.hdf')
+
+
+def test_scan_catalogue_gives_a_row_of_files_csv_per_raw_file(
+    catalogue: Catalogue, files: ScicatFiles
+) -> None:
+    first = catalogue.add(1, minutes=0, files=('/ess/raw/run-1.hdf',), sample='water')
+    second = catalogue.add(2, minutes=1, files=('/ess/raw/run-2.hdf',))
+
+    assert scan_catalogue(files) == [
+        {
+            'file': '/ess/raw/run-1.hdf',
+            'kind': 'raw',
+            'run': '1',
+            'pid': first.file.removeprefix('pid:'),
+            'proposal': PROPOSAL,
+            'sample': 'water',
+            'title': 'title 1',
+        },
+        {
+            'file': '/ess/raw/run-2.hdf',
+            'kind': 'raw',
+            'run': '2',
+            'pid': second.file.removeprefix('pid:'),
+            'proposal': PROPOSAL,
+            'title': 'title 2',
+        },
+    ]
+
+
+def test_scan_catalogue_leaves_out_a_dataset_without_a_path_with_a_warning(
+    catalogue: Catalogue, files: ScicatFiles
+) -> None:
+    catalogue.add(1, minutes=0, files=('run.log',))
+    catalogue.add(2, minutes=1)
+
+    with pytest.warns(UserWarning, match='is left out: .* 0 NeXus files'):
+        rows = scan_catalogue(files)
+
+    assert [r['run'] for r in rows] == ['2']
