@@ -4,7 +4,7 @@
 Examples of ``packages/essspec/docs/params.md``: keep them in step with it.
 
 :func:`first_spec` is the spec of "A first spec", and :func:`refused_spec`
-breaks at least one rule of each group in "What WorkflowSpec refuses".
+breaks at least one rule of each section.
 :func:`allowed_spec` has each kind of field once.
 """
 
