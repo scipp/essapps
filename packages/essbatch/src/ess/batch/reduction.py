@@ -1,75 +1,24 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A batch on a client: its template and its batch table, the request of each row,
-reducing rows, and reading their results.
+A batch on a client: its template and its batch table, the request of each
+row, reducing rows, and reading their results.
 
-:class:`Batch` is the only part of the toolbox's logic that submits to the client.
-It needs no interface of its own over the client: tests and UI work run it on
-``local()`` with fake workflows, which start in milliseconds and refuse and fail
-as real ones do.
+The state of a row is read from the records under the label, not from what
+this object submitted. So every ``Batch`` of the label, and this one after a
+restart, computes the same state, except for a file that gained a catalogue
+identifier after a ``Batch`` cached it (below). :class:`LabelRecords` holds
+the records read and follows ``client.changes``, so that the state of some
+rows does not read every record under the label.
 
-The batch table is one frame (:mod:`~.table`), and only :meth:`Batch.set_table` changes
-it. The settings are a value per parameter for the batch, also for one that is
-a column. The value of a parameter for a row is its cell; if the cell is empty
-or the parameter is no column, the setting; if the batch has none, the default
-of the parameter. But in a batch made from a source, a column that the source
-fills takes its value from the cell only: an empty cell there means that the
-row waits for its file, and the row is incomplete, whatever the settings hold
-(:attr:`Batch.source_columns`, :meth:`Batch.empty`). A template cannot fix a value and
-leave it blank, so the template of the requests and of the stage holds the
-settings without the columns, its blanks are the columns, and each row fills
-every column::
+:meth:`Batch.state` compares a row with its result as a record holds both. It
+resolves the settings once per call, and for a row with a result only the
+cells that differ as given. A resolved cell is cached by column and value until
+the next :meth:`Batch.set_table`: a parameter resolves the same whatever the
+other parameters are. :meth:`Batch.files` uses the same cache.
 
-    template = Template(spec, params=settings, blanks=columns)  # none at columns
-    row = rows[columns].loc[[key]].to_dict('index')[key]      # each cell of its type
-    cells = as_request(model, {c: v for c, v in row.items() if v is not None})
-    for c in columns - cells.keys():                          # the empty cells
-        if c in source_columns: continue                    # waits for its file
-        elif c in settings: cells[c] = settings[c]
-        elif has_default(c): cells[c] = default(c)
-        elif takes_none(c): cells[c] = None
-    template.fill(params=cells)                               # a blank left: incomplete
-
-A row's state is read from the records, not from what this object submitted,
-so every ``Batch`` on the label, and this one after a restart, sees the same,
-but for how it resolved a file name, which it keeps until its next ``set_table``.
-What a ``Batch`` keeps of them (:class:`LabelRecords`) can be rebuilt from the
-records at any time: the newest record of each member under the label, the IDs
-of the records under the label it has read, and which of them are not of the
-bound spec (:meth:`~ess.apps.Client.bound`), all read from ``client.changes``,
-so that the state of chosen rows does not read every record under the label.
-
-The settings are the batch's own (:attr:`Batch.settings`), so each state is
-read with them, and each reduction submits them. A state that resolves
-nothing (``Batch.state(compare=False)``) is for showing the rows while the
-settings are refused (:meth:`Batch.shown`), and for the checks before a
-submission.
-
-Where a row's request differs from its result's (``RowState.changed``) is
-worked out on both as a record holds them, resolving as little as it can::
-
-    settings = client.resolve(Template(spec, params=settings, blanks=columns))
-    # once per call; a refusal is raised: no row can run with these settings
-    cells = {c: v for c, v in cells.items() if v != record.request.params[c]}
-    # a row with a result: only the cells that differ as given, such as a
-    # file named by run; a row without one: all its cells
-    client.resolve({key: Template(spec, params=cells, blanks=the_others)})
-    # one call for all rows; a refusal is a problem of its row
-    changed = changed_names({**settings, **cells}, record.request.params, names)
-
-A parameter resolves the same whatever the other parameters are, so a cell is
-resolved on its own, and a value resolved once is kept by its column and value
-until the next ``set_table`` (:meth:`Batch._resolve_cells`). The files that a batch
-names (:meth:`Batch.files`) are read from the same: each cell and each setting
-that names a file is resolved alone, as a template of that one parameter.
-
-A stage is opened lazily and kept with the template it was opened from, as
-given, since the stage's own holds resolved values. A refusal with no position
-is the stage's, one that stopped or was released, so the stage is replaced and
-the rows submitted once more. A refusal at a position is the row's or the
-settings', and leaves the stage, which may have done its expensive part,
-alone.
+How the value of a parameter for a row is found: guide
+``packages/essbatch/docs/batch.md``, "The request of a row".
 """
 
 from __future__ import annotations
@@ -99,12 +48,13 @@ _NONE = object()
 
 def _cache_key(name: str, value: Any) -> tuple[str, Any] | None:
     """
-    The key a resolved value is kept by, ``None`` for one that cannot be a key.
-    The column is in it, since a value resolves per parameter: ``True`` is
-    ``1`` at an ``int`` and refused at a ``StrictInt``. The type of the value,
-    and of each element of a list or tuple, is in it too, since ``1``,
-    ``1.0`` and ``True`` are equal keys in Python but not equal values to a
-    parameter.
+    The key of a resolved value in the cache, ``None`` if ``value`` is not
+    hashable.
+
+    The key holds the column, since a value resolves per parameter: ``True``
+    is ``1`` at an ``int`` and rejected at a ``StrictInt``. It holds the type
+    of the value and of each element, since ``1``, ``1.0`` and ``True`` are
+    equal in Python.
     """
     try:
         return (name, _typed(value))
@@ -133,9 +83,10 @@ def _running(row: RowState) -> list[FieldError]:
 
 class LabelRecords:
     """
-    The records under ``label``, read from the proposal's changes: the result
-    of each member (:attr:`found`), and the IDs of those that are not of the
-    bound spec (:attr:`unbound`). Up to date after :meth:`poll`.
+    The records under ``label``: the result of each member (:attr:`found`),
+    and the IDs of the records of an unbound spec (:attr:`unbound`).
+
+    Up to date after :meth:`poll`.
     """
 
     def __init__(self, client: Client, label: str) -> None:
@@ -148,8 +99,8 @@ class LabelRecords:
 
     def poll(self) -> None:
         """
-        Bring the result of each member under the label up to date, from the
-        proposal's changes; the first call reads every record under the label.
+        Read the changes of the proposal since the last call; the first call
+        reads every record under the label.
         """
         if self._cursor is None:
             self._cursor = self.client.changes().cursor
@@ -168,9 +119,10 @@ class LabelRecords:
 
     def known(self, ids: list[str]) -> list[Record]:
         """
-        The records of ``ids`` that the client knows, of any label. If one is
-        unknown, the others are read one by one, so that it touches only the
-        rows that reference it, whose submission it refuses.
+        The records of ``ids`` that the client knows, of any label.
+
+        If one is unknown, the others are read one by one, so that the unknown
+        one affects only the rows that reference it.
         """
         try:
             return self.client.records(ids=ids) if ids else []
@@ -187,8 +139,9 @@ class LabelRecords:
 
 class Batch:
     """
-    A template and a batch table: one spec reduced for many rows. See
-    ``packages/essbatch/docs/batch.md``.
+    A template and a batch table: one spec reduced for many rows.
+
+    Guide: ``packages/essbatch/docs/batch.md``.
 
     Parameters
     ----------
@@ -197,58 +150,44 @@ class Batch:
     spec:
         The spec of every row.
     label:
-        The label of the records. A row's key is its member.
+        The label of the records. The key of a row is the member of its
+        records.
     settings:
-        The value of each parameter for the batch, where it is not left to
-        its default; none if not given. A value at a column is the value of
-        each row whose cell is empty; one at :attr:`source_columns` is left out.
+        The value of each parameter for the batch, unless left to its default.
+        Values at ``source_columns`` are dropped.
     table:
-        The batch table, as :meth:`set_table` takes it; if not given, one without
-        rows, with a column for each of :attr:`source_columns`.
+        The batch table, as :meth:`set_table` accepts it. If not given, a table
+        without rows, with a column for each of ``source_columns``.
     staged:
-        Run the rows through a stage, so that what they share is computed
-        once. The spec's binding must make stages.
+        Run the rows through a stage, which computes what they share once. The
+        binding of the spec must make stages.
     persist:
-        As :meth:`~ess.apps.Client.submit` takes it.
+        As :meth:`~ess.apps.Client.submit` accepts it.
     definitions:
-        Where the settings and the rows of the label are written at each
-        change (:mod:`~.definition`). Nothing is read from them: the manager
-        reads them and gives them as ``settings``, ``table`` and ``source_columns``
-        (:meth:`.manager.BatchManager.batch`). A ``Batch`` made in code
-        without them keeps nothing.
+        Where each change of the settings and the batch table is written.
+        Nothing is read from them: :meth:`.manager.BatchManager.batch` reads
+        them. Without definitions, the batch stores nothing.
     source_columns:
-        The parameters that the source of the batch fills, if it was made
-        from a row source (:attr:`~.source.RowSource.source_columns`); they are kept
-        as the blanks of its settings. Each is a column, and an empty cell
-        there means that the row waits for its file: the row is incomplete,
-        whatever the settings hold and whatever the default of the parameter
-        is.
+        The parameters that the row source of the batch fills
+        (:attr:`~.source.RowSource.source_columns`). An empty cell there makes
+        the row incomplete, whatever the settings and the default.
 
     Attributes
     ----------
     parameter_columns:
-        The parameter columns of the batch table, in its order: the blanks of the
-        template.
+        The parameter columns of the batch table, in its order.
     settings_fields:
-        The other parameters of the spec, which no row gives itself.
-    definitions:
-        As given: where the entries of the label are kept, if anywhere.
+        The parameters of the spec without a column.
     revision:
-        A number that moves whenever :meth:`table` or :meth:`template` may
-        give something else: while it is the same, they give the same. A
-        :meth:`set_table` that writes, an assignment of :attr:`settings`,
-        :meth:`make_column` and :meth:`make_setting` move it; a :meth:`set_table`
-        of an equal table does not. It counts no record and no file: a
-        record that changes is in ``client.changes``, and a file that
-        arrives, or that gains a catalogue identifier, can change the state
-        of a row without a signal.
+        Changes whenever :meth:`table` or :meth:`template` may return something
+        else. It counts no record and no file: a record that changes is in
+        ``client.changes``, and a file that arrives can change the state of a
+        row without a change of revision.
 
     Raises
     ------
     ValueError
-        If ``table`` is refused, as :meth:`set_table` refuses it, also for a
-        table without a column of :attr:`source_columns`, so that each of them is a
-        column of every batch.
+        If :meth:`set_table` would reject ``table``.
     """
 
     def __init__(
@@ -270,7 +209,7 @@ class Batch:
         self.source_columns = frozenset(source_columns)
         self.definitions = definitions
         self._revision = 0
-        # A setting at a source column, as definitions may hold, is never read: dropped.
+        # A setting at a source column, as old definitions may hold, is never read.
         self._settings = copy.deepcopy(self.settable(settings or {}))
         self._template = Template(spec, params=self._settings)
         if table is None:
@@ -282,18 +221,13 @@ class Batch:
         self._persist = persist
         self._stage: tuple[Template, Stage] | None = None
         self._records = LabelRecords(client, label)
-        # A cell's value as a record holds it, by its column and value as given;
-        # also a setting's, for :meth:`files`.
-        # A state of 1000 toy rows without results takes 21 ms with it, and
-        # 198 ms without; with every row reduced, 23 ms either way, since a
-        # row with a result resolves only the cells that differ.
+        # A cell's value as a record holds it, by _cache_key; also a setting's,
+        # for files(). Without it, each state resolves every cell of every row
+        # without a result.
         self._resolved: dict[tuple[str, Any], Any] = {}
 
     def _set(self, table: pd.DataFrame) -> None:
-        """
-        Hold ``table``, a typed batch table, with its parameter columns as the blanks
-        of the template.
-        """
+        """Hold ``table``, typed, and make its parameter columns the blanks."""
         fields = self.spec.params.model_fields
         self._table = table
         blanks = [c for c in table.columns if c in fields]
@@ -315,9 +249,10 @@ class Batch:
 
     def settable(self, settings: Mapping[str, Any]) -> dict[str, Any]:
         """
-        ``settings`` without the values at :attr:`source_columns`, which an assignment
-        of :attr:`settings` refuses: to tidy settings taken from elsewhere,
-        such as those of another batch, of a record or of a template file.
+        ``settings`` without the values at :attr:`source_columns`.
+
+        For settings from elsewhere, such as another batch, a record or a
+        template file, which an assignment of :attr:`settings` would reject.
         """
         return {k: v for k, v in settings.items() if k not in self.source_columns}
 
@@ -330,11 +265,7 @@ class Batch:
             )
 
     def table(self) -> pd.DataFrame:
-        """
-        A copy of the batch table: the key as index, a column per blank, and notes.
-        A list or a group in a cell is copied too, so that changing it in place
-        changes the batch only by :meth:`set_table`.
-        """
+        """A deep copy of the batch table. Change the batch with :meth:`set_table`."""
         table = self._table.copy()
         for c in table.select_dtypes(object).columns:
             cells = copy.deepcopy(table[c].tolist())
@@ -343,23 +274,17 @@ class Batch:
 
     def set_table(self, table: pd.DataFrame) -> None:
         """
-        Make ``table`` the batch table. Its parameter columns become the blanks of
-        the template. The settings stay: a parameter that becomes a column
-        keeps its setting for the rows whose cell is empty, and a column
-        dropped takes its setting, or its default if the batch has none. A
-        table equal to the one held, dtypes and order included, writes
-        nothing.
+        Replace the batch table with ``table`` and write it to the definitions.
 
-        A value that a cell resolved to is forgotten, so that a file that
-        gained a catalogue identifier is resolved to it from now on.
+        The settings do not change. A table equal to the current one, dtypes
+        and order included, writes nothing. The cache of resolved cells is
+        cleared, so that a file that gained a catalogue identifier resolves to
+        it.
 
-        Raises ``ValueError``, and changes nothing, for a table that
-        :func:`~.table.typed` refuses: a key that is not text, empty, or
-        given twice, or a cell that is not of the kind of its column; and for
-        a table that lacks a column of :attr:`source_columns`.
-
-        Raises :class:`~.definition.DefinitionWriteError` if the definitions refuse the
-        table, and then nothing changes.
+        Raises ``ValueError`` if :func:`~.table.typed` rejects ``table`` or it
+        lacks a column of :attr:`source_columns`. Raises
+        :class:`~.definition.DefinitionWriteError` if the definitions reject the
+        write. Nothing changes in either case.
         """
         table = typed(table, self.spec.params)
         self._keeps_source_columns(table.columns)
@@ -374,23 +299,17 @@ class Batch:
     @property
     def settings(self) -> Mapping[str, Any]:
         """
-        The settings in force: a value for each parameter, where it is not
-        left to its default, for the rows that give none themselves: at a
-        parameter that is no column every row, at a column the rows whose
-        cell is empty. A copy, read-only at the top, so that only an
-        assignment of all of them changes the batch::
+        A read-only copy of the settings. Assign all of them to change one::
 
             batch.settings = {**batch.settings, 'q': {'num_bins': 50}}
 
-        An assignment reduces no row: the rows reduced before that take a
-        setting changed read ``settings changed``, with the setting in
-        :attr:`RowState.changed`. The workspace checks the settings when
-        :meth:`state` resolves them, and refuses a name that is not a
-        parameter; a setting at a column is checked as a cell of each row
-        that takes it. Raises ``ValueError``, and changes nothing, for a
-        value at :attr:`source_columns`, which no row takes: use :meth:`settable` for
-        settings taken from elsewhere. Such a value that ``settings`` of the
-        constructor holds is left out.
+        An assignment reduces no row. The workspace checks the settings when
+        :meth:`state` resolves them. A setting at a column is checked as a
+        cell of each row that uses it.
+
+        An assignment raises ``ValueError``, and changes nothing, for a value
+        at :attr:`source_columns`: use :meth:`settable` for settings from
+        elsewhere.
         """
         return MappingProxyType(copy.deepcopy(self._settings))
 
@@ -411,10 +330,12 @@ class Batch:
 
     def make_column(self, name: str) -> None:
         """
-        Make the parameter ``name`` a column with an empty cell in every row:
-        one :meth:`set_table`. The setting stays, so every row takes it until its
-        cell is set, also a row added later. Raises ``ValueError`` if ``name``
-        is a column or no parameter, and as :meth:`set_table`.
+        Add a column ``name`` with an empty cell in every row: one
+        :meth:`set_table`.
+
+        The setting stays, so every row uses it until its cell is set. Raises
+        ``ValueError`` if ``name`` is a column or not a parameter, and as
+        :meth:`set_table` raises.
         """
         if name not in self.settings_fields:
             raise ValueError(f'{name} is not a setting of {self.spec.name}')
@@ -422,25 +343,20 @@ class Batch:
 
     def make_setting(self, name: str, key: str | None = None) -> None:
         """
-        Make the column ``name`` a setting: drop the column, so that every row
-        takes the value that the row of ``key`` takes, or, if not given, the
-        value that every row takes (:meth:`values`). The setting becomes the
-        cell of that row; if the cell is empty, the row takes the setting, or
-        the default if the batch has none, and the settings stay. So a batch
-        whose cells at ``name`` are all empty, or that has no rows, keeps its
-        setting.
+        Drop the column ``name``, and make the value that the row ``key`` uses
+        there the setting.
 
-        The settings, if changed, are written before the batch table without
-        the column, which is one :meth:`set_table`. If the definitions refuse the
-        batch table, the batch keeps the column with the setting changed, as a
-        batch read again does: its rows with an empty cell take the value
-        chosen.
+        Without ``key``, every row must use the same value (:meth:`values`).
+        If the cell of the row is empty, the settings do not change. The
+        settings are written before the batch table. If the definitions reject
+        the batch table, the batch still has the column and the changed setting, as
+        a batch read again would.
 
-        Raises ``ValueError`` if ``name`` is not a column, or one of
-        :attr:`source_columns`, as :meth:`set_table` refuses a table without it; if the
-        table has no row of ``key``, or if ``key`` is not given and the rows
-        take different values; :class:`~.definition.DefinitionWriteError` if the
-        definitions refuse a write.
+        Raises ``ValueError`` if ``name`` is not a column or is one of
+        :attr:`source_columns`, if the table has no row ``key``, or if ``key``
+        is not given and the rows use different values. Raises
+        :class:`~.definition.DefinitionWriteError` if the definitions reject a
+        write.
         """
         self._check_column(name)
         self._keeps_source_columns([c for c in self.parameter_columns if c != name])
@@ -465,11 +381,12 @@ class Batch:
 
     def values(self, name: str) -> dict[str, Any]:
         """
-        The different values that the rows take at the column ``name``, each
-        by the key of the first row that takes it, in the order of the table,
-        as a cell: a row's cell, or, for an empty cell, what it gives
-        (:meth:`empty`, :func:`~.table.cell_of`), or ``None`` if it gives
-        nothing. Raises ``ValueError`` if ``name`` is not a column.
+        The distinct values that the rows use at the column ``name``, each by
+        the key of the first row that uses it.
+
+        A value is a cell. For an empty cell it is the cell of what
+        :meth:`empty` returns, or ``None`` if that has no value. Raises
+        ``ValueError`` if ``name`` is not a column.
         """
         self._check_column(name)
         cells = {
@@ -484,10 +401,7 @@ class Batch:
         return {key: cells[key] for key in first.values()}
 
     def _save(self, settings: Mapping[str, Any]) -> None:
-        """
-        Write ``settings`` as the settings of the label, if kept, with
-        :attr:`source_columns` as the blanks of the template.
-        """
+        """Write ``settings``, with :attr:`source_columns` as the blanks."""
         if self.definitions is not None:
             kept = Template(
                 self.spec, params=settings, blanks=sorted(self.source_columns)
@@ -496,19 +410,19 @@ class Batch:
 
     def template(self) -> Template:
         """
-        A copy of the template that each row fills: the settings without
-        those at the columns, and the columns as its blanks. Changing it
-        changes the batch only by :attr:`settings`.
+        A copy of the template that each row fills: the settings, with the
+        parameter columns as blanks.
         """
         return copy.deepcopy(self._template)
 
     def empty(self) -> dict[str, Any]:
         """
-        The value that an empty cell gives, by column, as a request takes it:
-        the setting, else its parameter's default, or ``None`` if it takes
-        ``None``. Nothing at a column of :attr:`source_columns`, where the row waits
-        for its file, whatever its default, nor where the parameter gives
-        nothing.
+        The value of an empty cell, by column, as a request accepts it: the
+        setting, else the default, else ``None`` if the parameter accepts
+        ``None``.
+
+        A column without such a value is left out, and so is each of
+        :attr:`source_columns`.
         """
         fields = self.spec.params.model_fields
         empty = {}
@@ -525,10 +439,11 @@ class Batch:
 
     def cells(self, keys: Sequence[str] | None = None) -> dict[str, dict[str, Any]]:
         """
-        The cells of the rows of ``keys``, or of all, by key, as a request
-        takes them (:func:`~.table.as_request`): each empty cell as
-        :meth:`empty` gives it, and left out where it gives nothing, a problem
-        of the row. Raises ``KeyError`` for a key that the table lacks.
+        The values of the parameter columns of the rows of ``keys``, or of all
+        rows, by key, as a request accepts them.
+
+        An empty cell has the value of :meth:`empty`, and is left out where
+        that has none. Raises ``KeyError`` for a key that the table lacks.
         """
         rows = self._table[list(self.parameter_columns)]
         if keys is not None:
@@ -546,18 +461,13 @@ class Batch:
 
     def files(self) -> set[FileRef]:
         """
-        The files that the batch names, each by its identity: in a cell of a
-        row or in a setting, at any depth, such as an element of a list.
+        The files that the cells and the settings refer to, at any depth, each
+        by its identity in the file source.
 
-        A name is resolved by the workspace, so ``run:60339`` gives the
-        identity under which the file source lists the file. Each value
-        that names a file is resolved on its own, so that a value refused,
-        such as one that names a file not listed, names no file and hides
-        no other; the elements of a list refused are resolved each on its
-        own, so that one not listed hides no other. In a group, such as a
-        setting of several fields, a file refused hides the group's other
-        files. A value resolved is kept as :meth:`state` keeps it, until
-        the next :meth:`set_table`.
+        Each value is resolved alone, so a rejected value, such as a file not
+        listed, hides no other file. Each element of a rejected list is
+        resolved alone too. In a group, a rejected file hides the other files
+        of the group.
         """
         given = [
             *self._template.params.items(),
@@ -583,19 +493,15 @@ class Batch:
         self, keys: Sequence[str] | None = None, *, compare: bool = True
     ) -> dict[str, RowState]:
         """
-        Where each row stands now, read from the client, or the rows of
-        ``keys`` if given: its result, and where its request with the settings
-        differs from its result's (:attr:`RowState.changed`), with the reasons
-        a cell is refused, as problems of its row.
+        The state of each row, or of the rows of ``keys``, read from the client.
 
-        With ``compare=False``, nothing is resolved: each row has the problems
-        of its cells as given, its status, and whether its result is of
-        an unbound spec. :attr:`RowState.changed` is then ``None``, and so is
-        :attr:`RowState.outdated` unless the result is of an unbound spec. It is
-        what :meth:`reduce` checks before it submits.
+        A cell that the workspace rejects is a problem of its row. With
+        ``compare=False``, nothing is resolved: :attr:`RowState.changed` is
+        ``None``, and so is :attr:`RowState.outdated` unless the result is of
+        another spec.
 
-        Raises ``SubmitError`` if the settings are refused, with reasons that
-        name no row: no row can run with them. Only if compared.
+        Raises ``SubmitError``, with reasons that name no row, if the workspace
+        rejects the settings. Never with ``compare=False``.
         """
         cells, found = self._cells_and_results(keys)
         if not compare:
@@ -607,9 +513,10 @@ class Batch:
         self, keys: Sequence[str] | None = None
     ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
-        The state of the rows of ``keys``, or of all, as a table shows it, and
-        why the settings are refused: compared, or not compared while the
-        settings are refused, with the reasons.
+        The states of the rows of ``keys``, or of all rows, and why the
+        workspace rejects the settings.
+
+        While it rejects them, the states are not compared.
         """
         try:
             return self.state(keys), ()
@@ -618,12 +525,14 @@ class Batch:
 
     def settings_of(self, key: str) -> dict[str, Any]:
         """
-        The settings that the result of row ``key`` was reduced with: at a
-        column where the row gives its own value, the batch's setting, and
-        where its cell is empty, the value that the row took. Raises
-        ``ValueError`` naming the row (:func:`~.table.row_names`) if it has no
-        result, or one of an unbound spec, whose settings this one does not take;
-        ``KeyError`` if the table has no row ``key``.
+        The settings that the result of row ``key`` was reduced with.
+
+        At a column where the cell of the row holds a value, the current
+        setting of the batch. Elsewhere, the value in the request of the
+        result.
+
+        Raises ``ValueError`` naming the row if it has no result, or a result
+        of another spec. Raises ``KeyError`` if the table has no row ``key``.
         """
         row = self.shown([key])[0][key]
         name = row_names(self._table, self.parameter_columns)[key]
@@ -687,9 +596,8 @@ class Batch:
         self, cells: Mapping[str, Mapping[str, Any]], found: Mapping[str, Record]
     ) -> tuple[dict[str, frozenset[str]], dict[str, tuple[FieldError, ...]]]:
         """
-        For each row with a result, the names at which its request with the
-        settings differs from its result's; and the reasons of the rows whose
-        cells are refused. Raises ``SubmitError`` if the settings are.
+        :attr:`RowState.changed` of each row with a result, and the problems
+        of the rows whose cells are rejected.
         """
         resolved = self.client.resolve(self._template)
         if isinstance(resolved, SubmitError):
@@ -721,19 +629,14 @@ class Batch:
         self, asked: Mapping[str, Mapping[str, Any]]
     ) -> tuple[dict[str, dict[str, Any]], dict[str, tuple[FieldError, ...]]]:
         """
-        The cells of each row, by key, as a record holds them, and the reasons
-        of each row whose cells are refused. A row asks for its cells not
-        resolved before in a template of their own, every other parameter
-        blank, all rows in one call of :meth:`~ess.apps.Client.resolve`.
+        The cells of each row of ``asked`` as a record holds them, and the
+        problems of each row whose cells are rejected.
 
-        A value resolved is kept by its column and value until the next
-        :meth:`set_table`, since a parameter resolves the same whatever the others
-        are. A kept value differs from one resolved now only for a file that
-        gained a catalogue identifier since, which keeps its old identity until
-        the ``set_table``, as ``resolve`` allows. A list is kept by its
-        elements; a value that cannot be a key, such as a dict, is resolved
-        each time. A refusal is not kept, so that a file that arrives later is
-        found.
+        The cells not cached are resolved in one call, each row in a template
+        with every other parameter blank. A cached value differs from a fresh
+        one only for a file that gained a catalogue identifier since, which
+        ``resolve`` allows. A rejection is not cached, so that a file that
+        arrives later is found.
         """
         fields = self.spec.params.model_fields
         cells: dict[str, dict[str, Any]] = {}
@@ -766,12 +669,12 @@ class Batch:
 
     def reduce(self, keys: Sequence[str]) -> dict[str, Record]:
         """
-        Submit the rows of ``keys`` with the settings, all or none; their
-        records by key.
+        Submit the rows of ``keys``, all or none, and return their records by
+        key.
 
         Raises ``SubmitError`` if a row cannot run or is still running, naming
-        it by key and the cell by column. A reason about the settings is named
-        once, without a key.
+        its key and column. A reason about the settings appears once, without
+        a key.
         """
         cells, found = self._cells_and_results(keys)
         states = self._states(cells, found, None, {})
@@ -796,13 +699,17 @@ class Batch:
         try:
             return self.client.submit(self._open(template), each=each, **options)
         except SubmitError as error:
+            # A rejection at a position is of a row or of the settings: the
+            # stage, which may have done its expensive part, stays. One without
+            # a position is of the stage, which stopped or was released: it is
+            # replaced and the rows are submitted once more.
             if any(e.loc for e in error.errors):
                 raise
         self.close()
         return self.client.submit(self._open(template), each=each, **options)
 
     def _open(self, template: Template) -> Stage:
-        """The stage of ``template``: the open one if it is of the same."""
+        """The stage of ``template``: the open one if opened from an equal one."""
         if self._stage is None or self._stage[0] != template:
             stage = self.client.stage(template)
             self.close()
@@ -810,7 +717,7 @@ class Batch:
         return self._stage[1]
 
     def _once(self, errors: tuple[FieldError, ...]) -> list[FieldError]:
-        """Each reason that names no column once, without a row's key."""
+        """``errors``, each that names no parameter column once and without a key."""
         placed = [
             e
             if e.loc and e.loc[0] in self.parameter_columns
@@ -821,9 +728,10 @@ class Batch:
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """
-        Cancel the records still running that are the newest under the label
-        for their member, of the members ``keys`` if given, or of every member,
-        whether or not it is a row now.
+        Cancel the running results of the members ``keys``, or of every member.
+
+        A result is the newest record of a member under the label, whether or
+        not the member is a row now.
         """
         self._records.poll()
         found = self._records.found
@@ -832,7 +740,7 @@ class Batch:
         self.client.cancel([r for r in chosen if status[r.id] is Status.PENDING])
 
     def close(self) -> None:
-        """Release the open stage, if any; what was submitted through it still runs."""
+        """Release the open stage, if any. What was submitted through it still runs."""
         if self._stage is not None:
             self.client.release(self._stage[1])
             self._stage = None

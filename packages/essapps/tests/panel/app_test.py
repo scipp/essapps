@@ -166,3 +166,33 @@ def test_the_forms_come_first_then_the_outputs_then_the_records(app: App) -> Non
         'Outputs',
         'Records',
     ]
+
+
+class SeenTab:
+    """An application's tab that holds each listing it was refreshed with."""
+
+    def __init__(self) -> None:
+        self.listings: list[Listing] = []
+
+    def refresh(self, listing: Listing) -> None:
+        self.listings.append(listing)
+
+    def panel(self) -> pn.pane.Markdown:
+        return pn.pane.Markdown('An application tab')
+
+
+def test_an_application_tab_comes_first_and_is_refreshed_with_each_listing(
+    client: Client,
+) -> None:
+    tab = SeenTab()
+    app = App(client, tabs={'Own': tab})
+
+    listing = app.refresh()
+
+    assert tab.listings == [listing]
+    assert [p.title for p in app.panel().get_root().tabs] == [
+        'Own',
+        'Workflows',
+        'Outputs',
+        'Records',
+    ]

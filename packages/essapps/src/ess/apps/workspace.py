@@ -1,166 +1,118 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-A workspace holds the history and the values of one proposal: it checks
-requests, keeps records, and runs requests. It also answers queries about the
-files of its file source.
+The workspace: it checks requests, logs records, runs them on worker threads,
+and holds their output values in memory.
 
-The rules that clients see are in :mod:`ess.apps.protocol`, and this workspace
-implements them in this process. This docstring explains how it does so and how
-its pieces fit.
+:mod:`ess.apps.protocol` states the rules that a client relies on. This
+docstring states what spans the functions of this module.
 
-A method whose name ends in ``_locked`` must be called with the workspace's lock
-(``_changed``) held. Any other method may be called without it, and takes the
-lock where it needs it.
+Threads
+-------
+One lock, the condition ``_changed``, guards the workspace and its ``_Stage``
+and ``_Accumulator`` objects. A method whose name ends in ``_locked`` must be
+called with the lock held. Any other method takes the lock where it needs it.
 
-What the workspace knows of history is its log (see ``log.py``): every
-submission, started and finished record, opened accumulator, and push is
-appended as one event and then applied to its views (see ``views.py``). A change
-is checked before its event is appended, so the log holds only events that
-apply. A workspace given a log that already has events applies them first; a log
-holds the history of one proposal, so a log with an event of another proposal is
-refused. Nothing the earlier workspace kept survives, so only persisted work
-that had not started goes on (see :meth:`Workspace._restart_locked`). The log is
-the workspace's only record of history, so if an append fails, for example on a
-full disk, the workspace no longer knows its own state and stops: every call
-waiting in it, and every later call, raises ``RuntimeError`` from the append's
-error.
+Code outside the framework runs without the lock: the file source, the store,
+bindings, and drivers. So does validation. A method that checks a request does
+what needs no history before it takes the lock, and the rest after.
 
-The workspace keeps the outputs of records, and its stages and accumulators. A
-client is a connection to the workspace: it keeps nothing, and every client reads
-and references the same values. Output values, stages, accumulators, and what
-waits for what are not history. This workspace keeps them in memory, so a workspace
-started from an existing log cannot read the outputs of the workspace that wrote
-it.
+Exceptions to the lock:
 
-Keepers and readers
+- A stage's ``staging`` lock makes concurrent calls stage once. It is taken
+  before ``_changed``, never while ``_changed`` is held.
+- An accumulator's ``_computing`` lock guards the outputs of its state. It is
+  never taken while ``_changed`` is held.
+- While an accumulator is ``busy``, its worker uses the driver, ``added``, and
+  the first step without ``_changed``.
+- ``_Accumulator.checked`` is read and written without ``_changed``. A race
+  costs only another check.
+
+History
+-------
+The log (``log.py``) is the workspace's only record of history. A change is
+checked, then appended to the log as an event, then applied to ``_views``
+(``_append_locked``). The log thus holds only events that apply. The views
+apply the event in the form the log stores, as a later read of the log would.
+If an append fails, for example on a full disk, the workspace no longer knows
+its own state and stops: every waiting and later call raises ``Stopped``, from
+the error of the append.
+
+Output values, stages, accumulators, readers, and waits are not history. They
+are held in memory and end with the process. The workspace logs only records of
+a bound spec. So a record of an unbound spec comes from the log the workspace
+started from, and none of its values is in memory.
+
+Restart
+-------
+A record's start is logged before its workflow reads anything. A record
+completes only once its persisted outputs are written. At a restart
+(``_restart_locked``), only persisted work that had not started goes on. Each
+record pending in the log:
+
+1. fails if it started, since it may have ended the process, as an
+   out-of-memory kill does;
+2. otherwise is cancelled, unless it persists outputs, or a pending record
+   that persists outputs reads it, directly or through other pending records;
+3. otherwise runs, if its spec is bound and each output it reads is of a bound
+   spec and either persisted or of a record that runs. Otherwise it fails.
+   The record of a freeze fails, since its driver is gone. A call through a
+   stage runs as its plain request, since the stage is gone.
+
+So a record that runs at a restart had not started, and has written nothing.
+
+Values and readers
+------------------
+The workspace holds in memory the outputs of the records in ``_in_memory``:
+those that a submission or a freeze made without persisting outputs, until they
+are released. Any other holder of a value is a *reader*, counted in
+``_readers``. The readers of an output are the records that will read it or
+whose workflow is reading it, the steps of accumulators, and the stages not yet
+staged that reference it. The readers of
+an accumulator's state are the reads of it in progress, a freeze while it is
+checked, and the record of a freeze until it has finished and its workflow, if
+it ran, has returned.
+
+When the last reader of an output lets go (``_let_go_locked``), the output is
+dropped, unless it is in ``_in_memory``. A pending record that persists nothing,
+and whose outputs nothing would hold, is cancelled, since its outputs would be
+dropped once computed. Cancelling lets go of what the record reads, so this
+passes along a chain.
+
+A workflow reads an output from memory if the workspace holds it there, and
+from the store otherwise. Persisted outputs are written once the workflow has
+returned, and the record completes after the write.
+
+Waits
+-----
+A record waits for the records it references (``_Plan.depends_on``), and so for
+the write of their persisted outputs. The record of a freeze waits for the
+accumulator to reach its state. An accumulator does its steps one at a time, in
+the order logged, on the workers (``_advance_locked``). A step waits for the
+records it references, and a push also for the readers of the state before it.
+If a step fails, or a record it references does not complete, the accumulator
+stops.
+
+Every wait is for work that came before the waiter, so no wait goes round in a
+circle. A record waits for records logged before it. A read, or the record of a
+freeze, waits for pushes logged before it took its state. A push waits for
+readers that took the state before the push was logged.
+
+Accumulator outputs
 -------------------
-The workspace holds in memory the outputs of the records that a submission or a
-freeze made without persisting them, until they are released (``_in_memory``).
-The pending records, steps of accumulators, and stages that have yet to read a
-value are its readers (``_readers``, see ``_Read``). A value is dropped when the
-workspace does not hold it in memory and no reader is left (``_drop_locked``). A
-pending record whose outputs nothing keeps is cancelled, since they would be
-dropped the moment they are computed; cancelling lets go of what it reads, so
-this passes along a chain. A workflow already running is not interrupted: its
-record is cancelled at once, and its outputs are dropped when it returns. Once a
-stage has staged, or a step is done, what the binding holds is its own.
-
-A persist request made with a submission or a freeze replaces the workspace's
-hold: the worker writes the outputs named when the workflow returns, and the
-record finishes once they are written. The store may hold a value that no event
-names, written for a record cancelled meanwhile or by a write that failed
-part-way; nothing reads it.
-
-:meth:`Workspace._read_problem_locked` decides what may be read, in the request
-phase, from the record's existence, whether the workspace holds it in memory,
-and what it persists. So whether a call is accepted does not depend on how far
-other work has run, and a pending record is as readable as a completed one. A
-read takes the outputs the workspace holds in memory from there, and persisted
-ones from the store, after the write; a workflow reads the outputs it references
-from memory while the workspace holds them.
-
-A request waits until every record it references has completed, the record
-of a freeze until the accumulator has reached its state, and an accumulator's
-steps as described below. This is the only scheduling there is.
-
-Records of an unbound spec
---------------------------
-The log holds the digest of each record's spec (see ``log.py``). A record is
-of the bound spec if a binding has its spec's name, version, and digest, and
-otherwise of an unbound spec (:meth:`Workspace._unbound_spec_problem`, which
-:meth:`Workspace.bound` answers to a client). Every record that this
-workspace logs is of the bound spec, so a record of an unbound spec comes from
-the log it started from, and none of its values is in memory. Its persisted
-outputs are read from the store as stored, without a type, so ``select=`` and
-``describe`` take them as plain scipp data. Its outputs are not readable to a
-request: a reference to one is refused, since its type cannot be checked, and
-at a restart a pending record of an unbound spec fails, as does one that reads
-an output of one.
-
-Request and call phase
-----------------------
-A request runs through its spec's binding (see ``ess.spec.binding``): a plain
-request through ``compute``, a stage through ``make_stage``, and an
-accumulator through ``make_accumulator``.
-
-In the *request phase*, at submission, ``checks.py`` checks what needs no data.
-The workspace adds, under its lock, what depends on history and on what it
-keeps: each reference is one that may be read, and its data fit the type of its
-field (see :data:`ess.spec.validation.OutputReads`). :meth:`Workspace.resolve`
-gives the first part alone, the request or template as a record would hold its
-values, and logs nothing.
-
-In the *call phase*, on a worker, the workspace reads the output each reference
-names and validates each value, a row of a list on its own, by the params model
-from the JSON form the log holds, with each reference replaced by the data read
-and each file by its local path (see :func:`ess.spec.validation.validated`).
-A group that holds a reference is validated only then, so its validators see
-the data. A plain request makes the params instance from these values without
-validating again, since the params model has no validators of its own, which
-:class:`~ess.spec.WorkflowSpec` refuses; a stage or an accumulator gets the
-values by name. An output that the spec declares
-optional and the binding returns as ``None`` is left out; any other output that
-is not an instance of its type fails the record.
+The outputs of a state are computed once, without ``_changed``, when the first
+reader needs them, and held until the next push. The record of a freeze gets
+them without a copy, so they may share memory with the driver. A read copies
+them. A driver cannot go back to an earlier state, so the next push waits until
+the readers of the current state are done. This way no reader sees a value
+change.
 
 Stages
 ------
-A stage keeps the outputs its template references until it has staged. The first
-request to run through it has the binding make its stage with the template's
-values by name, each read and validated by its own field, and every request
-through the stage runs through the callable the binding returned, with the
-values of the blanks. The record of such a request still names the template's
-values, but these references are provenance only: they are not checked against
-what the workspace keeps, waited for, or read, except by a restart, which runs
-the record as its plain request (see :meth:`Workspace._restart_locked`).
-
-Accumulators
-------------
-An accumulator keeps the rows logged, by JSON form, to refuse a repeated row, so
-a push takes time in proportion to its rows. The driver gets each step's values
-as the log holds them, so that it and the record of a freeze agree. Opening and
-pushing return once the checks pass and the event is logged, as a submission
-does; they do not wait for a record that is pending.
-
-Each accumulator works through its steps one at a time, in the order logged, on
-the workers. A step starts once the records it references have completed, and a
-push once the readers of the state before it are done. Opening has the binding
-make the driver. A push is one push into the driver per table it gives rows of,
-in the order given, each row first read and validated by its table's element
-type. If a step fails, or a record it references has not completed, the
-accumulator stops: it takes no more pushes or readers, the steps after it are
-dropped, and the record of a freeze of a state it will not reach fails. Its
-driver is dropped once no reader holds the state the driver is in, without
-waiting for it to be released.
-
-An accumulator's *logged state* is state n for the n pushes logged so far,
-whether or not they have been added. A read is of the logged state when it is
-called, and a freeze of the logged state once no other freeze of the
-accumulator is being checked. A request never references an accumulator, only
-the record of its freeze, so no request holds back a push.
-A freeze logs one record of the plain request of that state, as the
-accumulator and its number of pushes. The first read of a state checks the
-number of rows of each blank table against its length constraints, outside the
-workspace's lock.
-
-The outputs of a state are computed outside the lock, all at once, the first time
-the record of a freeze or a read of its outputs needs them, and kept until the
-next push. The record of a freeze gets what the driver returns, not a copy, which
-may share memory with the driver; a read of the outputs copies them, or only the
-part that a selection names. So the next push waits until the readers of the
-state before it are done, since the driver cannot go back to that state and no
-reader may see its outputs change. The readers are the reads in progress, and a
-freeze, while it is checked, and then its record, until it has finished and its
-workflow, if it ran, has returned (see ``_Read``). Every wait is for work that
-came before the waiter: a request waits for records submitted before it, a read
-and the record of a freeze for the pushes logged before the read or the freeze
-took its state, and a push for the readers of the state before it, which took
-that state before the push was logged. So no wait goes round in a circle.
-
-Releasing an accumulator and freezing it are described at
-:meth:`~ess.apps.protocol.WorkspaceProtocol.release` and
-:meth:`~ess.apps.protocol.WorkspaceProtocol.freeze`, and closing the workspace at
-:meth:`Workspace.close`.
+Once a stage has staged, a call through it reads only the values of the blanks.
+The template's references in the call's record are then provenance only. They
+are not checked, waited for, or read, except at a restart, which runs the record
+as its plain request.
 """
 
 from __future__ import annotations
@@ -234,19 +186,13 @@ type Spec = WorkflowSpec[Any, Any]
 
 
 class _Failure(Exception):
-    """
-    A failure in the call phase that the workspace words itself, such as a
-    workflow that returns no instance of its outputs model.
-    """
+    """A failure in the call phase whose message the workspace writes."""
 
 
 def _reason(error: Exception) -> str:
     """
-    Why a step failed, as a failure records it. An error the framework raises
-    with a message for the user, such as a value refused in the call phase,
-    is its message as it stands. Any other, raised by a binding, a driver, a
-    file source, or a store, is its type and message, such as
-    ``KeyError: 'counts'``, which ``'counts'`` alone would not tell.
+    The failure text of an error: its message if it was written for a person,
+    else its type and message, such as ``KeyError: 'counts'``.
     """
     if isinstance(error, _Failure | ParamsError | SubmitError | NotReadable):
         return str(error)
@@ -257,11 +203,7 @@ def _reason(error: Exception) -> str:
 def _outputs_of(
     spec_id: SpecId, model: type[BaseModel], returned: Any
 ) -> dict[str, Any]:
-    """
-    The outputs a binding returned, an instance of the outputs ``model``, by
-    name; an output that the spec declares optional and the binding returned
-    as ``None`` is left out. Raises for anything else.
-    """
+    """The outputs a binding returned, by name, without those returned as ``None``."""
     if not isinstance(returned, model):
         raise _Failure(
             f'the workflow of {spec_id} returned {type(returned).__name__}, '
@@ -281,10 +223,7 @@ def _not_returned(where: str) -> NotReadable:
 
 
 def _element(value: Any, ref: OutputRef) -> Any:
-    """
-    ``value``, the output ``ref`` names, or its element ``ref.key`` if given:
-    by index for a list.
-    """
+    """``value``, or its element ``ref.key``, by index for a list."""
     if (key := ref.key) is None:
         return value
     try:
@@ -294,11 +233,7 @@ def _element(value: Any, ref: OutputRef) -> Any:
 
 
 def _info(value: Any) -> Any:
-    """
-    What a value is, with no copy of an array: an :class:`ArrayInfo` for an
-    array of at least one dimension, wherever it is held, a dict of its fields
-    for a group, and a copy of any other value.
-    """
+    """``value`` as plain data, each array of at least one dimension as its info."""
     if isinstance(value, BaseModel):
         return {n: _info(v) for n, v in value}
     if isinstance(value, Mapping):
@@ -311,7 +246,7 @@ def _info(value: Any) -> Any:
 
 
 class _OutputKey(NamedTuple):
-    """An output of a record that is read."""
+    """An output of a record."""
 
     record: str
     output: str
@@ -347,7 +282,7 @@ def _each[T, R](
 def _every[T, R](items: Sequence[T], check: Callable[[int, T], R]) -> list[R]:
     """
     ``check`` of each item, by its index. Raises one ``SubmitError`` with the
-    reasons of all items, so that a caller learns of every refused request at once.
+    reasons of all items, so that a caller learns of every rejected request at once.
     """
     results = _each(items, check)
     if refused := [r for r in results if isinstance(r, SubmitError)]:
@@ -357,15 +292,11 @@ def _every[T, R](items: Sequence[T], check: Callable[[int, T], R]) -> list[R]:
 
 @dataclass(frozen=True)
 class _Bound:
-    """
-    What the workspace holds for a bound spec: its binding, its request-phase
-    checks, and its digest, computed once since :attr:`~ess.spec.WorkflowSpec.digest`
-    is computed on each access.
-    """
+    """A bound spec: its binding, request-phase checks, and digest."""
 
     binding: Binding
     checks: Checks
-    digest: str
+    digest: str  # held, since ``WorkflowSpec.digest`` computes it on each access
 
     @property
     def spec(self) -> Spec:
@@ -373,36 +304,21 @@ class _Bound:
 
 
 class _Stage:
-    """
-    A stage: its spec's binding, its template, and the binding's callable
-    once it has staged.
-
-    The template's values are as given, with file names resolved when the
-    stage was made. ``blanks`` names the values a call gives.
-    ``reads`` are the outputs of records the
-    template references, which the stage keeps as a reader until it has
-    staged, has stopped, or is released; it is empty from then on. The first
-    call to run stages the binding under ``staging``, so that concurrent calls
-    stage it once. ``call``, the callable the binding returned, and
-    ``stopped``, why staging failed, change under the workspace's lock. A stage
-    that has stopped takes no more calls.
-    """
+    """An open stage: its binding, its template, and its callable once staged."""
 
     def __init__(self, binding: StageBinding, template: Template) -> None:
         self.spec = template.spec
         self.binding = binding
         self.template = template
         self.blanks = frozenset(template.blanks)
+        # the stage reads these until it has staged, stopped, or is released
         self.reads = _output_reads(template.params)
         self.call: StageCall | None = None
-        self.stopped: str | None = None
-        self.staging = threading.Lock()
+        self.stopped: str | None = None  # why staging failed
+        self.staging = threading.Lock()  # so that concurrent calls stage once
 
     def read_part_locked(self, request: Request) -> Request:
-        """
-        The part of a call's ``request`` that the call reads: all of it until
-        the stage has staged, then only the values of its blanks.
-        """
+        """The part of a call's ``request`` that the call reads."""
         if self.call is None:
             return request
         params = {k: v for k, v in request.params.items() if k in self.blanks}
@@ -411,9 +327,10 @@ class _Stage:
 
 class _DriverInput(NamedTuple):
     """
-    A step of an accumulator: its values by name, the template's fixed values
-    for the opening and the rows of each table for a push, and the outputs of
-    records it reads.
+    A step of an accumulator: the template's fixed values for the opening, or
+    the rows of each table for a push, and the outputs they reference. The
+    values are as the log holds them, so that the driver and the record of a
+    freeze agree.
     """
 
     values: dict[str, Any]
@@ -421,37 +338,7 @@ class _DriverInput(NamedTuple):
 
 
 class _Accumulator:
-    """
-    An accumulator: its template, its spec's binding, its driver once it has
-    opened, and the steps logged but not yet done.
-
-    ``added`` is the number of pushes in the driver, ``None`` until the
-    driver is made. ``steps`` holds each step not yet done, in the order
-    logged, as its values by name, as the log holds them: first the
-    template's fixed values, until the driver is made, then the rows of each
-    push by table. Each comes with the
-    outputs of records it reads, which it holds as a reader. ``busy`` says a
-    worker makes the driver or pushes into it, outside the workspace's lock.
-    ``seen`` holds the rows of each blank table logged so far, by JSON form,
-    with their indexes (see :func:`.checks.distinct`).
-
-    ``checked`` holds the number of pushes of the state checked last, and
-    why its plain request would be refused, or ``None``. Two
-    reads that check different states at once may overwrite each other's,
-    which costs only another check.
-    ``stopped`` says why the accumulator takes no more pushes or readers, or
-    is ``None``: it failed, or the record of its freeze completed. ``released``
-    says it was released: it then keeps only the steps that a
-    reader still needs. ``freezing`` says a freeze is being checked; pushes
-    wait until it ends. ``frozen`` names the record of its last freeze, once
-    logged: the accumulator then takes no more pushes.
-
-    :meth:`outputs` computes every output of the state the driver is in the
-    first time a reader reads it, and keeps them until :meth:`drop_locked`,
-    which the workspace calls before a push adds. They are computed under a lock
-    of their own, outside the workspace's, so ``driver.outputs`` is called from
-    one thread at a time and never while a push adds.
-    """
+    """An open accumulator: its template, binding, driver, and the steps to do."""
 
     driver: Driver  # once the accumulator has opened
 
@@ -461,15 +348,17 @@ class _Accumulator:
         self.id = accumulator_id
         self.template = template
         self.binding = binding
-        self.added: int | None = None
-        self.steps: deque[_DriverInput] = deque()
+        self.added: int | None = None  # pushes in the driver; None before it is made
+        self.steps: deque[_DriverInput] = deque()  # in the order logged
+        # the rows of each blank table logged so far, by JSON form, with their index
         self.seen: dict[str, dict[bytes, int]] = {i: {} for i in template.blanks}
-        self.busy = False
+        self.busy = False  # a worker makes the driver or pushes into it
+        # the pushes of the state checked last, and its problem
         self.checked: tuple[int, str | None] | None = None
-        self.stopped: str | None = None
+        self.stopped: str | None = None  # why it takes no more pushes or readers
         self.released = False
-        self.freezing = False
-        self.frozen: str | None = None
+        self.freezing = False  # a freeze is being checked
+        self.frozen: str | None = None  # the record of its last freeze
         self._computing = threading.Lock()
         self._computed: dict[str, Any] | None = None
 
@@ -479,12 +368,7 @@ class _Accumulator:
         return 'opening' if self.added is None else f'push {self.added}'
 
     def outputs(self) -> dict[str, Any]:
-        """
-        Every output of the state the driver is in, for one of its readers.
-
-        They are what the driver returns, not a copy (see the module
-        docstring), computed once for the state.
-        """
+        """Every output of the state the driver is in, computed once per state."""
         with self._computing:
             if self._computed is None:
                 spec = self.binding.spec
@@ -493,17 +377,11 @@ class _Accumulator:
             return self._computed
 
     def drop_locked(self) -> None:
-        """
-        Drop the outputs computed for the state the driver is in; no reader is
-        left, so none computes.
-        """
+        """Drop the outputs computed for the state the driver is in."""
         self._computed = None
 
     def end_locked(self) -> None:
-        """
-        Drop the driver of an accumulator that takes no more readers, once the
-        last reader of the state the driver is in is done.
-        """
+        """Drop the driver and its outputs."""
         self._computed = None
         if hasattr(self, 'driver'):  # an accumulator that failed to open has none
             del self.driver
@@ -515,61 +393,55 @@ def _freeze_wait_key(accumulator_id: str, upto: int) -> str:
 
 
 class _StateKey(NamedTuple):
-    """A state of an accumulator that is read, by its number of pushes."""
+    """A state of an accumulator, by its number of pushes."""
 
     acc: _Accumulator
     pushes: int
 
 
 _Read = _OutputKey | _StateKey
-"""
-A value that is read: an output of a record, or a state of an accumulator. The
-readers of an output are the pending records, steps, and stages that have yet to
-read it. The readers of a state are the reads of the accumulator's outputs in
-progress, a freeze being checked, from its call until its record is logged and
-holds the state itself, and the record of the freeze, until it has finished and
-its workflow, if it ran, has returned.
-"""
+"""A value that has readers (see the module docstring)."""
 
 
 @dataclass
 class _Plan:
-    """
-    How a record that has not finished runs, made when it is scheduled.
+    """How a record that has not finished runs."""
 
-    ``reads`` are the values it holds as a reader until it starts, which then
-    holds them itself, or finishes without starting. ``depends_on`` are the records
-    and the states (see :func:`_freeze_wait_key`) it waits for before it starts.
-    ``compute`` returns its outputs by name, on a worker. ``state`` is the
-    state that the record of a freeze reads, which it holds until it has
-    finished, or ``None``.
-    """
-
-    reads: list[_Read]
-    depends_on: set[str]
-    compute: Callable[[], dict[str, Any]]
-    state: _StateKey | None = None
+    reads: list[_Read]  # held by the plan until the record starts, then by _run
+    depends_on: set[str]  # records, and states (see _freeze_wait_key)
+    compute: Callable[[], dict[str, Any]]  # runs on a worker
+    state: _StateKey | None = None  # the state the record of a freeze reads
 
 
 class Workspace(WorkspaceProtocol):
     """
-    Checks requests, keeps records, and runs requests of one ``proposal`` (see
-    the module docstring).
+    The workspace of one proposal, in this process (see the module docstring).
 
-    ``files`` is its file source, and ``bind`` lists a binding for each
-    spec it runs; each binding names its spec. Workflows, the steps of
-    accumulators, and writes share ``workers`` threads. A long step or
-    workflow holds one of them, so other work waits only once every worker is
-    busy; submissions are accepted meanwhile. The default is one thread: a
-    workflow that is parallel inside gains nothing from more, and the peak
-    memory grows with each request run at once. The best number depends on the
-    instrument, so an application may set it. ``log`` holds history, in
-    memory if not given, and ``store`` is where persisted outputs are
-    written. A workspace started on an existing log needs the store the earlier
-    workspace wrote to: without one, the persisted work it goes on with fails,
-    since it has no store. The workspace owns its log and closes it in
-    :meth:`close`. Raises ``ValueError`` for a log with an event of another
-    proposal, and closes the log.
+    Parameters
+    ----------
+    bind:
+        A binding for each spec the workspace runs. Each binding names its spec.
+    workers:
+        The number of threads that run workflows, accumulator steps, and writes.
+        Submissions are accepted while every worker is busy. The default is one:
+        a workflow that is parallel inside gains nothing from more, and the peak
+        memory grows with each request run at once.
+    log:
+        The history, held in memory if not given. The workspace owns the log,
+        and closes it in :meth:`close`.
+    store:
+        Where persisted outputs are written. A workspace started from an
+        existing log needs the store of the workspace that wrote the log.
+        Without it, the persisted work that goes on fails.
+
+    Raises
+    ------
+    ValueError
+        If two bindings have the same spec name and version, or the log holds
+        an event of another proposal or one that does not apply. In the second
+        case the log is closed.
+    TypeError
+        If ``bind`` is not a list of bindings.
     """
 
     def __init__(
@@ -621,9 +493,9 @@ class Workspace(WorkspaceProtocol):
         self._in_memory: set[str] = set()
         self._stages: dict[str, _Stage] = {}  # open, by ID
         self._accumulators: dict[str, _Accumulator] = {}  # open, by ID
-        # by record ID and name
+        # output values held in memory, by record ID and name
         self._outputs: dict[tuple[str, str], Any] = {}
-        # a value to the number of its readers (see _Read)
+        # a value to the number of its readers
         self._readers: Counter[_Read] = Counter()
         self._plans: dict[str, _Plan] = {}  # of the records not yet finished
         # a record or a state (see _freeze_wait_key) to the records that wait for it
@@ -637,23 +509,22 @@ class Workspace(WorkspaceProtocol):
 
     def close(self) -> None:
         """
-        Release everything the workspace keeps, wait until no record is pending
-        and no accumulator has a step to do, then let go of the workers and the
-        log. Closing again does nothing more. A workspace that has stopped lets go
-        without waiting, drops the work not yet started, and raises.
+        Release everything, wait until no record is pending and no accumulator
+        has a step to do, then shut down the workers and close the log.
 
-        Releasing cancels the pending work that persists nothing (see
-        :meth:`release`), so what is left to wait for is the work that writes
-        to the store, and what it reads. Once closing has started, every later
-        call raises ``RuntimeError``, and so does a call waiting in the
-        workspace. A call under way that does not wait returns or raises, by
-        how far it has got. If an append fails while releasing, the workspace
-        stops.
+        Releasing cancels the pending work that persists nothing. So closing
+        waits for work that writes to the store, for what that work reads, and
+        for workflows already running. A call under way that does not wait
+        returns or raises, depending on how far it has got. If an append fails
+        while releasing, the workspace stops. A workspace that has stopped does
+        not wait for pending records: it drops the work not yet started, waits
+        for the work running, and raises ``Stopped``. Closing again does
+        nothing more.
         """
         try:
             with self._changed:
                 self._closed = True
-                if self._stopped is None:  # a workspace that stopped logs nothing more
+                if self._stopped is None:  # releasing would append to a failed log
                     try:
                         self._release_locked(
                             [*self._in_memory, *self._stages, *self._accumulators]
@@ -676,32 +547,12 @@ class Workspace(WorkspaceProtocol):
         self._check_stopped()
 
     def _restart_locked(self) -> None:
-        """
-        Decide the records left pending in the log the workspace started from.
-        Nothing the earlier workspace kept survived, so only persisted work goes
-        on:
-
-        1. A pending record fails if it started: the workspace ended while it
-           ran, perhaps because of it, as an out-of-memory kill does, so
-           running it again could end the process again. A person submits its
-           request again to run it.
-        2. Otherwise it is cancelled unless it persists outputs, or a pending
-           record that persists outputs reads it, directly or through other
-           pending records.
-        3. Otherwise it runs if it is of the bound spec, and each value it
-           reads is a file, is written, or is an output of a pending record
-           that runs, and of the bound spec; it fails if not.
-           The record of a freeze fails, since the driver it reads is gone.
-           A call through a stage runs as its plain request, since the stage
-           is gone, so it reads the values of the stage's template too.
-
-        So a record that runs at a restart had not started, and has written
-        nothing.
-        """
+        """Finish or run the records left pending in the log."""
         views = self._views
         pending = [i for i in views.records if i not in views.finished]
         needed = {i for i in pending if i in views.persisted}
         for record_id in reversed(pending):  # a record follows what it reads
+            # the record of a freeze fails, so it needs nothing
             if record_id in needed and record_id not in views.states:
                 upstream = views.records[record_id].request.upstream()
                 needed.update(ref.record for ref in upstream)
@@ -726,8 +577,8 @@ class Workspace(WorkspaceProtocol):
 
     def _restart_problem(self, record_id: str, runs: Collection[str]) -> str | None:
         """
-        Why a record pending at a restart cannot read what it references, or
-        ``None``; ``runs`` are the pending records that run.
+        Why a record pending at a restart cannot run, or ``None``. ``runs``
+        holds the pending records that run.
         """
         views = self._views
         if record_id in views.states:
@@ -757,11 +608,7 @@ class Workspace(WorkspaceProtocol):
         return [bound.spec for bound in self._bound.values()]
 
     def _unbound_spec_problem(self, record_id: str) -> str | None:
-        """
-        Why a record is of an unbound spec, or ``None`` if it is of the bound
-        spec: one with the name, version, and digest of the record's (see the
-        module docstring).
-        """
+        """Why a record is of an unbound spec, or ``None``."""
         spec_id = self._views.records.spec(record_id)
         if (bound := self._bound.get(spec_id)) is None:
             return f'{spec_id} has no binding'
@@ -770,21 +617,14 @@ class Workspace(WorkspaceProtocol):
         return None
 
     def _known(self, spec_id: SpecId) -> _Bound:
-        """What is bound to a spec a call names; refuses an unknown spec."""
+        """The bound spec ``spec_id``; raises ``SubmitError`` if there is none."""
         try:
             return self._bound[spec_id]
         except KeyError:
             raise SubmitError.at((), f'unknown spec {spec_id}') from None
 
     def _append_locked(self, event: Event) -> None:
-        """
-        Append an event and apply it to the views.
-
-        The caller has checked that the event applies. What is applied is the
-        event as the log holds it, as it would be when the log is read again.
-        If the append fails, the workspace stops (see the module docstring).
-        Either way, it wakes what waits, such as :meth:`changes`.
-        """
+        """Append an event to the log and apply it to the views."""
         try:
             stored = self._log.append(event)
         except Exception as error:
@@ -795,22 +635,20 @@ class Workspace(WorkspaceProtocol):
         self._changed.notify_all()
 
     def _check_stopped(self) -> None:
-        """Raise if the workspace has stopped."""
+        """Raise ``Stopped`` if the workspace has stopped."""
         if self._stopped is not None:
             raise Stopped(
                 f'the workspace stopped: appending to its log failed: {self._stopped}'
             ) from self._stopped
 
     def _check_running(self) -> None:
-        """Raise if the workspace has stopped or is closed."""
+        """Raise ``Stopped`` if the workspace has stopped or is closed."""
         self._check_stopped()
         if self._closed:
             raise Stopped('the workspace is closed')
 
     def _wait_for_locked(self, predicate: Callable[[], bool]) -> None:
-        """
-        Wait until ``predicate`` holds. Raises if the workspace stops or closes.
-        """
+        """Wait until ``predicate`` holds; raise if the workspace stops or closes."""
         self._changed.wait_for(
             lambda: self._stopped is not None or self._closed or predicate()
         )
@@ -825,12 +663,6 @@ class Workspace(WorkspaceProtocol):
         *,
         persist: bool | Sequence[str] = False,
     ) -> list[Record]:
-        """
-        File names are resolved before the workspace's lock is taken. The records
-        are pending, and the workspace holds in memory the outputs of those that
-        persist none. A persist request is logged with the submission (see the module
-        docstring).
-        """
         self._check_running()
         prepared = _every([e.request for e in entries], self._prepare)
         requests = [request for request, _ in prepared]
@@ -875,10 +707,7 @@ class Workspace(WorkspaceProtocol):
         spec_ids: Iterable[SpecId],
         records: Sequence[NewRecord | NewStateRecord],
     ) -> None:
-        """
-        Log a submission or a freeze of ``records`` of the bound ``spec_ids``,
-        and hold in memory the outputs of those that persist none.
-        """
+        """Log a submission or a freeze, and hold the outputs of what persists none."""
         new_digests = self._views.new_digests(
             {s: self._bound[s].digest for s in spec_ids}
         )
@@ -900,11 +729,7 @@ class Workspace(WorkspaceProtocol):
     def _persisted(
         self, spec_id: SpecId, persist: bool | Sequence[str]
     ) -> tuple[str, ...]:
-        """
-        The outputs of the spec that ``persist`` names: every one if ``True``,
-        none if false. Refuses an output the spec lacks, and any persist without
-        a store.
-        """
+        """The outputs of the spec that ``persist`` names."""
         if not persist:
             return ()
         if self._store is None:
@@ -922,20 +747,11 @@ class Workspace(WorkspaceProtocol):
     def resolve(
         self, items: list[Request | Template]
     ) -> list[Request | Template | SubmitError]:
-        """
-        Each request or template resolved (see :meth:`_resolved`), the part of
-        :meth:`submit`'s checks that reads neither history nor what the
-        workspace keeps.
-        """
         self._check_running()
         return _each(items, self._resolved)
 
     def _resolved(self, index: int, item: Request | Template) -> Request | Template:
-        """
-        A request as :meth:`_prepare` gives it, or a template with every value
-        but the blanks as :meth:`.checks.Checks.template` fixes it, defaults
-        included. A refusal names the item by ``index``.
-        """
+        """``item`` resolved; a refusal names it by ``index``."""
         if isinstance(item, Request):
             return self._prepare(index, item)[0]
         try:
@@ -947,10 +763,8 @@ class Workspace(WorkspaceProtocol):
 
     def _prepare(self, index: int, request: Request) -> tuple[Request, OutputReads]:
         """
-        The request as the record holds it, checked as a plain request in the
-        request phase, but for the records it reads, and the references to
-        outputs in it (see :meth:`_check_reads_locked`). A refusal names the
-        request by ``index``.
+        The request as its record holds it, and the outputs it references,
+        checked except for what needs history. A refusal names it by ``index``.
         """
         try:
             return self._known(request.spec).checks.request(request, self._proposal)
@@ -960,11 +774,7 @@ class Workspace(WorkspaceProtocol):
     def _check_entry_locked(
         self, index: int, entry: Entry, request: Request, reads: OutputReads
     ) -> None:
-        """
-        Check the stage a request of a submission goes through, if any, and the
-        ``reads`` of the part of the request that the call reads (see
-        :meth:`_check_stage_locked` and :meth:`_check_reads_locked`).
-        """
+        """Check the stage of a request, if any, and the outputs its call reads."""
         try:
             stage = self._check_stage_locked(entry, request)
             stage_reads: Collection[_OutputKey] = ()
@@ -978,13 +788,7 @@ class Workspace(WorkspaceProtocol):
     def _check_reads_locked(
         self, reads: OutputReads, stage_reads: Collection[_OutputKey] = ()
     ) -> None:
-        """
-        Check the outputs of records that a request, a template, or a push
-        reads, ``reads``, each with its position and the type its data must fit.
-        Each must be one that may be referenced (see
-        :meth:`_source_spec_locked`), declared by its spec, and fit its field
-        (see :func:`.checks.check_fit`).
-        """
+        """Check that each output in ``reads`` may be read and fits its field."""
         for loc, ref, tp in reads:
             source = self._source_spec_locked(ref, loc, stage_reads)
             check_fit(self._bound[source].spec, ref, tp, loc)
@@ -992,18 +796,9 @@ class Workspace(WorkspaceProtocol):
     def _source_spec_locked(
         self, ref: OutputRef, loc: Loc, stage_reads: Collection[_OutputKey]
     ) -> SpecId:
-        """
-        The spec of a record a request may read. The record's output must be one
-        that may be referenced (see :meth:`_read_problem_locked`), and the
-        record of the bound spec, by which the output's type is checked.
-
-        An accumulator is refused: a reader of its state would hold back its
-        next push until the reader's workflow has returned, so a request reads
-        the record of its freeze instead. The refusal names that record if the
-        accumulator has one that is pending or has completed; at most one is,
-        since a freeze is refused while one is pending and after one has
-        completed.
-        """
+        """The spec of the record whose output ``ref`` refers to, once checked."""
+        # A reader of an accumulator's state would hold back its next push until
+        # the reader's workflow returned, so a request reads a freeze instead.
         if ref.record in self._views.accumulators:
             frozen = [
                 record_id
@@ -1011,6 +806,7 @@ class Workspace(WorkspaceProtocol):
                 if acc_id == ref.record
                 and self._views.status(record_id) in (Status.PENDING, Status.COMPLETED)
             ]
+            # at most one: freeze raises while one is pending or completed
             which = f'its freeze, {frozen[0]}' if frozen else 'a freeze'
             raise SubmitError.at(
                 loc,
@@ -1037,14 +833,8 @@ class Workspace(WorkspaceProtocol):
     ) -> str | None:
         """
         Why a request may not reference an output of a record now, or ``None``.
+        A pending record passes if it is held in memory or persists the output.
 
-        This is the read rule. The record must not have failed or been
-        cancelled, and a record that has completed must have returned the
-        output. The workspace must hold the record in memory, or the request's
-        stage the output, ``stage_reads``, and it is read from memory; or the
-        record must persist the output, and it is read from the store. A pending
-        record passes: whether a request is accepted does not depend on how far
-        what it reads has run.
         """
         record_id, name = key
         status = self._views.status(record_id)
@@ -1067,11 +857,7 @@ class Workspace(WorkspaceProtocol):
     def _plan_locked(
         self, request: Request, compute: Callable[[], dict[str, Any]]
     ) -> _Plan:
-        """
-        The plan of a record that reads the outputs ``request`` references, and
-        waits for their records to finish. An output is written before its
-        record finishes, so waiting for the record also waits for the write.
-        """
+        """The plan of a record that reads the outputs ``request`` references."""
         refs = request.upstream()
         return _Plan(
             reads=[_OutputKey(ref.record, ref.output) for ref in refs],
@@ -1080,10 +866,7 @@ class Workspace(WorkspaceProtocol):
         )
 
     def _schedule_locked(self, record_id: str, plan: _Plan) -> None:
-        """
-        Start the record, or let it wait for what its plan waits for. The record
-        holds what the plan reads as a reader.
-        """
+        """Make the record a reader of what it reads, and start it or let it wait."""
         self._plans[record_id] = plan
         self._readers.update(plan.reads)
         if not plan.depends_on:
@@ -1093,23 +876,15 @@ class Workspace(WorkspaceProtocol):
             self._dependents.setdefault(key, set()).add(record_id)
 
     def _run(self, record_id: str) -> None:
-        """
-        Run a record's workflow, holding the values it reads until it returns,
-        and write the outputs persisted at its submission before it completes.
-        The record's start is logged before anything is read, so that a
-        restart fails a record that was running when the workspace ended.
-
-        It holds them even once the record is cancelled, since the workflow
-        still reads them, and lets go of them before the write. The record of
-        a freeze holds the state until it has finished; once it has completed,
-        the accumulator takes no readers: that record is read.
-        """
+        """Run a record on a worker: log its start, compute, write, and finish it."""
         with self._changed:
             if record_id in self._views.finished:
                 return
             self._append_locked(Started(record=record_id))
             plan = self._plans[record_id]
-            reads, plan.reads = plan.reads, []  # held here from now on
+            # held here, even if the record is cancelled meanwhile, since the
+            # workflow reads them
+            reads, plan.reads = plan.reads, []
         try:
             outputs = plan.compute()
         except Exception as error:  # any failure of a workflow is recorded
@@ -1127,6 +902,7 @@ class Workspace(WorkspaceProtocol):
             if plan.state is not None:
                 acc, _ = plan.state
                 if self._views.status(record_id) is Status.COMPLETED:
+                    # the accumulator is read through this record from now on
                     acc.stopped = (
                         f'the accumulator is frozen: read record {record_id} instead'
                     )
@@ -1134,12 +910,12 @@ class Workspace(WorkspaceProtocol):
 
     def _compute(self, request: Request) -> dict[str, Any]:
         """
-        The outputs the workflow of a plain request returns, by name, an
-        optional output returned as ``None`` left out. What the workflow read
-        goes out of scope here, so once the caller lets go of the values read,
-        nothing holds them.
+        The outputs of a plain request. The values read go out of scope on
+        return, so that nothing holds them once the caller lets go of them.
         """
         bound = self._bound[request.spec]
+        # No validation here: _typed validated each value by its field, and the
+        # params model has no validators of its own, which WorkflowSpec rejects.
         params = bound.spec.params.model_construct(
             **self._typed(request.spec, request.params)
         )
@@ -1148,14 +924,8 @@ class Workspace(WorkspaceProtocol):
 
     def _typed(self, spec_id: SpecId, values: Mapping[str, Any]) -> dict[str, Any]:
         """
-        ``values`` of a request by name as the binding takes them. The data each
-        reference names is read, and each value is validated by the params model
-        from what the log holds, a table without its length constraints, with
-        each reference replaced by its data and each file by its local path (see
-        :func:`ess.spec.validation.validated`). A group that holds a reference
-        is validated only here, so its validators run now. A plain request makes
-        the params instance from them, and a stage or a driver takes them by
-        name.
+        ``values`` as the log holds them, each validated by its field, with each
+        reference replaced by its data and each file by its local path.
         """
         spec = self._bound[spec_id].spec
         paths = validation.local_paths(values, self._path)
@@ -1167,9 +937,8 @@ class Workspace(WorkspaceProtocol):
 
     def _path(self, ref: FileRef) -> Path:
         """
-        The local path of a file. A record may hold the identity of a file the
-        source no longer knows, moved or given a ``pid`` since the record was
-        made, which fails the record.
+        The local path of a file. A file the source no longer knows, moved or
+        given a ``pid`` since the record was made, fails the record.
         """
         try:
             return self._files.path(ref)
@@ -1178,12 +947,9 @@ class Workspace(WorkspaceProtocol):
 
     def _reader(self, params: Mapping[str, Any]) -> Callable[[OutputRef], Any]:
         """
-        What reads the data each reference in ``params`` names: outputs held
-        in memory, or one element of each, taken under the workspace's lock
-        now, and outside it, outputs written and no longer held from the
-        store, each once, so that the references to one output give one
-        object. The caller reads only what something keeps for it, so an
-        output is held or written.
+        A function that returns the data a reference in ``params`` refers to.
+        Outputs in memory are taken now. Others are read from the store once
+        per reference, so that equal references return one object.
         """
         held: dict[Ref, Any] = {}
         with self._changed:
@@ -1204,11 +970,7 @@ class Workspace(WorkspaceProtocol):
         return read
 
     def _stored(self, ref: OutputRef) -> Any:
-        """
-        The written value of an output, or its element if ``ref`` has a key: of
-        the type the bound spec declares, or as stored for a record of an
-        unbound spec.
-        """
+        """The output or element ``ref`` refers to, read from the store."""
         if self._store is None:
             raise NotReadable(f'{ref}: the workspace has no store')
         tp = None
@@ -1224,25 +986,15 @@ class Workspace(WorkspaceProtocol):
         return _element(value, ref)
 
     def _let_go_locked(self, keys: Iterable[_Read]) -> None:
-        """
-        Count one reader less of each value. A record's output that no reader is
-        left for is dropped if the workspace does not hold it in memory (see
-        :meth:`_drop_locked`), and a state of an accumulator lets the
-        accumulator move on.
-
-        Dropping may cancel a record, which lets go of what it reads in turn.
-        The values left unread are worked through in one loop, not by
-        recursion, so a chain of any length is let go of at once; a call
-        within the loop only adds to it. The outputs of an accumulator's state
-        go at the next push. An accumulator that takes no more pushes drops
-        them once the last reader of its state is done, and one that takes no
-        more readers drops its driver too.
-        """
+        """Count one reader less of each value, and act on each left without."""
         for key in keys:
             self._readers[key] -= 1
             if not self._readers[key]:
                 del self._readers[key]
                 self._unread_values.append(key)
+        # A loop, not recursion, since dropping may cancel a record, which lets
+        # go of what it reads, along a chain of any length. A nested call only
+        # appends to the queue.
         if not self._letting_go:
             self._letting_go = True
             try:
@@ -1268,14 +1020,8 @@ class Workspace(WorkspaceProtocol):
 
     def _drop_locked(self, record_id: str) -> None:
         """
-        Drop from memory the record's outputs that nothing keeps: not the
-        workspace and no reader (see ``_readers``). A written output is read
-        from the store.
-
-        A pending record that nothing keeps and that persists nothing is
-        cancelled, since its outputs would be dropped the moment they are
-        computed; cancelling lets go of
-        what it reads, so this passes along a chain.
+        Drop the record's outputs that nothing holds, or cancel the record if
+        it is pending, persists nothing, and nothing would hold its outputs.
         """
         if record_id in self._in_memory:
             return
@@ -1294,16 +1040,7 @@ class Workspace(WorkspaceProtocol):
     def _complete_locked(
         self, record_id: str, outputs: dict[str, Any], failure: str | None
     ) -> None:
-        """
-        Complete a record with the outputs its workflow returned, once those
-        persisted at its submission were written, or fail it with ``failure`` if
-        their write failed. Then drop from memory the outputs that nothing keeps
-        (see :meth:`_drop_locked`): the workspace does not keep a record
-        persisting outputs, or one released while it was pending.
-
-        Nothing is logged for a record cancelled meanwhile, also if its
-        outputs were written.
-        """
+        """Complete a record with its outputs, or fail it if their write failed."""
         if record_id in self._views.finished:  # cancelled meanwhile
             return
         if failure is not None:
@@ -1340,8 +1077,8 @@ class Workspace(WorkspaceProtocol):
         omitted: tuple[str, ...] = (),
     ) -> None:
         """
-        Finish a record and start or fail what waits for it. ``omitted`` names
-        the outputs a completed record's workflow did not return.
+        Log the end of a record, and fail or start the records that wait for it.
+        ``omitted`` names the outputs the workflow did not return.
         """
         todo = [(record_id, status, failure, omitted)]
         while todo:
@@ -1386,15 +1123,9 @@ class Workspace(WorkspaceProtocol):
         if not depends_on:
             self._executor.submit(self._run, record_id)
 
-    # What the workspace keeps
+    # Releasing
 
     def release(self, ids: Sequence[str]) -> None:
-        """
-        A pending record that nothing else keeps is cancelled (see
-        :meth:`_drop_locked`). The steps of a released accumulator are dropped
-        again each time a reader lets go (see :meth:`_unneeded_locked`), and its
-        driver once its readers are done.
-        """
         with self._changed:
             self._check_running()
             self._release_locked(ids)
@@ -1415,7 +1146,7 @@ class Workspace(WorkspaceProtocol):
     # Queries and control
 
     def _record_locked(self, record_id: str) -> Record:
-        """The record. Raises ``KeyError`` for one unknown."""
+        """The record; raises ``KeyError`` if it is unknown."""
         record = self._views.records.get(record_id)
         if record is None:
             raise KeyError(f'no record {record_id} in proposal {self._proposal}')
@@ -1479,10 +1210,6 @@ class Workspace(WorkspaceProtocol):
             return list(records.values())
 
     def changes(self, after: int, *, timeout: float = 0.0) -> Changes:
-        """
-        Wakes once an event is appended, or the workspace closes (see
-        :meth:`_append_locked`).
-        """
         with self._changed:
             self._check_running()
             self._changed.wait_for(
@@ -1523,10 +1250,7 @@ class Workspace(WorkspaceProtocol):
         *,
         select: Selection | None,
     ) -> dict[str, Any]:
-        """
-        The values of :meth:`outputs`, not copied, in memory or read from the
-        store; ``select`` is checked here and applied by the caller.
-        """
+        """The values of outputs, not copied; the caller applies ``select``."""
         with self._changed:
             self._check_running()
             record = self._record_locked(record_id)
@@ -1547,11 +1271,7 @@ class Workspace(WorkspaceProtocol):
         return values
 
     def _read_ready_locked(self, record_id: str, wanted: Sequence[str]) -> bool:
-        """
-        Whether a read of the outputs ``wanted`` stops waiting: once the record
-        has finished, or at once if the workspace does not hold it in memory and
-        it persists none of them, since there is nothing to wait for.
-        """
+        """Whether a read of the outputs ``wanted`` stops waiting."""
         if record_id in self._views.finished:
             return True
         if record_id in self._in_memory:
@@ -1562,11 +1282,9 @@ class Workspace(WorkspaceProtocol):
         self, record: Record, names: Sequence[str] | None
     ) -> list[str]:
         """
-        The outputs a read takes, once it has waited: ``names``, or if ``None``
-        every output that the workspace holds in memory or the record persists
-        and that the workflow returned. Raises ``RecordFailed`` for a record
-        that failed or was cancelled, and ``NotReadable`` for an output that may
-        not be read (see :meth:`_read_problem_locked`).
+        The outputs a read returns, once it has waited. Raises ``RecordFailed``
+        for a record that failed or was cancelled, and ``NotReadable`` for an
+        output that may not be read.
         """
         views, record_id = self._views, record.id
         if names is None:
@@ -1610,15 +1328,6 @@ class Workspace(WorkspaceProtocol):
     # Stages and accumulators
 
     def open_stage(self, template: Template) -> tuple[str, Template]:
-        """
-        A stage, and its template as the stage holds it.
-
-        The spec's binding must make stages. The template is checked (see
-        :meth:`.checks.Checks.template`), and the stage keeps its values; a
-        request through it must have them. The stage keeps the outputs they
-        reference until its first call to run has made the binding's stage,
-        or it is released.
-        """
         spec_id = template.spec
         self._check_running()
         bound = self._known(spec_id)
@@ -1635,12 +1344,7 @@ class Workspace(WorkspaceProtocol):
         return stage_id, stored
 
     def _check_stage_locked(self, entry: Entry, request: Request) -> _Stage | None:
-        """
-        The stage a request goes through, if any, once checked.
-
-        The request must have the stage's values outside the blanks, as given
-        or resolved when the stage was made.
-        """
+        """The stage a request goes through, if any, once checked."""
         if entry.stage is None:
             return None
         stage = self._stages.get(entry.stage)
@@ -1664,20 +1368,14 @@ class Workspace(WorkspaceProtocol):
         return stage
 
     def _stage_plan_locked(self, record_id: str, stage: _Stage) -> _Plan:
-        """
-        The plan of a record of a request through the stage. A record through a
-        stage that has staged reads only the outputs its blanks reference.
-        """
+        """The plan of a record of a request through the stage."""
         request = self._views.records[record_id].request
         return self._plan_locked(
             stage.read_part_locked(request), lambda: self._call(stage, request)
         )
 
     def _call(self, stage: _Stage, request: Request) -> dict[str, Any]:
-        """
-        The outputs the stage's callable returns for a request through it, as
-        :meth:`_compute` gives those of a plain request.
-        """
+        """The outputs of a request through the stage."""
         fixed = {n: v for n, v in request.params.items() if n not in stage.blanks}
         call = self._staged(
             stage,
@@ -1690,15 +1388,7 @@ class Workspace(WorkspaceProtocol):
         return _outputs_of(request.spec, stage.binding.spec.outputs, returned)
 
     def _staged(self, stage: _Stage, make: Callable[[], StageCall]) -> StageCall:
-        """
-        The stage's callable; ``make`` stages the binding, outside the
-        workspace's lock, if no call has yet.
-
-        Once staged, the binding holds what it needs, and the stage lets go of
-        what its template references. If staging fails, the stage stops, and
-        lets go of them too: the error is that call's failure, and the calls
-        after it fail with the reason.
-        """
+        """The stage's callable, made by ``make`` on the first call."""
         with stage.staging:
             with self._changed:
                 if stage.stopped is not None:
@@ -1719,21 +1409,11 @@ class Workspace(WorkspaceProtocol):
             return call
 
     def _let_go_of_template_locked(self, stage: _Stage) -> None:
-        """Let go of what the stage's template references, once."""
+        """Let go of the outputs the stage's template references."""
         reads, stage.reads = stage.reads, []
         self._let_go_locked(reads)
 
     def open_accumulator(self, template: Template) -> tuple[str, Template]:
-        """
-        An accumulator, and its template as history holds it.
-
-        The spec's binding must make accumulators, and the template's blanks are
-        tables, which the pushes fill. The template is checked as a stage's is
-        (see :meth:`open_stage`), and the records its values reference are
-        checked as a request's are. The accumulator then opens: its first step
-        has the binding make the driver with these values, defaults filled in,
-        by name (see :meth:`_advance_locked`).
-        """
         spec_id, blanks = template.spec, template.blanks
         self._check_running()
         bound = self._known(spec_id)
@@ -1770,17 +1450,6 @@ class Workspace(WorkspaceProtocol):
         return accumulator_id, acc.template
 
     def push(self, accumulator_id: str, rows: Mapping[str, list[Any]]) -> None:
-        """
-        Log a push of rows of one or more tables, by name; they enter one
-        state.
-
-        The rows are checked (see :meth:`.checks.Checks.push`), and so are the
-        records they reference, as a request's are, without waiting for those
-        that are pending. A row its table holds is refused. The push is logged
-        before it is added, so the pushes into one accumulator are added in the
-        order they were logged (see :meth:`_advance_locked`). A push waits while
-        a freeze is being checked, and is refused if the freeze is logged.
-        """
         with self._changed:
             self._check_running()
             acc = self._pushed_into_locked(accumulator_id)
@@ -1807,23 +1476,6 @@ class Workspace(WorkspaceProtocol):
         *,
         persist: bool | Sequence[str] = False,
     ) -> Record:
-        """
-        Freeze the accumulator: the record of the plain request of its logged
-        state (see the module docstring), which the workspace keeps; with
-        ``persist``, the store keeps it instead, as for a submission (see
-        :meth:`submit`).
-
-        The freeze is a reader of that state, as a read is, and its plain
-        request is checked outside the lock, while pushes wait. If it would be refused,
-        so is the freeze, and the waiting pushes are logged. Otherwise the
-        record is logged, and the accumulator takes no more pushes. The
-        record's outputs are those of the driver, computed once and not
-        copied; once it has completed, the accumulator takes no readers, and
-        its driver is dropped when its last reader is done. If the record
-        fails or is cancelled, the accumulator may be read and frozen again,
-        but takes no pushes. Its computed outputs are then dropped once the
-        last reader of its state is done, since no push comes to drop them.
-        """
         with self._changed:
             acc = self._settled_locked(accumulator_id)
             persisted = self._persisted(acc.template.spec, persist)
@@ -1868,8 +1520,7 @@ class Workspace(WorkspaceProtocol):
     def _state_plan_locked(self, acc: _Accumulator, upto: int) -> _Plan:
         """
         The plan of the record of a freeze of the state after ``upto`` pushes.
-        It reads only the state, which it waits for; the pushes have read the
-        outputs its rows reference.
+        It reads only the state: the pushes have read what their rows reference.
         """
         state = _StateKey(acc, upto)
         return _Plan(
@@ -1880,12 +1531,7 @@ class Workspace(WorkspaceProtocol):
         )
 
     def _queue_locked(self, acc: _Accumulator, values: dict[str, Any]) -> None:
-        """
-        Queue a step of the accumulator: opening its driver with the template's
-        fixed values, first, or a push of rows by table.
-
-        The step holds the outputs it reads until it is done.
-        """
+        """Queue a step, a reader of the outputs it references until it is done."""
         reads = _output_reads(values)
         self._readers.update(reads)
         acc.steps.append(_DriverInput(values, reads))
@@ -1893,14 +1539,7 @@ class Workspace(WorkspaceProtocol):
         self._advance_locked(acc)
 
     def _advance_locked(self, acc: _Accumulator) -> None:
-        """
-        Start the accumulator's next step on a worker once nothing holds it
-        back, or stop the accumulator if the step cannot be done.
-
-        A step waits for the records it references to finish, and a push for
-        the readers of the state before it to be done. The step stops the
-        accumulator if one of these records has not completed.
-        """
+        """Start the accumulator's next step on a worker once nothing holds it back."""
         if acc.busy or acc.stopped is not None:
             return
         if not acc.steps:
@@ -1921,12 +1560,8 @@ class Workspace(WorkspaceProtocol):
 
     def _do_step(self, acc: _Accumulator) -> None:
         """
-        Make the accumulator's driver or push into it, as its next step
-        says; on a worker, outside the workspace's lock.
-
-        The values are given by name, each read and validated by its own
-        field (see :meth:`_typed`). If the step fails, the accumulator stops,
-        since the driver may hold part of the rows.
+        Make the driver or push into it, on a worker. A failure stops the
+        accumulator, since the driver may hold part of the rows.
         """
         # Read outside the lock: only this worker removes the step it does,
         # _unneeded_locked keeps a busy step, and _stop_locked runs only when no
@@ -1939,7 +1574,7 @@ class Workspace(WorkspaceProtocol):
             else:
                 for table, rows in typed.items():
                     acc.driver.push(table, rows)
-        except Exception as error:  # the binding refuses the values or rows
+        except Exception as error:  # the binding rejects the values or rows
             with self._changed:
                 self._stop_locked(acc, f'{acc.step} failed: {_reason(error)}')
             return
@@ -1955,12 +1590,7 @@ class Workspace(WorkspaceProtocol):
             self._advance_locked(acc)
 
     def _stop_locked(self, acc: _Accumulator, failure: str) -> None:
-        """
-        Stop the accumulator: it takes no more pushes or readers, its steps are
-        dropped, and the record of a freeze that waits for them fails. The
-        driver is dropped now if no reader holds the state it is in, and
-        otherwise once the last one is done.
-        """
+        """Stop the accumulator, drop its steps, and fail the freezes that wait."""
         acc.stopped = f'the accumulator stopped: {failure}'
         acc.busy = False
         self._accumulating.discard(acc)
@@ -1977,13 +1607,10 @@ class Workspace(WorkspaceProtocol):
 
     def _unneeded_locked(self, acc: _Accumulator) -> None:
         """
-        Drop the steps of a released accumulator that no reader needs, and let
-        go of what they read. Called at release, and again whenever the last
-        reader of one of its states lets go.
-
-        A reader needs the steps up to the state it reads. The step a worker
-        is doing cannot be stopped, so it stays. No record of a freeze waits
-        for a dropped step, since a pending one is a reader.
+        Drop the steps of a released accumulator that no reader needs. A reader
+        needs the steps up to its state, and the step a worker does stays. No
+        record of a freeze waits for a dropped step, since a pending one is a
+        reader.
         """
         read = [upto for held, upto in self._readers if held is acc]
         done = -1 if acc.added is None else acc.added  # the opening is step 0
@@ -1997,15 +1624,8 @@ class Workspace(WorkspaceProtocol):
 
     def _state_problem(self, acc: _Accumulator, upto: int) -> str | None:
         """
-        Why the plain request of the accumulator's state after ``upto`` pushes
-        would be refused, or ``None``.
-
-        That request is the one its records list (see ``views.py``): the
-        template's fixed values, with each blank table filled by the rows
-        pushed, in push order. The number of rows of each blank table must
-        meet its length constraints, so a table that needs a row must have
-        one (see :meth:`.checks.Checks.state_problem`).
-        ``acc.checked`` keeps the answer for the state checked last.
+        Why the plain request of the state after ``upto`` pushes would be
+        rejected, or ``None``.
         """
         checked = acc.checked
         if checked is not None and checked[0] == upto:
@@ -2020,9 +1640,8 @@ class Workspace(WorkspaceProtocol):
 
     def _accumulator_locked(self, accumulator_id: str) -> _Accumulator:
         """
-        The open accumulator, if it takes readers. Raises ``KeyError`` for one
-        never opened, and ``NotReadable`` for one released or opened before a
-        restart, or that takes no readers.
+        The open accumulator, unless it stopped. Raises ``KeyError`` for one
+        never opened, and ``NotReadable`` for one not open or stopped.
         """
         acc = self._accumulators.get(accumulator_id)
         if acc is None:
@@ -2037,9 +1656,8 @@ class Workspace(WorkspaceProtocol):
 
     def _pushed_into_locked(self, accumulator_id: str) -> _Accumulator:
         """
-        The accumulator for a push or a freeze. Raises as
-        :meth:`_accumulator_locked` does, but ``SubmitError`` where a read
-        raises ``NotReadable``: a push or a freeze is refused, not read.
+        The accumulator for a push or a freeze, as :meth:`_accumulator_locked`
+        returns it, raising ``SubmitError`` in place of ``NotReadable``.
         """
         try:
             return self._accumulator_locked(accumulator_id)
@@ -2047,10 +1665,7 @@ class Workspace(WorkspaceProtocol):
             raise SubmitError.at((), str(error)) from None
 
     def _settled_locked(self, accumulator_id: str) -> _Accumulator:
-        """
-        The accumulator, for a push or a freeze, once no freeze of it is being
-        checked. The lock is released while it waits.
-        """
+        """The accumulator for a push or a freeze, once no freeze is being checked."""
         while True:
             self._check_running()
             acc = self._pushed_into_locked(accumulator_id)
@@ -2059,11 +1674,7 @@ class Workspace(WorkspaceProtocol):
             self._changed.wait()
 
     def _logged_state_locked(self, accumulator_id: str) -> tuple[_Accumulator, int]:
-        """
-        The accumulator and its number of pushes logged, which name its logged
-        state, the state a read is of. Raises ``NotReadable`` if the accumulator
-        takes no readers (see :meth:`_accumulator_locked`).
-        """
+        """The accumulator and its number of pushes logged, its logged state."""
         self._check_running()
         acc = self._accumulator_locked(accumulator_id)
         return acc, len(self._views.pushes.get(accumulator_id, ()))
@@ -2071,10 +1682,8 @@ class Workspace(WorkspaceProtocol):
     @contextmanager
     def _reading(self, accumulator_id: str) -> Iterator[tuple[_Accumulator, int]]:
         """
-        The accumulator and its number of pushes logged (see
-        :meth:`_logged_state_locked`), the state held as a reader holds it for
-        the block. Raises ``NotReadable`` if the state may not be read (see
-        :meth:`_state_problem`).
+        The accumulator and its logged state, held as a reader for the block.
+        Raises ``NotReadable`` if the state's plain request would be rejected.
         """
         with self._changed:
             acc, upto = self._logged_state_locked(accumulator_id)
@@ -2102,11 +1711,6 @@ class Workspace(WorkspaceProtocol):
         *,
         select: Selection | None = None,
     ) -> dict[str, Any]:
-        """
-        The read is one of the state's readers while the state's plain request is
-        checked, its outputs are computed if no reader has yet, and the outputs or
-        their parts are copied (see the module docstring).
-        """
         with self._reading(accumulator_id) as (acc, upto):
             if select is not None:
                 check_select(self._bound[acc.template.spec].spec, names)
@@ -2143,20 +1747,24 @@ def local(
     workers: int = 1,
 ) -> Client:
     """
-    A client of its own workspace in this process, running the workflows bound here.
+    A client of a new workspace in this process, which runs the bindings given.
 
-    ``bind`` lists a binding for each spec the workspace runs, such as
-    ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``. Since the
-    code runs in this process, a binding may also be of code defined in a
-    notebook, such as ``function_binding(IOFQ, iofq)``.
+    The workspace holds history in memory, so its records end with the process.
+    Closing the client closes the workspace (see :meth:`Workspace.close`), which
+    waits until what is persisted is written.
 
-    Closing the client closes the workspace (see :meth:`Workspace.close`): it
-    releases everything the workspace keeps, which cancels the pending work that
-    persists nothing, and waits until what is persisted is written. A client that
-    is never closed ends with its process. Without a ``store``, persisting is
-    refused. The workspace keeps history in memory, so its records end with the
-    process. ``workers`` is the number of threads that run requests (see
-    :class:`Workspace`).
+    Parameters
+    ----------
+    bind:
+        A binding for each spec the workspace runs, such as
+        ``[PipelineBinding(IOFQ, ...), DriverBinding(IOFQ_MULTI, ...)]``. Since
+        the code runs in this process, a binding may be of code defined in a
+        notebook, such as ``function_binding(IOFQ, iofq)``.
+    store:
+        Where persisted outputs are written. Without one, a call with
+        ``persist`` raises ``SubmitError``.
+    workers:
+        See :class:`Workspace`.
     """
     workspace = Workspace(
         proposal=proposal, files=files, bind=bind, workers=workers, store=store

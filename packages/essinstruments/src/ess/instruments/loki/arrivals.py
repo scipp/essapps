@@ -1,30 +1,15 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The LoKI batch page (:mod:`.web`) on a new folder into which runs arrive over
-time, as if the instrument wrote them. It needs the extra ``[loki-app]`` and
-esssans' tutorial data, which ``ess.loki.data`` downloads at the first start::
+Serves the LoKI batch page (:mod:`.web`) on a new folder into which runs arrive
+over time, as if the instrument wrote them.
 
-    python -m ess.instruments.loki.arrivals [FOLDER] [--port 8000] [--arrive 15]
-        [--count N] [--start M] [--follow [SECONDS]]
+It needs the extra ``[loki-app]`` and esssans' tutorial data, which
+``ess.loki.data`` downloads at the first start.
+``python -m ess.instruments.loki.arrivals --help`` lists the options.
 
-``FOLDER`` must be new or empty; a new temporary folder if not given. The can
-and its transmission run, the masks and the direct beam are there from the
-start, and the settings of the one batch are filled in. Then a run arrives
-every ``--arrive`` seconds, in the order of :data:`EXPERIMENT`: ``--count``
-runs in all (12), the experiment again with the samples named ``#2``, ``#3``...
-beyond that, and the first ``--start`` of them (0) there from the start, in the
-first batch, "Sample runs". With ``--follow``, that batch is made to follow:
-a step every ``SECONDS`` (5) adds the rows that the runs fill and reduces
-them. Without it, the batch does not follow, and a person makes a batch that
-follows with "New batch", Follow ticked. "List runs again" lists the runs in
-the Runs view and changes no row.
-
-The data and the I(Q) workflow are real; the run numbers, the sample names and
-the roles are this module's. A run arrives as a hard link to a tutorial file
-(a copy if the folder is on another file system) under ``raw/<run>.nxs``, then
-as a row of ``files.csv`` with its run, role and sample, which
-:class:`~ess.apps.folder.ArrivingFiles` reads again.
+The data and the I(Q) workflow are real. The run numbers, sample names and roles
+are made up here.
 """
 
 from __future__ import annotations
@@ -71,7 +56,6 @@ TUTORIAL: dict[int, Callable[[], Any]] = {
 """The runs of esssans' LoKI tutorial (Larmor, 2022) that the arrivals copy."""
 
 EXPERIMENT = (
-    # sample, role, tutorial run, in the order of arrival
     ('AgBeh', 'sample', 60387),
     ('AgBeh', 'transmission', 60386),
     ('porous silica', 'sample', 60385),
@@ -86,20 +70,22 @@ EXPERIMENT = (
     ('tutorial sample', 'transmission', 60394),  # a newer transmission run
 )
 """
-The runs that arrive. A sample run waits until a transmission run of its
-sample arrives, and Follow then adds its row. The last transmission run changes
-no row: the two rows of ``tutorial sample`` keep the transmission run they were
-added with.
+The runs that arrive, in order, as ``(sample, role, tutorial run)``.
+
+The last transmission run changes no row. The two rows of ``tutorial sample``
+retain the transmission run they were added with.
 """
 
 BEAM_CENTRE = {'x': -0.02914868, 'y': -0.01816138, 'z': 4.11610}
-"""The beam centre that esssans' tutorial holds for these runs."""
+"""The beam centre of these runs, from esssans' tutorial."""
 
 
 def arrivals(count: int) -> list[tuple[str, str, int]]:
     """
-    The first ``count`` arrivals: :data:`EXPERIMENT`, then again with the
-    samples named ``#2``, ``#3``...
+    Returns the first ``count`` arrivals of :data:`EXPERIMENT`, repeated with
+    numbered samples::
+
+        arrivals(13)[-1]  # ('AgBeh #2', 'sample', 60387)
     """
     plan = []
     for i in range(count):
@@ -111,9 +97,9 @@ def arrivals(count: int) -> list[tuple[str, str, int]]:
 
 def _place(source: Path, target: Path) -> None:
     """
-    ``source`` at ``target``: a hard link, or a copy on another file system. A
-    symbolic link would not do: the file source resolves it, so two runs would
-    be one file.
+    Places ``source`` at ``target`` as a hard link, or a copy on another file
+    system. A symbolic link does not work, since the file source resolves it and
+    two runs would become one file.
     """
     try:
         os.link(source, target)
@@ -123,10 +109,10 @@ def _place(source: Path, target: Path) -> None:
 
 class Instrument:
     """
-    Writes runs into ``directory`` and registers each in its ``files.csv``,
-    which it replaces at once, so that no reader sees half of it. It starts
-    with the masks, the direct beam, the can, and the can's transmission run,
-    which is also the empty-beam run.
+    Writes runs into ``directory`` and lists each in its ``files.csv``.
+
+    It starts with the mask, the direct beam, the can, and one run that serves
+    as both the can's transmission run and the empty-beam run.
     """
 
     def __init__(self, directory: Path) -> None:
@@ -150,7 +136,7 @@ class Instrument:
         self.empty_beam = self.measure(None, None, 60392)
 
     def measure(self, role: str | None, sample: str | None, source: int) -> FileRef:
-        """A new run: the data of tutorial run ``source``, under the next number."""
+        """Writes the data of tutorial run ``source`` as a run with the next number."""
         run, self.next_run = self.next_run, self.next_run + 1
         name = f'raw/{run}.nxs'
         _place(Path(TUTORIAL[source]()), self.directory / name)
@@ -163,8 +149,9 @@ class Instrument:
 
 def settings(client: Client, instrument: Instrument) -> dict[str, Any]:
     """
-    The settings of I(Q) for the runs of ``instrument``: the detector and its
-    masks, reduced and persisted here, and the beam centre of the tutorial.
+    Returns the settings of I(Q) for the runs of ``instrument``.
+
+    Reduces and persists the detector and its masks for the settings to refer to.
     """
     detector = client.submit(
         CALIBRATED_DETECTOR, params={'run': instrument.can}, persist=True

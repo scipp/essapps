@@ -1,28 +1,16 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The pages of the batches of a workspace over HTTP: :func:`create_app` serves
-the :class:`~.page.Page` of each batch as a JSON API, and the page that
-uses it, at ``/batches/<label>/``.
+The page of each batch over HTTP: :func:`create_app`.
 
-Each action of a page is a ``POST`` that answers with the
-:class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
-reasons of a refused reduction are in the state. ``GET api/state`` with the
-``after`` revision and the ``start`` the page has answers 204 while nothing
-changed. The API of a label that is no batch answers 404, and of a batch
-that cannot be made 422; the page is served for any label, and shows the
-batches with that message instead. The
-routes of the workspace, such as ``api/batches``, are served at ``/api/...``
-and again under any label, which they ignore, so that a page asks for them as
-for its own; so are the static files. A row is named by its key in the body or
-the query, never in the path, since a key may hold any character; the keys of
-many rows go in the body, since a URL has a limit. A label is one
-segment of a path (:meth:`~ess.batch.BatchManager.create`). The page asks
-for ``api/...`` relative to its own URL, and ``/`` redirects to a page by a
-relative URL, so the app can be mounted under a path prefix. If it has no
-batch to go to, ``/`` is the page without a batch, which lists the batches
-and asks for the routes of the workspace only. Answers are gzipped for a
-client that accepts it.
+The routes of one batch are under ``/batches/<label>/``. The routes of the
+workspace, such as ``api/batches``, are served at ``/api/...`` and again under
+every label, which they ignore. So the page requests every route relative to
+its own URL, and the app can be mounted under a path prefix. A request
+specifies a row by its key in the body or the query, never in the path, since
+a key may contain any character.
+
+How the page and the server interact: ``README.md`` in this folder.
 """
 
 import itertools
@@ -78,9 +66,7 @@ _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 def every(seconds: float, actions: Iterable[Callable[[], object]]) -> Iterator[None]:
     """
     Call ``actions`` in turn from a thread, one every ``seconds``, until all are
-    called or the block ends. The end of the block waits for an action that
-    runs. The app steps Follow with it, and a demo makes files arrive with it
-    while it serves a page.
+    called or the block ends. The end of the block waits for a running action.
     """
     stop = threading.Event()
 
@@ -109,8 +95,9 @@ def _download(content: bytes, name: str, media: str) -> Response:
 
 def serve(app: FastAPI, *, port: int) -> None:
     """
-    Serve ``app`` on ``http://localhost:port`` until interrupted; exit with
-    what to run first if the page lacks its libraries (``static/vendor.sh``).
+    Serve ``app`` on ``http://localhost:port`` until interrupted.
+
+    Exits with a message if ``static/vendor`` is missing.
     """
     import uvicorn
 
@@ -121,19 +108,12 @@ def serve(app: FastAPI, *, port: int) -> None:
 
 def create_app(pages: Pages) -> FastAPI:
     """
-    The JSON API of the batches of ``pages`` and the page that uses it, at
-    ``/batches/<label>/``; ``/`` redirects to the page of
-    :meth:`Pages.home <.pages.Pages.home>`, or is the page without a batch if
-    that gives none. ``/docs`` lists the API. The page
-    loads libraries that ``sh static/vendor.sh`` fetches into
-    ``static/vendor``.
+    The app that serves the page of each batch of ``pages`` and its JSON API.
 
-    The app owns the timer of Follow: a thread that the app's lifespan starts,
-    and stops at its end once a step that runs has finished. It calls
-    :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.interval``
-    seconds, which steps the batch that follows, if one does. A parent app
-    that mounts this one runs its lifespan, since Starlette does not (see
-    ``README.md``).
+    The app's lifespan runs a thread that calls
+    :meth:`Pages.tick <.pages.Pages.tick>` every ``pages.interval`` seconds.
+    A parent app that mounts this app must run its lifespan, since Starlette
+    does not (see ``README.md``).
     """
 
     @asynccontextmanager
@@ -156,21 +136,21 @@ def create_app(pages: Pages) -> FastAPI:
 
     @app.get('/', include_in_schema=False)
     def home() -> Response:
-        # The answer depends on the batches, so the browser keeps none, not
-        # even for Back.
+        # The answer depends on the batches, so the browser must not cache it,
+        # not even for Back.
         label, kept = pages.home(), {'Cache-Control': 'no-store'}
         if label is None:
             return FileResponse(STATIC / 'index.html', headers=kept)
         return RedirectResponse(f'batches/{quote(label, safe="")}/', headers=kept)
 
-    # The routes of the page of one batch, by its label. FastAPI reads the
-    # annotation PageOfLabel, a name of this function, so this module does not
-    # import annotations from __future__.
+    # The routes of the page of one batch, by its label. FastAPI evaluates the
+    # annotation PageOfLabel, a local name of this function, so this module
+    # must not import annotations from __future__.
     batch = APIRouter(prefix='/batches/{label}')
     PageOfLabel = Annotated[Page, Depends(pages.page)]
 
-    # The page of any label: its first request of the state says if the batch
-    # cannot be shown, and the page then shows the batches instead.
+    # Served for any label. If the batch cannot be shown, the first request of
+    # the state fails, and the page then shows the list of batches instead.
     @batch.get('/', include_in_schema=False)
     def index() -> FileResponse:
         return FileResponse(STATIC / 'index.html')
@@ -180,8 +160,6 @@ def create_app(pages: Pages) -> FastAPI:
         """The state, or 204 if it is that of revision ``after`` of ``start``."""
         current = page.poll(after, start)
         return Response(status_code=204) if current is None else current
-
-    # Each action answers with the state after it.
 
     @batch.post('/api/relist')
     def relist(page: PageOfLabel) -> State:
@@ -202,17 +180,17 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.get('/api/rows/available')
     def available_rows(page: PageOfLabel) -> SourceRows:
-        """The rows of the source of the batch that its batch table lacks."""
+        """The rows of the row source that the batch table lacks."""
         return page.available_rows()
 
     @batch.post('/api/rows/add')
     def add_rows(page: PageOfLabel, body: Keys) -> State:
-        """Add rows of the source, as it makes them now."""
+        """Add rows of the row source, as the source makes them now."""
         return page.add_rows(body.keys)
 
     @batch.post('/api/settings/column')
     def make_column(page: PageOfLabel, body: MakeColumn) -> State:
-        """Make a setting a column, of its value in every row."""
+        """Make a setting a column with empty cells."""
         return page.make_column(body.name)
 
     @batch.get('/api/columns/values')
@@ -222,7 +200,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/columns/setting')
     def make_setting(page: PageOfLabel, body: MakeSetting) -> State:
-        """Make a column a setting, of the value of a row or of every row."""
+        """Make a column a setting, with the value of one row or of all rows."""
         return page.make_setting(body)
 
     @batch.post('/api/reduce')
@@ -235,7 +213,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/follow/stop')
     def stop_following(page: PageOfLabel) -> State:
-        """Stop Follow, if this batch follows; the page offers no action to undo it."""
+        """Stop Follow if this batch follows. The page has no action to resume it."""
         return page.stop_following()
 
     @batch.post('/api/settings')
@@ -260,6 +238,7 @@ def create_app(pages: Pages) -> FastAPI:
         """What the result of row ``key`` was reduced with."""
         return page.row(key)
 
+    # A POST, since the keys of many rows can exceed the length limit of a URL.
     @batch.post('/api/plot')
     def plot(page: PageOfLabel, body: Keys) -> Plot:
         """The plot of the results of the rows ``keys``, or of the first ones."""
@@ -297,9 +276,10 @@ def create_app(pages: Pages) -> FastAPI:
         page: PageOfLabel, body: Annotated[dict[str, Any], Body()]
     ) -> State:
         """
-        Keep the form of the tab "Output": the fields of
-        :class:`~ess.batch.definition.OutputOptions`, which the page checks, so
-        that a refusal is said as each other is.
+        Set the output options of the batch.
+
+        The body is a plain dict, so that :class:`~.page.Page` validates it and
+        an invalid value returns 422 with a message, as for other actions.
         """
         return page.set_output_form(body)
 
@@ -310,7 +290,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.post('/api/batch/remove')
     def remove_batch(label: str) -> Notice:
-        """Remove the batch; its results stay in the workspace."""
+        """Remove the batch. Its results stay in the workspace."""
         return pages.remove(label)
 
     @batch.post('/api/results.zip', response_class=Response)
@@ -319,7 +299,7 @@ def create_app(pages: Pages) -> FastAPI:
         content = page.results_file(body.keys)
         return _download(content, 'results.zip', 'application/zip')
 
-    # The routes of the workspace, the same from every page.
+    # The routes of the workspace, the same for every label.
     workspace = APIRouter()
 
     @workspace.get('/api/batches')
@@ -328,7 +308,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.get('/api/batches/counts')
     def counts() -> BatchCounts:
-        """The rows of each batch by status; it reads the state of every batch."""
+        """The number of rows of each batch by status."""
         return pages.counts()
 
     @workspace.post('/api/batches')
@@ -363,9 +343,8 @@ def create_app(pages: Pages) -> FastAPI:
         later: bool = False,
     ) -> SourceRows:
         """
-        The rows that the source ``name`` makes now, each marked as taken,
-        left out or waiting for a new batch of the rows from ``first`` to
-        ``last``, or of none if ``later``.
+        The rows of the row source ``name`` now, each marked for a new batch
+        of the rows from ``first`` to ``last``, or of no row if ``later``.
         """
         return pages.rows_of(name, first, last, later)
 
@@ -375,7 +354,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @workspace.post('/api/runs/cells')
     def correct(body: CellEdit) -> Notice:
-        """Correct runs; no row of a batch changes."""
+        """Correct a field of runs. No batch table changes."""
         return pages.runs.correct(body)
 
     @workspace.post('/api/runs/cells/revert')

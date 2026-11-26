@@ -17,13 +17,13 @@ def request_type_errors(
     loc: Loc, tp: Any, value: Any, errors: list[ErrorDetails]
 ) -> list[tuple[Loc, str]]:
     """
-    The ``errors`` of validating ``value``, of the request type ``tp``,
-    given at ``loc``, each at its position in ``value`` (see
-    :func:`value_position`), once. The errors at a reference or
-    inside it are one error at the reference, since the field does not take
-    its source, unless each is an error of a file that the field takes: of
-    the file source, or of a validator. At a list, the reference is one to a
-    whole list.
+    The ``errors`` of validating ``value``, of the request type ``tp``, at
+    ``loc``, each once at its position in ``value``.
+
+    The errors at or inside a reference become one error at the reference,
+    since the field does not accept that source. Errors of a file that the
+    field accepts remain: of the file source, or of a validator. At a list,
+    the error states that the reference is to a whole list.
     """
     found = [(value_position(tp, e['loc'][1:]), e['msg'], e['type']) for e in errors]
     for at, item in positions((), value):
@@ -40,10 +40,11 @@ def params_model_errors(
     loc: Loc, tp: Any, errors: list[ErrorDetails]
 ) -> list[tuple[Loc, str]]:
     """
-    The ``errors`` of validating a value of the params type ``tp`` given at
-    ``loc``, each at its position (see :func:`value_position`), without an
-    error that a value is not of a member's source where another error, at the
-    same position or inside, explains the value.
+    The ``errors`` of validating a value of the params type ``tp`` at
+    ``loc``, each at its position.
+
+    An error that a value is not of a member's source is dropped where
+    another error, at the same position or inside, explains the value.
     """
     found = [(value_position(tp, e['loc'][1:]), e) for e in errors]
     return [

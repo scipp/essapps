@@ -1,13 +1,13 @@
 # ADR 0009: A record names its spec by name, version, and digest, and a record of another spec stays readable
 
-- Status: accepted, implemented (`ess.apps.workspace`, with a new format of the log; `ess.batch` for a batch's rows).
+- Status: accepted
 - Deciders: Simon
 - Date: 2026-11-13
 
 ## Context
 
-A workspace made with `open_folder` keeps its history and its persisted outputs in a folder, and a later process reads them, possibly with another version of the technique package installed.
-An outputs class can change under the same spec version:
+A workspace made with `open_folder` stores its history and its persisted outputs in a folder, and a later process reads them, possibly with another version of the technique package installed.
+Without this decision, an outputs class can change under the same spec version:
 
 ```python
 # iofq/v1 wrote Centre(x=0.5, y=0.25); the package now has, still under v1:
@@ -18,54 +18,27 @@ class Centre(BaseModel):
 client.output(old_record, 'centre')   # Centre(x_mm=0.0, y=0.25), no error
 ```
 
-A version bump instead makes the old outputs unreadable, and a batch shows their rows as not reduced.
-
-Each deployment has its own workspaces, so a proposal has several histories ([deployments.md](../deployments.md#one-proposal-several-histories)).
-What must reach another workspace, or outlive the history, is published.
+Without this decision, a version bump makes the old outputs unreadable, and a batch shows their rows as not reduced.
 
 ## Decision
 
-Callers write `SpecId(name, version)` or pass the spec.
-
-The *digest* of a spec covers the name, type, and requiredness of every field of its params and outputs models, including the fields of groups inside them.
-Titles, descriptions, and defaults are not part of it.
-A record stores its params with defaults filled in, so a changed default does not change what an old record means.
-The digest cannot see a change of what a workflow computes.
-The version remains the author's statement of any change a consumer can observe: the params, the outputs, or what the workflow computes (`WorkflowSpec`).
-
-Every submission, a freeze's included, carries the digest of each spec its records name that the log does not hold yet under that name and version, or holds with another digest.
-The digest of a record's spec is the last one logged for its name and version before the record.
-A submission, abridged:
-
-```json
-{"kind": "submitted", "specs": {"iofq/v1": "9f2c..."}, "records": [{"id": "r2", "request": {"spec": {"name": "iofq", "version": 1}, "params": {"bins": 4}}}]}
-```
-
-A record is *of the bound spec* if the workspace has a binding with the same name, version, and digest.
-Otherwise it is *of an unbound spec*: the version was bumped, the models changed, or no binding is given.
-`client.bound(records)` tells an application which records are of the bound spec.
-A record of an unbound spec stays in the history, and is readable without the classes that made it:
-
-| Of a record of an unbound spec | What a client gets |
-|---|---|
-| its request | name and version, and the params as the stored dict, with files and references |
-| an output | the stored scipp data (`Store.read`): a `DataArray` as it is, a group as a `DataGroup` by field name, a number as `DataGroup({'value': 0.5})`, a list as a `DataGroup` with keys `'0'`, `'1'`, ... |
-| `describe` and `select=` | work on that data |
-| a new request that references its output | refused at submission with `SubmitError`, since the output's type cannot be checked |
-| a restart while it is pending | the restart rules of [ADR 0002](0002-a-value-lives-while-something-keeps-it.md) come first: it is cancelled if it persists nothing and no pending record that persists reads it, and it fails if it had started. If it would run, it fails with a reason that says its spec is not bound, and so does a pending record that would run and reads an output of it |
-
-A technique package's tests compare each spec's digest with one kept in the package, so a change of a model without a new version fails in the author's CI (`ess.spec.testing`).
+A record identifies its spec by name, version, and *digest*, a hash of the name, type, and requiredness of every field of the spec's models.
+Titles, descriptions, and defaults are not part of the digest, and callers still write `SpecId(name, version)`.
+A record is *of the bound spec* if the workspace has a binding with the same three, and otherwise *of an unbound spec*.
+A record of an unbound spec stays in history, and its outputs are read as stored scipp data, without the classes that made them.
+A new request may not reference such an output, since its type cannot be checked.
+A technique package's tests compare each spec's digest with one stored in the package (`ess.spec.testing.check_digests`), so a change of a model without a new version fails in the author's CI.
 
 ## Alternatives considered
 
-- **The digest as the spec's identity**, `SpecId(name, digest)`. Callers, templates, and saved settings would name a digest. A person writes and reads the version, and the digest only has to detect a change.
+- **The digest as the spec's identity**, `SpecId(name, digest)`. A person writes and reads the version, and the digest only has to detect a change.
 - **Refusing a folder whose spec changed.** A person could open the folder only with the old package installed, and could not compare results across the change.
-- **Keeping each spec's JSON schema in the log**, so that old params show with their titles and descriptions. Not needed while the stored names and values are readable.
+- **Storing each spec's JSON schema in the log**, for titles and descriptions of old params. Not needed while the stored names and values are readable.
 - **A spec bound only for reading old outputs** into their classes. Not needed while plain scipp data is enough to show and compare an old result.
 
 ## Consequences
 
 - A result of an unbound spec cannot feed a new request. A person who needs it as an input reduces again, or keeps the old spec installed.
-- An edit to a title or a description changes no digest, so no record becomes one of an unbound spec.
-- What the digest covers is part of the log's format ([ADR 0004](0004-history-is-append-only-lists.md#decision)).
-- A batch shows a row whose result is of an unbound spec as outdated (`RowState.spec_changed`), and the result stays the row's result, readable as stored, so that the results of two versions of a spec can be compared ([batch.md](../../../packages/essbatch/docs/batch.md#the-state-of-a-row-and-the-rules-over-it)).
+- An edit to a title or a description changes no digest.
+- What the digest covers is part of the log's format.
+- A batch shows a row whose result is of an unbound spec as outdated, and the result stays readable, so that the results of two versions of a spec can be compared.

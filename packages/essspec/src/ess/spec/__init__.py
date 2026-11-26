@@ -1,23 +1,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The specs of workflows, which UIs and the workspace of ``ess.apps`` read, and
-the bindings that the workspace calls to compute a spec's requests.
+Specs of workflows, and the bindings that compute a spec's requests.
 
-The package exports the specs, the references to outputs, the markers
-:class:`File` and :data:`Referenced`, and the bindings and their protocols.
-``packages/essspec/docs/params.md`` states the rules of a spec's models,
-and ADR 0001 (docs/developer/adr in the package) the rationale. The helpers
-are in their modules: :mod:`~.field_types` for what the framework reads
-from field types, such as :func:`~.field_types.fits`, :mod:`~.refs` for
-finding the references of a request, :mod:`~.request_types` for the request
-type, which is the params schema, :mod:`~.validation` for how a request and
-the call phase validate a value, and :mod:`~.binding` for the values a binding
-is made with.
+``packages/essspec/docs/params.md`` is the guide to writing a spec, and
+``packages/essspec/docs/bindings.md`` to writing a binding.
 
 The package does not import :mod:`~.conversions` (needs scipp),
-:mod:`~.pipeline` (``PipelineBinding``, needs sciline), and :mod:`~.testing`
-(checks of the symmetries a binding promises). Import them directly.
+:mod:`~.pipeline` (needs sciline) and :mod:`~.testing`. Import them directly.
 """
 
 from ._workflow_spec import NoParams, SerializedWorkflowSpec, WorkflowSpec

@@ -1,27 +1,25 @@
 # ESS data-reduction framework
 
-**Status: `ess.apps.Workspace`, which `local()` and `open_folder()` make in the caller's process, implements this design, including freeze, `select=`, and persist to a fake store or to scipp HDF5 files in a folder (`ess.apps.folder`). A record of an unbound spec reads as stored scipp data ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)). A file is identified by its catalogue identifier, or else by its path ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)). Not implemented: a hosted workspace reached with `connect()`, `client.publish`, and software versions in provenance. The first release combines no runs and tunes no parameters interactively, so it needs neither stages nor accumulators.**
-
-This page gives an overview of the framework: its components, what each promises the others, and the ideas that client code is built from.
-The details live one level down:
+For a developer new to this repository.
+After reading you know the components of the framework, the ideas that client code is built from, and where to read further.
 
 | To learn | Read |
 |---|---|
 | the architecture, as a crash course | [tours/layers.html](tours/layers.html) |
-| how to write a workflow, a client, or the framework, on a running example | [roles/](roles/README.md) |
-| how to write a spec: field types, files, references, unions, defaults | [packages/essspec/docs/params.md](../../packages/essspec/docs/params.md) |
-| how to write a binding: a function, a sciline pipeline, or a driver | [packages/essspec/docs/bindings.md](../../packages/essspec/docs/bindings.md) |
-| stages, accumulators, and their symmetries | [accumulators.md](accumulators.md) |
+| how to write a workflow, a client, or the framework | [roles/](roles/README.md) |
+| how to write a spec | [packages/essspec/docs/params.md](../../packages/essspec/docs/params.md) |
+| how to write a binding | [packages/essspec/docs/bindings.md](../../packages/essspec/docs/bindings.md) |
+| stages and accumulators | [accumulators.md](accumulators.md) |
 | automatic reduction | [automatic-reduction.md](automatic-reduction.md) |
-| which process holds what, and how a value passes from one workspace to another | [deployments.md](deployments.md) |
+| which process holds what | [deployments.md](deployments.md) |
 | how to build an application that reduces many samples | [packages/essbatch/docs/batch.md](../../packages/essbatch/docs/batch.md) |
-| the rules behind each call: what is kept and readable, when a call returns, what it raises | [`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) |
+| what each call of a workspace guarantees and raises | [`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) |
 | the shapes and shortcuts of the client | the docstrings of `ess.apps.client` |
 | how the code is built | the module docstrings |
 | why it is so | the [ADRs](adr/index.md), and those of [essspec](../../packages/essspec/docs/developer/adr/) |
 | what it must do | [the requirements](../requirements/README.md), [user-stories.md](user-stories.md), [system-stories.md](system-stories.md) |
 | how other systems do it | [prior-art/](prior-art/README.md) |
-| how to write and rewrite docs pages, docstrings, comments and messages | [writing.md](writing.md) |
+| how to write docs pages, docstrings, comments and messages | [writing.md](writing.md) |
 
 ## From a for loop
 
@@ -49,18 +47,18 @@ client.output(records[60339], 'iofq')
 `IOFQ` is the *spec* of the I(Q) reduction: it names the reduction's parameters and outputs.
 `file(run=run)` names the raw data of a run.
 `t` is the record of an earlier transmission reduction, and `t.ref('transmission')` passes its output to each reduction.
-`client.submit` returns a *record* at once, and the three reductions run in parallel.
+`client.submit` returns a *record* at once, and the workspace runs the three reductions in the background.
 
 What the framework adds to the plain loop:
 
-- Each call is kept as a record. The same process finds it later, and so does a later process that opens the same folder.
-- Output values are kept until a client releases them, and every client of the workspace reads them. Persisted values are kept in the store.
-- Calls run in parallel. Where they run is the workspace's decision: on threads of its process today.
-- Every output can answer where it came from: which spec, which parameter values, which files, which software versions.
+- Each call is stored as a record. The same process finds it later, and so does a later process that opens the same folder.
+- Output values stay in memory until a client releases them, and every client of the workspace reads them. Persisted values are stored on disk.
+- Requests run on worker threads of the workspace's process, one thread by default (`workers=1`). Where they run is the workspace's decision.
+- Every output can answer where it came from: which spec, which parameter values, which files.
 
 ## Components
 
-The components; an arrow points from a caller to what it calls, and its label names the interface:
+An arrow points from a caller to what it calls, and its label names the interface:
 
 ```mermaid
 flowchart TD
@@ -80,27 +78,29 @@ The framework is two packages ([ADR 0007](adr/0007-packages-split-by-dependencie
 `ess.apps` holds the client, the workspace, and parts that applications are built from, such as the forms of `ess.apps.panel`.
 
 **Spec.** A workflow package declares a spec, `ess.spec.WorkflowSpec`, for each workflow: a name, a version, and two pydantic models, *params* and *outputs*.
-The spec is all that a client, a form, and the workspace know of a workflow; none of them imports the workflow's code.
-A parameter is written inline, as a file, or as a reference to another record's output, as its type says ([params.md](../../packages/essspec/docs/params.md)).
+The spec is all that a client, a form, and the workspace know of a workflow.
+None of them imports the workflow's code.
+A parameter is written inline, as a file, or as a reference to another record's output, as its type allows ([params.md](../../packages/essspec/docs/params.md)).
 
 **Binding.** A *binding* is what the workspace calls to compute a spec's requests.
 The workflow author makes it from one of three things, and each serves some of the client's calls:
 
 | The author provides | Plain request | Stage | Accumulator |
 |---|---|---|---|
-| a sciline pipeline, `PipelineBinding` | yes | yes | refused |
-| a driver, `DriverBinding` | yes | refused | yes |
-| a function, `function_binding` | yes | refused | refused |
+| a sciline pipeline, `PipelineBinding` | yes | yes | no |
+| a driver, `DriverBinding` | yes | no | yes |
+| a function, `function_binding` | yes | no | no |
 
-The binding gets an instance of the params model, with each file as a local path and each reference replaced by the data it names, and returns an instance of the outputs model.
-It promises not to modify what it gets, and not to return an output that shares memory with it.
+The binding receives an instance of the params model and returns an instance of the outputs model.
+In the instance, each file is a local path, and each reference is replaced by the data it refers to.
+The binding must not modify its input, and must not return an output that shares memory with it.
 [bindings.md](../../packages/essspec/docs/bindings.md) shows how to write each.
 
-**Workspace.** The *workspace* of a proposal (an experiment at ESS) runs its requests, and keeps its records and output values.
-It is not a Mantid workspace: what Mantid calls a workspace, a data object, is an output value here.
-Its *history* is the log of its records.
+**Workspace.** The *workspace* of a proposal (an experiment at ESS) runs its requests, and holds its records and output values.
+A Mantid workspace, a data object, is an output value here.
+The *history* of a workspace is the log of its records.
 A workspace and its clients live in one process.
-`local` and `open_folder` make a workspace and its first client:
+`local` and `open_folder` create a workspace and its first client:
 
 ```python
 client = local(proposal='p1', files=..., bind=[iofq, ...])   # history and values in memory
@@ -109,32 +109,31 @@ client = open_folder(directory, bind=[iofq, ...])            # history and persi
 
 Both run the workflows bound in the call, which may be code defined in a notebook.
 With `local`, the records end with the process.
-With `open_folder`, a later process continues from the folder's history and reads its persisted outputs; one workspace holds a folder at a time.
+With `open_folder`, a later process continues from the folder's history and reads its persisted outputs.
+One workspace holds a folder at a time.
 The workspace decides when and where a request runs, and the caller's code does not depend on it.
-A *hosted workspace*, which clients in other processes would reach with `connect(url, proposal=...)`, is not implemented, and no deployment of the first release needs one ([deployments.md](deployments.md), scipp/essapps#27).
 
 **Client.** A *client* is one connection to one workspace.
-It keeps nothing: every client of a workspace reads, references, and releases the same values.
-Every call that starts work returns once the workspace has *logged* it in its history; the work happens later.
+A client holds no values: every client of a workspace reads, references, and releases the same values.
+Every call that starts work returns once the workspace has *logged* it in its history. The work happens later.
 
-**File source.** The workspace finds files, and their metadata, through its *file source*, which is given when the workspace is made.
-At submission it resolves a name, such as `file(run=60339)`, to the file's *identity*, which the record holds: `pid:20.500.12269/<uuid>` for a file the catalogue lists, and else its path, `path:masks/main.xml` relative to the workspace's folder if the file is in it ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)).
-A client sees only the files the workspace's proposal may read:
+**File source.** The workspace finds files and their metadata through its *file source*, given when the workspace is created.
+At submission it resolves a name, such as `file(run=60339)`, to the file's *identity*, which the record holds ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md)).
+A client sees only the files that the workspace's proposal may read:
 
 ```python
 samples = client.files.list(Selector(role='sample'))
 for run in client.files.watch(Selector(scan='17')): ...   # existing ones first, then new ones
 ```
 
-**Store.** The *store* keeps persisted outputs outside the workspace's memory, also after the workspace has closed ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)).
-It reads a value back by the type that the spec declares for the output, or as stored, in scipp's types, without one.
-A record names its spec by name, version, and digest, the digest of the spec's models, which the history logs.
-An output of a record of the bound spec, one the workspace runs with the same three, is read by its declared type.
-An output of a record of an unbound spec, such as an older version or the same version with changed models, is read as stored, an array as it is and anything else as a `DataGroup`, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
+**Store.** The *store* holds persisted outputs outside the workspace's memory, also after the workspace has closed.
+A record names its spec by name, version, and digest.
+A record is *of the bound spec* if the workspace runs a spec with the same three, and else *of an unbound spec*, such as an older version.
+An output of a record of an unbound spec is read as stored scipp data, and a new request may not reference it ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
 
 **Controller.** The workspace does not decide what to run.
 A *controller* is client code that decides over time what to submit, push, and release, such as the cells of a notebook, the callbacks of an application's screen, or the loop of automatic reduction.
-A controller is never part of the workspace, and calls it only through a client:
+A controller calls the workspace only through a client:
 
 ```python
 for run in client.files.watch(Selector(role='transmission')):
@@ -142,80 +141,35 @@ for run in client.files.watch(Selector(role='transmission')):
     show(client.output(record, 'transmission'))
 ```
 
-## Deployments
-
-An *application* is a program that holds a client: a controller, and a *screen* if a person uses it.
-In each deployment of the first release, one Python process holds the application, its client, and the workspace ([deployments.md](deployments.md)):
-
-```mermaid
-flowchart LR
-    screen -->|"(a)"| application -->|"(b)"| workspace -->|"(c)"| binding
-```
-
-| Deployment | The process | The workspace's history |
-|---|---|---|
-| notebook | the notebook's, on a VISA machine or a laptop | in memory, or in a folder |
-| technique application with a batch page | one per folder, started by a user on a VISA machine | in the folder |
-| automatic reduction | one per instrument, on a DMSC server, or on a VISA machine for the first release | one per proposal, on disk |
-
-Only (a) lies between two processes, when a browser draws the screen; bindings run on threads of the workspace's process, one by default.
-A screen never calls a workspace: what it shows is computed in Python next to the data, and the HTTP interface of a page belongs to that page.
-
-A proposal has several workspaces, each with its own history, and a reference names a record of the same history.
-So a value passes from one workspace to another as a file.
-
 ## Requests and records
 
 A *request* is a spec and its params.
 Submitting it returns a *record*: the request as the workspace logged it, with every value filled in, defaults included.
 A record never changes, only its status: `pending`, then `completed`, `failed`, or `cancelled`.
-Running the same request again makes a new record.
+Running the same request again creates a new record.
 
 ```python
 result = client.compute(IOFQ, params={...})          # submit, then wait
 client.output(result, 'iofq')                        # raises RecordFailed if the record failed
-client.output(result, 'iofq', select={'Q': slice(0, 10)})   # copies a part; of a hosted workspace only that part leaves
-client.describe(result, 'iofq')                      # {'intensity': ArrayInfo(sizes, unit, coords)}, no data
+client.output(result, 'iofq', select={'Q': slice(0, 10)})   # copies a part
+client.describe(result, 'iofq')                      # {'iofq': ArrayInfo(sizes, unit, coords)}, no data
 client.failure(result)                               # why it failed, or None
 ```
 
-An application learns what an output is from `client.describe`, which gives the sizes, unit, and coordinate names of each array field and reads no array, and then reads the part it shows with `select=`.
-A value that was persisted and is no longer in memory is read from the store to be described.
-The plot of an array of more than two dimensions has a slider for each dimension but the last two, and moving it reads one cut (`ess.apps.panel.Outputs`; which dimensions get a slider is decided in `ess.apps.plotting`, which needs no widget library).
-A workflow package can configure plots for its spec: `App(client, plots={spec_id: {'Centre on image': Plot(function, inputs=('detector',))}})`, where the function takes an instance of the spec's outputs model, and returns a plopp figure.
-Each of `inputs` names a parameter that references an output, and is passed by name as that value, so that a small output, such as a mask, is drawn on the large value it was computed from, without holding a copy.
+`submit` checks a request before any data is read, and raises a `SubmitError` that names the position of each problem, such as `reduction.bins`.
+A failure when the workspace reads the data and calls the binding fails the record ([params.md, When values are validated](../../packages/essspec/docs/params.md#when-values-are-validated)).
 
-A request is checked in two phases:
-
-- The *request phase*, at submission, before any data is read: each value is validated by its type, files are resolved and access-checked, and each reference is checked to be readable and to fit its field. A request that cannot run is refused with a `SubmitError`, which names the position of each problem, such as `reduction.bins`.
-- The *call phase*, when the workspace reads the data and calls the binding. A failure here fails the record.
-
-Validation in the request phase never proves that a workflow will succeed.
-
-`client.resolve` gives a request as its record would hold it, with file names resolved to identities, defaults filled in, and inline values in JSON's types, and logs nothing.
-It checks values as `submit` does, each request on its own, and gives the `SubmitError` of a refused one in its place.
-It does not look at whether the outputs a request references may be read, so a request it accepts may still be refused by `submit`.
-A record holds its request in this form, so a request is compared with a record's once resolved:
+`client.resolve` returns a request as its record would hold it, and logs nothing.
+So a request is compared with a record's request once resolved:
 
 ```python
 resolved = client.resolve({'250K': request_250k, '260K': request_260k})
 resolved['250K'] == client.latest('iofq', member='250K').request   # the record ran these values
 ```
 
-A template comes back with its blanks, and every other parameter resolved, defaults filled in, so values that many requests share are resolved once:
-
-```python
-client.resolve(Template(IOFQ, params=settings, blanks=('sample',)))   # every parameter but sample
-```
-
-Each parameter resolves the same whatever the others are, since each value is checked by its own field: the template and the values of its blanks, each resolved, give the request filled from them, resolved.
-
-Resolving a resolved request gives the same request, and `client.resolve(record.request) == record.request` for a record of the bound spec.
-Three rules give this: a value written inline must read back from its JSON form (`ess.spec.validation.validate_request_value`), the identity of a file resolves to itself (`FileSource.resolve`), and a default is a value, the same at each call (`packages/essspec/docs/params.md`, Defaults).
-A file that gains a catalogue identifier later has another identity, so a request that names it by run number then resolves to another value than an older record holds.
-
-**References.** `record.ref(name)` names an output of a record.
-A reference to a pending record is allowed, so a chain is submitted without waiting, and the workspace runs the request once the record it reads has completed:
+**References.** `record.ref(name)` refers to an output of a record.
+A reference to a pending record is allowed, so a chain is submitted without waiting.
+The workspace runs the request once the record it reads has completed:
 
 ```python
 centre = client.submit(BEAM_CENTRE, params={'direct_beam': file(run=60330)})   # pending
@@ -225,7 +179,7 @@ result = client.submit(IOFQ, params={..., 'beam_centre': centre.ref('centre')})
 A reference fills only a field that the spec types `Referenced[T]`, and the output must be a `T`.
 
 **Labels and members.** A *label* names a sequence of records, such as all I(Q) reductions of an experiment, and a *member* one part of it, such as one sample.
-Both are given at submission, not in the request:
+Both are given at submission, outside the request:
 
 ```python
 client.submit({'250K': request_250k, '260K': request_260k}, label='iofq')   # keys become members
@@ -234,7 +188,7 @@ client.records(label='iofq')                         # oldest first
 ```
 
 **Templates.** A *template* is a spec with *fixed values* for some parameters and *blanks* for the others.
-Stages, accumulators, and automatic reduction are built from templates.
+Stages, accumulators, and batches are built from templates.
 A template can be made from any record, such as the final reduction of one sample with its sample left open:
 
 ```python
@@ -242,18 +196,18 @@ final = client.latest('iofq', member='250K')
 beamtime = Template(final.request.spec, params=final.request.params, blanks=('sample',))
 ```
 
-## Who keeps a value
+## How long a value lives
 
-A record is kept with the workspace's history.
-An output value lives only while something keeps it: the workspace, a pending request that reads it, or the store once persisted.
-The workspace keeps a value until a client releases its record, or the workspace closes.
+A record is stored with the workspace's history.
+An output value lives while the workspace holds it in memory, a pending request reads it, or the store holds it.
+The workspace holds a value until a client releases its record, or the workspace closes.
 A release by one client applies to every client of the workspace.
-Closing a client made with `Client(workspace, ...)` releases nothing.
-Work whose outputs nothing would keep is cancelled ([`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py)):
+Work whose outputs nothing would hold is cancelled.
+[`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules.
 
 ```python
-client.release(centre)              # the workspace no longer keeps the centre, for any client
-client.submit(IOFQ, params={...}, persist=('iofq',))  # the store keeps iofq, the workspace does not
+client.release(centre)              # the workspace drops the centre, for every client
+client.submit(IOFQ, params={...}, persist=('iofq',))  # the store holds iofq, the workspace does not
 ```
 
 ## What changed
@@ -263,7 +217,7 @@ A record changes when it is submitted, by any client of the workspace, and when 
 The reply holds record IDs and no values, each ID once:
 
 ```python
-cursor = 0                                  # 0 gives every record of the workspace
+cursor = 0                                  # 0 returns every record of the workspace
 while True:
     changes = client.changes(after=cursor, timeout=30)  # waits up to 30 s for a change
     cursor = changes.cursor                 # pass it next time
@@ -271,17 +225,15 @@ while True:
         show(record, client.status(record), client.readable(record))
 ```
 
-A workspace that starts from its history log gives the same changes at the same cursors.
-Accumulators and pushes are not in the feed.
-Neither is `client.release`, nor any other way for a value to go away: the history does not hold lifetimes, and another client may release a value that this client shows.
+A release does not appear in the changes, since the history holds no lifetimes.
 So a client that shows outputs asks `client.readable` for the records it shows, and a read can still raise `NotReadable`.
-It asks `client.bound(records)` which records are of the bound spec, since only their outputs have the classes of `client.spec(record.spec)` ([ADR 0009](adr/0009-a-record-of-another-spec-stays-readable.md)).
+It asks `client.bound(records)` which records are of the bound spec, since only their outputs have the classes of `client.spec(record.spec)`.
 
 ## Stages and accumulators
 
-A *stage* keeps the part of a computation that depends only on its fixed values, so that tuning a parameter does not load the runs again.
-An *accumulator* keeps a sum over runs, so that adding a run does not reduce the earlier ones.
-A call through a stage, and a freeze of an accumulator, make the record of the equivalent plain request; a push and a read make none ([accumulators.md](accumulators.md)):
+A *stage* holds the part of a computation that depends only on its fixed values, so that tuning a parameter does not load the runs again.
+An *accumulator* holds a sum over runs, so that adding a run does not reduce the earlier ones.
+A call through a stage, and a freeze of an accumulator, create the record of the equivalent plain request ([accumulators.md](accumulators.md)):
 
 ```python
 volume = client.accumulator(Template(VOLUME, blanks=('runs',)))
@@ -293,60 +245,26 @@ total = client.freeze(volume)                               # the final sum, as 
 
 ## Automatic reduction
 
-Automatic reduction is Follow on a batch of `ess.batch`: a step every few seconds adds the rows of its row source that are complete and not seen, and reduces the rows that are ready and have no result under the label ([batch.md, "Follow"](../../packages/essbatch/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
-The application's row source pairs runs as the technique needs:
+Automatic reduction is Follow on a batch of `ess.batch`.
+A step every few seconds adds the new rows of the batch's row source, and reduces the ready rows that have no result ([batch.md, "Follow"](../../packages/essbatch/docs/batch.md#follow), [automatic-reduction.md](automatic-reduction.md)).
 
-```python
-def transmission_runs(files: Sequence[FileInfo]) -> pd.DataFrame:
-    rows = [{'key': str(f.metadata['run']), 'run': str(f.ref)}
-            for f in files if f.metadata.get('role') == 'transmission']
-    return pd.DataFrame.from_records(rows, columns=['key', 'run']).set_index('key')
-
-manager = BatchManager(client, definitions=FolderDefinitions(folder))
-intake = Intake(manager, sources={'transmission-runs': RowSource(transmission_runs, source_columns=('run',))})
-intake.create('transmission', title='Transmissions', source='transmission-runs',
-              follow=True)
-intake.step()         # called by a timer of the application
-```
-
-A step never changes a row that the batch table has. The results are read from the records under the label, so a restarted application reduces no row that has a result. A record under the label with a row's key as member, from any batch, is that row's result.
-
-## Provenance and publication
+## Provenance
 
 ```python
 provenance = client.provenance(result)
-provenance.files(), provenance.records()
-provenance.software                                    # not implemented
-pid = client.publish(result.ref('iofq'), 'scicat')     # not implemented: the output and its provenance
+provenance.request, provenance.records(), provenance.files()
 ```
 
-Provenance lists the record's request, every record that supplied a value by reference, directly or through other records, the files they used, and the software versions.
+Provenance lists the record's request, every record that supplied a value by reference, directly or through other records, and the files they used.
 It stops at files.
-Publishing puts an output in a catalogue with its provenance, where it stays after the workspace's history is dropped.
-It is one step of the path a value takes from one history to another ([deployments.md](deployments.md#one-proposal-several-histories)).
+`ess.apps.scicat` publishes an output to SciCat as a derived dataset, whose inputs are the files of its provenance.
 
 ## Left to the system
 
 Not visible in the code of notebooks, applications, or workflow packages:
 
 - how history and outputs are stored, moved, and dropped
-- how a file source finds the file that a run number or path names, though provenance shows the identity it gives the file ([ADR 0010](adr/0010-a-file-is-identified-by-its-catalogue-identifier.md))
+- how a file source finds the file that a run number or path names
 - when and where a request runs, and where a stage or a driver lives
 - the format of persisted outputs and the store's layout
-- how a process that runs unattended bounds the memory of a workspace, and when it closes an idle one (open questions 8 and 12)
 - how access across proposals is enforced
-
-## Open questions
-
-1. **Grouping.** Spreading one accumulator over several nodes needs a merge of two drivers. No requirement asks for it ([ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md)). A driver whose per-row part the framework runs, split from adding, would let that part run in other processes or on other nodes; ADR 0006 lists when it is worth building.
-2. **Removing a row.** Whether an accumulator offers `remove` depends on whether it keeps each row.
-3. **Labels and members** on records are tentative.
-4. **Looks that compute.** `client.describe` and `select=` give an application the sizes of an output and a cut of it. `select=` only indexes. A projection, or a thick slice summed, would run a spec next to the value without making a record; it is still open whether that is a second call or part of `select=`. So is reading the latest state already added, without waiting for the pushes logged after it, and describing an accumulator's state, which `describe` does not take. A configured plot function takes every output of its record, read whole; whether it may take cuts is open.
-5. **Accumulators in a process that runs unattended.** How the automatic reduction, or a hosted workspace, holds a driver, bounds its memory, and drops it ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
-6. **Persist at submission.** Should `persist=` at submission also keep the values in the workspace? To be decided when a story needs it.
-7. **Values modified in place.** In the user's process, a notebook that modifies a value `client.output` returned changes what later requests read. A shallow copy protects the dicts of coordinates and masks, not arithmetic in place.
-8. **A hosted workspace.** With `connect()`, the users of a proposal would share one workspace and one history. Open are whether its users share the values in memory, or it separates or bounds them per user, how it bounds the memory of a workspace, and when it closes a workspace that is idle ([ADR 0002](adr/0002-a-value-lives-while-something-keeps-it.md), scipp/essapps#27).
-9. **Reaching stages and accumulators.** No client call lists the stages and accumulators of a workspace or reopens one by its ID, and they are not in the changes. So a second client of a workspace reads every value the workspace keeps, but reaches a stage or an accumulator of the first client only if it is handed the object. Whether the client lists them, or reopens one by its ID, is open.
-10. **Where bindings run.** Bindings run on threads of the workspace's process, one by default. A reduction that is parallel inside, as those of LoKI are through dask and TBB, gains nothing from more threads, and its peak memory multiplies; the best number depends on the instrument, so an application sets `workers`. A reduction shares the interpreter lock, the memory, and a crash with the application. Worker processes would separate them, and are not built: measured on LoKI data, they are slower than a stage in the workspace's process, and reading a cut of a value held in another process takes about 25 ms against 0.1 ms. If they are built, the boundary goes at (c), between the workspace and the workers, since a value then moves to the workspace once and the application reads it many times; the rows of one stage would have to run in one worker. A process that runs without a person, such as the automatic reduction, is the likely first to need them (scipp/essapps#184).
-11. **The path of a value between histories.** Writing, naming, publishing, listing, and loading a file ([deployments.md](deployments.md#one-proposal-several-histories)) are one design, which does not exist yet (scipp/essapps#184, #152, #176).
-12. **The automatic reduction as a process.** How it routes each new file to the workspace of its proposal, when it opens and closes those workspaces, and where its configuration is kept, which must outlive a restart and be editable while the process runs (scipp/essapps#151).

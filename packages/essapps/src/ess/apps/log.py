@@ -1,42 +1,32 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The workspace's history: an append-only log of what ran, with which params,
-and what came of it, for one proposal, which each submission and opening names.
+The workspace's history of one proposal: an append-only log of what ran, with
+which params, and what came of it.
 
-There are five events: a submission, a record that started, a record that
-finished, an accumulator that opened, and a push into one. A record starts when
-a worker begins its work, once what it reads is there, so a record that started
-and did not finish was running when its workspace ended. A persist request is
-part of a submission or a freeze, and its write is the record's: the record
-finishes once the outputs are written. A freeze is a submission of one record of
-the plain request of the state frozen, as the accumulator and its number of
-pushes; the views list its request when it is read. The workspace's views,
-such as the records by ID, are built by applying the events in order, when they
-are appended and again when a workspace starts from an existing log.
+The log holds five events: :class:`Submitted`, :class:`Started`,
+:class:`Finished`, :class:`Opened` and :class:`Pushed`. Stages, output values,
+and anything a binding computed are not in the log. The workspace builds its
+views, such as the records by ID, by applying the events in order. It does so
+when an event is appended, and again when a workspace starts from an existing
+log.
 
-An event names only records and accumulators appended before it: a start and
-a finish name their record, a push its accumulator, a record the records it
-reads, and the record of a freeze its accumulator. Applying the events in order
-relies on this, and so does a restart, which walks the pending records
-backwards.
+A record starts when a worker begins its work, once what it reads is there. So
+a record that started and did not finish was running when its workspace ended.
+A freeze is logged as a submission of one :class:`NewStateRecord`. Persisting is
+part of a submission or a freeze, and the record finishes once its outputs are
+written.
 
-A submission names the specs of its records by name and version. It carries,
-in ``specs``, the digest (:attr:`ess.spec.WorkflowSpec.digest`) of each spec it
-names that the log does not hold yet under that name and version, or holds with
-another digest, keyed as ``"iofq/v1"``. So the digest of a record's spec is the
-last one logged for its name and version before the record, and a log holds a
-digest for the spec of every record. What the digest covers is part of the
-format.
+An event names only records and accumulators appended before it. Applying the
+events in order relies on this, and so does a restart, which walks the pending
+records backwards. A submission is one event, so a workspace that stops
+half-way through one has all of it or none of it.
 
-A log file starts with a header line that names its format, such as
-``{"format": 4}``, and holds one event per line after it. A log reads only
-files of its own format, :data:`FORMAT`, and leaves a file it refuses as it was.
-
-Stages and accumulators are not history, and neither are output values or
-anything a binding computed; those have their own lifetime.
-A submission is one event, so a workspace that stops half-way through one has
-all of it or none of it.
+A submission names the specs of its records by name and version. Its ``specs``
+holds the digest (:attr:`ess.spec.WorkflowSpec.digest`) of each spec that the
+log does not hold yet under that name and version, or holds with another
+digest. So the digest of a record's spec is the last one logged for its name
+and version before the record.
 """
 
 from __future__ import annotations
@@ -59,8 +49,7 @@ class NewRecord(BaseModel, frozen=True, extra='forbid'):
     """
     One record of a submission, as the workspace accepted it.
 
-    ``persist`` names the outputs persisted at submission: the record
-    finishes once they are written.
+    ``persist`` names the outputs persisted at submission.
     """
 
     id: str
@@ -73,10 +62,10 @@ class NewRecord(BaseModel, frozen=True, extra='forbid'):
 
 class NewStateRecord(BaseModel, frozen=True, extra='forbid'):
     """
-    The record of a freeze: the record of the plain request of an
-    accumulator's state, the accumulator's template with each table filled by
-    the rows of its first ``pushes`` pushes. ``persist`` names the outputs the
-    freeze persists.
+    The record of a freeze, of the plain request of the accumulator's state
+    after its first ``pushes`` pushes.
+
+    ``persist`` names the outputs that the freeze persists.
     """
 
     id: str
@@ -92,8 +81,10 @@ SpecDigests = dict[str, str]
 
 class Submitted(BaseModel, frozen=True, extra='forbid'):
     """
-    A submission or a freeze; ``specs`` holds the digests that the log does
-    not hold yet of the specs its records name (see the module docstring).
+    A submission or a freeze.
+
+    ``specs`` holds the digests of the specs that are new to the log (see the
+    module docstring).
     """
 
     kind: Literal['submitted'] = 'submitted'
@@ -105,7 +96,7 @@ class Submitted(BaseModel, frozen=True, extra='forbid'):
 
 
 class Started(BaseModel, frozen=True, extra='forbid'):
-    """A record whose work began on a worker: what it reads was there."""
+    """A record whose work began on a worker, once what it reads was there."""
 
     kind: Literal['started'] = 'started'
     record: str
@@ -113,9 +104,11 @@ class Started(BaseModel, frozen=True, extra='forbid'):
 
 class Finished(BaseModel, frozen=True, extra='forbid'):
     """
-    A record that finished: ``failure`` says why it failed, or why the
-    workspace cancelled it. ``omitted`` names the optional outputs that the
-    workflow of a completed record did not return.
+    A record that finished.
+
+    ``failure`` is why it failed, or why the workspace cancelled it. ``omitted``
+    names the optional outputs that the workflow of a completed record did not
+    return.
     """
 
     kind: Literal['finished'] = 'finished'
@@ -129,13 +122,12 @@ class Opened(BaseModel, frozen=True, extra='forbid'):
     """
     An accumulator that opened, with its template as the workspace accepted it.
 
-    The template's blanks are the tables that the pushes fill. ``params``
-    holds the template's other values, defaults filled in, inline values in
-    JSON's types, and the blank tables, without rows: the driver was made
-    with the other values, and with the rows pushed they
-    give the plain request of a state. ``template`` holds the values as the
-    client gave them, names resolved, which the client gets back, as it does a
-    stage's template.
+    ``template`` holds the values as the client gave them, with file names
+    resolved. The client gets this template back, as it does a stage's.
+    ``params`` holds the fixed values with defaults filled in and inline values
+    in JSON's types, and each blank table without rows. The driver is made
+    from the fixed values. With the rows pushed, ``params`` makes the plain
+    request of a state.
     """
 
     kind: Literal['opened'] = 'opened'
@@ -147,8 +139,8 @@ class Opened(BaseModel, frozen=True, extra='forbid'):
 
 class Pushed(BaseModel, frozen=True, extra='forbid'):
     """
-    A push into an accumulator: rows of one or more tables, in ``params``
-    under the name of each, names resolved.
+    A push into an accumulator: rows of one or more tables in ``params``, by
+    table, with file names resolved.
     """
 
     kind: Literal['pushed'] = 'pushed'
@@ -171,7 +163,7 @@ _HEADER = json.dumps({'format': FORMAT}).encode() + b'\n'
 
 
 def _format(line: bytes) -> Any:
-    """The format a header line names, or None if the line is no header."""
+    """The format that a header line names, or ``None`` if it is not a header."""
     try:
         header = json.loads(line)
     except ValueError:
@@ -183,10 +175,10 @@ def _format(line: bytes) -> Any:
 
 def _events(path: Path, lines: list[bytes]) -> list[Event]:
     """
-    The events of ``lines`` of the log file ``path``, the first line being the
-    header. Raises ``ValueError`` if the header is not the one of this format,
-    or naming the first line that is not an event of this format, such as one
-    with a field an event lacks, which validating would drop silently.
+    The events of ``lines`` of the log file ``path``, the first being the header.
+
+    Raises ``ValueError`` if the header does not name this format, or for the
+    first line that is not an event of this format.
     """
     if not lines:
         return []
@@ -200,7 +192,7 @@ def _events(path: Path, lines: list[bytes]) -> list[Event]:
     def read(number: int, line: bytes) -> Event:
         try:
             return _event.validate_json(line)
-        # A request refuses a field it lacks by its __init__, as a TypeError.
+        # A request rejects an unknown field in its __init__, with a TypeError.
         except (ValidationError, TypeError) as error:
             raise ValueError(
                 f'{path}, line {number}: not an event of a log of this format: {error}'
@@ -218,7 +210,7 @@ def _complete_lines(data: bytes) -> list[bytes]:
 
 
 def _hold(path: Path) -> FileIO:
-    """``path`` opened to read and append, held against every other open."""
+    """``path`` opened to read and append, locked against every other open."""
     file = path.open('a+b', buffering=0)
     try:
         fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -231,7 +223,7 @@ def _hold(path: Path) -> FileIO:
 
 
 def _append_line(file: FileIO, line: bytes) -> None:
-    """Append ``line`` whole, or leave the file as it was."""
+    """Appends ``line`` whole, or leaves the file as it was."""
     size = file.seek(0, os.SEEK_END)
     try:
         written = 0
@@ -246,22 +238,16 @@ class Log:
     """
     Events in the order they were appended.
 
-    Without a path the log lives in memory. With a path it is a file of one
-    JSON event per line, after a first line that names the format of the file,
-    ``{"format": FORMAT}``, written when the file is created. The header is
-    written into an empty file, and into one that holds only the beginning of
-    the header, cut short by a crash. A file whose first line is not the header
-    of :data:`FORMAT`, or that has no complete line and holds anything else,
-    raises ``ValueError`` and is left as it was.
-    The log holds the file until :meth:`close`: a second log on the same
-    file, in this process or another, is refused, so a file has one writer.
-    The operating system lets go of the file when the process ends, so a log
-    opened after a crash takes it over. The events
-    already in the file are read first. A last line cut short, by a crash
-    while it was written, is dropped from the file once the lines before it
-    are read; any other line that is not an event of this format raises
-    ``ValueError``. A write that fails, for example on a full disk, leaves the
-    file as it was, so no later event follows a line cut short.
+    Without a path the log lives in memory. With a path it is a file with a
+    header line, ``{"format": FORMAT}``, and one JSON event per line after it.
+    Opening reads the events already in the file, and drops a last line cut
+    short by a crash. A file that is not a log of this format raises
+    ``ValueError`` and is left as it was.
+
+    The log locks the file until :meth:`close`, so a file has one writer. The
+    operating system releases the lock when the process ends, so a log opened
+    after a crash takes the file over. A write that fails, for example on a
+    full disk, leaves the file as it was.
     """
 
     def __init__(self, path: Path | None = None) -> None:
@@ -299,7 +285,7 @@ class Log:
         return _events(path, _complete_lines(path.read_bytes()))
 
     def close(self) -> None:
-        """Let go of the file, if any; the log takes no more events."""
+        """Closes the file, if any, which releases its lock."""
         if self._file is not None:
             self._file.close()
 

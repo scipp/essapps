@@ -643,6 +643,15 @@ def test_a_scalar_parameter_without_keys_is_refused() -> None:
         )
 
 
+def test_a_value_held_at_the_key_of_a_parameter_is_set_over() -> None:
+    binding = PipelineBinding(
+        BINS,
+        lambda _: sciline.Pipeline([double], params={NBins: 100}),
+        keys={'bins': (NBins,), 'doubled': (Doubled,)},
+    )
+    assert binding.compute(BinsParams(bins=4)).doubled == 8
+
+
 class RequiredOffsetParams(BaseModel):
     offset: Offset
 

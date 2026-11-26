@@ -199,7 +199,7 @@ def _repeated(client: Client) -> Stepping:
     return Stepping(batch, source)
 
 
-# The files of the section "The model: tables and one cycle" of the guide, in
+# The files of a sample and its transmission, in
 # the order they arrive: name, run, role, and sample.
 ARRIVALS = [
     ('s1', 1, 'sample', '1'),
@@ -549,7 +549,7 @@ def test_two_loops_on_one_label_submit_a_file_once(
     assert second.step() == {}
 
 
-# The example of ADR 0013: a batch made from a source with the rows from run 3
+# A batch made from a source with the rows from run 3
 # on, which follows.
 
 

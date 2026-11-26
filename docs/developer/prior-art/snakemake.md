@@ -33,7 +33,7 @@ If a story asks for it, borrow `--list-changes params` ([cli.py](https://github.
 **What a record of a run holds, and at what grain.**
 For each output, Snakemake stores the rule, input paths, parameter values, the code, checksums of small inputs, a hash of the software environment, and a list of package names and versions ([MetadataRecord](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L32-L49), [filled](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L428-L450)).
 The code is the text of the shell command or of the rule's Python block, so a cosmetic edit changes it ([`_code`](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L636-L643)).
-For us: provenance lists software versions ([README, Provenance and publication](../README.md#provenance-and-publication)), not yet implemented, and what a finish records is open ([ADR 0002, Open](../adr/0002-a-value-lives-while-something-keeps-it.md#open)).
+For us: provenance lists software versions ([README, Provenance](../README.md#provenance)), not yet implemented, and what a finish records is open.
 Package names and versions, as Snakemake's list holds, is a grain that cosmetic edits do not change.
 The metadata format is at version 7, and each rerun check skips records written before the version that first stored its field reliably ([persistence](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/persistence/__init__.py#L588-L622)).
 That is one way to read old formats. A log here reads only files of its own format ([ADR 0004](../adr/0004-history-is-append-only-lists.md#decision)).
@@ -57,7 +57,7 @@ Completion learned by polling Slurm lags by up to minutes, which matters for aut
 **Resources: declared by the author, overridden by the site, grown on retry.**
 A rule's `resources:` may be a function of its inputs and of `attempt`, the retry number, so that memory doubles on each retry ([rules.rst](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/docs/snakefiles/rules.rst#L1181-L1217)).
 A profile overrides them per rule (`--set-resources rule:mem_mb=...`); without either, Snakemake assumes `min(max(2*input.size_mb, 1000), 8000)` MB ([resources.py](https://github.com/snakemake/snakemake/blob/4523356973a83aa237a121717ee81dd2e09175da/src/snakemake/resources.py#L917-L924)).
-For us: only the binding knows the memory a request needs, and the plain request over two plus two LoKI runs needs 7.5 to 9.9 GB ([ADR 0002, Open](../adr/0002-a-value-lives-while-something-keeps-it.md#open), scipp/essapps#27).
+For us: only the binding knows the memory a request needs, and the plain request over two plus two LoKI runs needs 7.5 to 9.9 GB ([ADR 0006](../adr/0006-the-unit-is-an-accumulating-workflow.md), scipp/essapps#27).
 Snakemake's three layers (workflow author, site, default from input size) are one shape for that answer.
 
 **Data-dependent fan-out in the scheduler.**

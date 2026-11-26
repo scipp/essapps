@@ -1,43 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Templates as a person writes them: YAML files (see :func:`load_template`).
+Templates as YAML files that a person writes and reads.
 
-At a parameter that takes a file, or a list of them, a file is named as in a
-cell of a batch table (:func:`~.table.as_request`)::
-
-    sample: run:60339           the file of that name
-    sample: 60339               the run 60339
-    masks: [path:masks/a.xml]   a file of the workspace's folder, by its identity
-
-A file field inside a group takes the JSON form of a file, as the record holds
-it, since :func:`~.table.as_request` converts the value of a parameter, not of
-a field inside it.
-
-A file that is written before the records it reads exist names them by label
-(see :func:`with_latest`)::
-
-    masks: {'@latest': masks, output: masks}
-
-:func:`settings_text` writes the settings of a batch, those at its parameter
-columns included, as a template, with each file and reference in its JSON form, which
-reads back as the same, the form of ``settings.json`` of a batch
-(:mod:`.definition`). :func:`checked_settings` reads settings from a
-template, which must be of the spec and its version.
-
-:func:`template_to_fill` writes a template of a spec for a person to fill
-in: every parameter, with a comment that says what it takes, read from its
-type with :mod:`ess.spec.field_types` as the fields of a form read it
-(:mod:`ess.apps.fields`). Every parameter is commented out, so that the
-template as written is refused naming each required parameter, and a
-parameter left commented takes the spec's default, not a copy of it::
-
-    # q (required): a group of the fields below. Bin edges in Q.
-    #   start (required): a number. First bin edge.
-    #   scale (default linear): one of linear, log. Spacing of the edges.
-    #q:
-    # corrections (default {gravity: true}): a group of the fields below.
-    #corrections: {gravity: true}
+How a person writes each kind of value is in :data:`_HOW`, which every
+template to fill in carries.
 """
 
 from __future__ import annotations
@@ -66,12 +33,18 @@ from .table import as_request, not_outputs
 
 def with_latest(client: Client, value: Any) -> Any:
     """
-    ``value``, such as the params of a template, with each object that has the
-    key ``@latest`` as the reference to ``output`` of the newest record under
-    that label, of ``member`` if given, as the client finds it now. The request
-    made of it holds the record's ID.
+    ``value`` with each object of the key ``@latest`` replaced by a reference
+    to an output of the newest record under that label::
 
-    Raises ``ValueError`` if no record has the label, or the output.
+        with_latest(client, {'masks': {'@latest': 'masks', 'output': 'masks'}})
+        # {'masks': OutputRef(record='r17', output='masks')}
+
+    An optional ``member`` selects among the members of the label. The newest
+    record is the one now, so a request made of the result holds that record's
+    ID.
+
+    Raises ``ValueError`` if no record has the label, or the record lacks the
+    output.
     """
     if isinstance(value, list):
         return [with_latest(client, v) for v in value]
@@ -91,8 +64,9 @@ def with_latest(client: Client, value: Any) -> Any:
 
 def load_template(path: Path) -> Template:
     """
-    The template in a YAML file, which may be JSON, with files as written.
-    Raises ``ValueError`` if the file is not a template.
+    The template in a YAML or JSON file, with files as written.
+
+    Raises ``ValueError`` if the file holds no template.
     """
     try:
         data = yaml.safe_load(path.read_text())
@@ -109,15 +83,15 @@ def checked_settings(
     client: Client, spec: WorkflowSpec[Any, Any], template: Template
 ) -> dict[str, Any]:
     """
-    The settings of ``spec`` that ``template`` holds: the value of each
-    parameter, with files named as in a cell (:func:`~.table.as_request`) and
-    ``@latest`` read (:func:`with_latest`) on ``client``. Its blanks are not
-    read: the parameter columns of a batch are its blanks, and a value at one is
-    the setting that each row with an empty cell takes
-    (:attr:`~.reduction.Batch.settings`).
+    The settings of ``spec`` in ``template``, as a request reads them.
 
-    Raises ``ValueError``, saying why in a person's words, if the template is
-    of another spec or of another version of it, or if a value cannot be read.
+    Files are converted as in a cell (:func:`~.table.as_request`), and
+    ``@latest`` is resolved on ``client`` (:func:`with_latest`). The
+    ``blanks`` of ``template`` are ignored: a batch takes its parameter
+    columns from its batch table.
+
+    Raises ``ValueError`` if the template is of another spec or version, or a
+    value cannot be read.
     """
     theirs, ours = template.spec, SpecId.of(spec)
     if theirs.name != ours.name:
@@ -141,13 +115,16 @@ _NOT_AN_OUTPUT = (
     "names no output: a template names one as {'@latest': LABEL, output: NAME} "
     'or RECORD.OUTPUT'
 )
-"""What a message says of text that names no output where one is taken."""
+"""Error text for a value that refers to no output where one is expected."""
 
 
 def settings_text(batch: Batch) -> str:
     """
-    The settings of ``batch``, those at its parameter columns included, as the YAML of
-    a template that :func:`load_template` reads back.
+    The settings of ``batch`` as the YAML of a template, those at its parameter
+    columns included.
+
+    Each file and reference is in its JSON form, so :func:`load_template`
+    reads it back unchanged.
     """
     template = Template(batch.spec, params=batch.settings)
     return yaml.safe_dump(template_data(template), sort_keys=False)
@@ -184,13 +161,23 @@ def template_to_fill(
     sources: Mapping[str, RowSource] | None = None,
 ) -> str:
     """
-    A template of ``spec`` for a person to fill in, as YAML that
-    :func:`load_template` reads: each parameter with a comment that says
-    whether it is required or its default, what it takes, and its
-    description; a parameter that takes an output names the outputs of
-    ``bound`` that fit it, and one that a row source of ``sources`` fills says
-    so.
-    Every parameter is commented out, one with a default showing it.
+    A template of ``spec`` for a person to fill in, as YAML.
+
+    Every parameter is commented out, with a comment on whether it is
+    required, what it accepts, and its description::
+
+        # q (required): a group of the fields below. Bin edges in Q.
+        #   start (required): a number. First bin edge.
+        #   scale (default linear): one of linear, log. Spacing of the edges.
+        #q:
+        # corrections (default {gravity: true}): a group of the fields below.
+        #corrections: {gravity: true}
+
+    A template loaded unchanged is rejected, naming each required parameter.
+    A parameter left commented takes the spec's default: the template holds no
+    copy of it. A parameter that accepts an output lists the outputs of
+    ``bound`` that fit. A parameter that a row source of ``sources`` fills
+    states so.
     """
     filled: dict[str, list[str]] = {}
     for name, source in (sources or {}).items():
@@ -247,9 +234,8 @@ def _described(
     note: str = '',
 ) -> list[str]:
     """
-    The comment lines on the field ``name`` with ``info``, at ``depth``:
-    whether it is required or its default, what it takes, its description
-    and ``note``; then those of the fields of each group it takes, deeper.
+    The comment lines on the field ``name``, then those of the fields of each
+    group it accepts, one level deeper.
     """
     given = 'required' if info.is_required() else f'default {_flow(_default(info))}'
     metadata = field_types.field_metadata(info)
@@ -271,8 +257,8 @@ def _described(
 
 type _Groups = list[tuple[tuple[str, str] | None, type[BaseModel]]]
 """
-The groups that a value may be, each with the field and the value that choose
-it among the alternatives of a union, ``None`` for a single group.
+The groups that a value may be. Each has the tag field and the value that
+select it in a union, or ``None`` for a single group.
 """
 
 
@@ -284,11 +270,12 @@ def _describe_type(
     top: bool,
 ) -> tuple[str, _Groups]:
     """
-    What a field of type ``annotation`` with ``metadata`` takes, in words, and
-    the groups whose fields it takes; ``top`` for a parameter, whose file a
-    template names as a cell does (:func:`~.table.as_request`), not for a
-    field of a group, whose file is written in its JSON form. The type is read
-    as the fields of a form read it (:mod:`ess.apps.fields`).
+    What a field of type ``annotation`` accepts, in words, and the groups whose
+    fields it accepts.
+
+    ``top`` is true for a parameter. Only there is a file written as in a cell,
+    since :func:`~.table.as_request` converts the value of a parameter and not
+    the fields inside it. A file in a group is written in its JSON form.
     """
     field = field_types.shape(annotation, metadata)
     ways: list[str] = []
@@ -316,10 +303,10 @@ def _describe_type(
 
 def _file(marker: File, *, top: bool) -> str:
     """
-    What a file field of ``marker`` takes: a run, such as one of the role
-    that a picker offers, which a run need not have; or a file of the
-    metadata of the marker, which a file of another kind must have. And how
-    a field of a group writes it, unless ``top``.
+    What a file field of ``marker`` accepts, in words.
+
+    For a raw file, the role is a suggestion, as a picker offers it: a run need
+    not have it. A file of another kind must have the metadata of the marker.
     """
     metadata = marker.metadata
     kind = metadata.pop('kind')
@@ -338,7 +325,7 @@ def _file(marker: File, *, top: bool) -> str:
 
 
 def _scalar(tp: Any) -> str:
-    """What a field of a scalar type ``tp`` takes, in words."""
+    """What a field of a scalar type ``tp`` accepts, in words."""
     words = {bool: 'true or false', int: 'a whole number', float: 'a number'}
     if tp in words:
         return words[tp]
@@ -354,7 +341,7 @@ def _scalar(tp: Any) -> str:
 
 
 def _output(tp: Any, bound: Sequence[WorkflowSpec[Any, Any]]) -> str:
-    """What a field that ``Referenced[tp]`` types takes: the outputs that fit."""
+    """What a field of type ``Referenced[tp]`` accepts: the outputs that fit."""
     fitting = dict.fromkeys(
         f'{name} of {spec.name}'
         for spec in bound

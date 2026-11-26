@@ -1,131 +1,34 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What the page of one batch does, without HTTP: :class:`Page`. :mod:`.api`
-serves it. This module imports neither ``fastapi`` nor ``starlette``, so
-another view of a batch can call the same actions and render the same
+The page of one batch, without HTTP: :class:`Page`.
+
+This module imports neither ``fastapi`` nor ``starlette``, so that another
+view of a batch can call the same actions and render the same
 :class:`~.models.State`.
 
-A :class:`Page` holds what a person changes on it: the form of the
-settings and the refusals. It asks :class:`~.pages.Pages` for the rest: the
-:class:`~ess.batch.Batch` of its label with its batch table and settings, kept
-by the manager, the corrections of runs, and Follow. The batch and the
-corrections keep their part in their definitions, if given them
-(:mod:`..definition`); a change that the definitions cannot keep is not made,
-and answers a :class:`~.errors.Rejected`.
+A :class:`Page` holds the settings draft (:class:`~.draft.Draft`), the submit
+errors of the last reduction, and its revision. It reads everything else from
+:class:`~.pages.Pages` and the batch layer. An action is a method decorated
+with ``_action``: it holds the lock of all pages, increments the revision, and
+returns the state. An action that changes rows builds a new batch table and
+passes it to :meth:`~ess.batch.Batch.set_table`.
 
-The page shows the batch table as it is kept, without its source and
-without the files: a cell that names a file that is not found, or that the
-file source cannot read, is a problem of its row. Each action that changes
-rows builds a frame with one change and gives it to
-:meth:`~ess.batch.Batch.set_table`: an edit of cells, a row added or removed,
-a table file loaded, which replaces the batch table. A cell is plain
-data (:mod:`..table`): a value that a picker gives is kept as
-:func:`~..table.cell_of` makes it, and shown as the listing names it. A row is
-named by its note ``name`` if the table has one, else by its key, and "Add
-row" takes its key. "List runs again" lists the files again, for the pickers
-and the Runs view, and changes no row. If the file source raises, the page
-shows the batch table, the results and the plots all the same: the pickers offer
-no file, the Runs view is empty, and the state says why
-(:attr:`~.models.State.files_problem`).
+While the settings form holds a change, the page rejects a reduction, the
+download of the settings, and a change of which parameters are columns,
+including "Load table". A reduction would use settings other than those
+shown, and a change of the parameter columns rebuilds the form, which would
+drop the change.
 
-The form of the settings is a draft of the batch's settings
-(:class:`~.draft.Draft`). An edit changes
-the form only; :meth:`Page.apply_settings` writes it to the batch, and is
-refused while something is missing; :meth:`Page.discard_settings` shows the
-batch's settings again. "Load settings" and "Put these settings in the form"
-fill the form, all or none. While the form holds a change, a reduction by a person
-and a download of the settings are refused, so that nothing is reduced or
-saved with settings other than those shown. The form has a field per
-parameter, also one that is a column: its value is the setting that each row
-with an empty cell takes, and a column may have none, so its field may be left
-unset (:func:`.forms.params_and_missing`). Settings that the form cannot
-show, such as those kept for another version of the spec, are named in the
-state's ``settings_problem`` and kept until Apply. A ``Page`` writes the
-batch's settings only at Apply and at "Make this a setting": the form does
-not show an assignment by code while the server runs. The parameter columns of
-the batch table are the blanks of the template, so a table file loaded with
-other columns, or a column made a setting or back, changes the parameters of
-the cells and
-of the form: the page builds both again when the columns of the batch
-change, and the form then shows the batch's settings. So "Make this a
-column", "Make this a setting" and "Load table" are refused while the form
-holds a change, which the new form would drop.
+If a reduction raises :class:`~ess.apps.errors.SubmitError`, the errors that a
+cell or a setting can show stay in the state, and the others form the message
+of the :class:`~.errors.Rejected`. An error in the state stays until its
+value changes, the settings are applied, or a reduction succeeds. The state of
+the batch shows most invalid cells already, as problems of their rows. Only a
+submission finds a reference to a record that the workspace does not know, or
+to an output whose type does not fit the cell.
 
-The page in the browser holds only what it shows: the selection, the
-filter, the tab. Each action returns the :class:`~.models.State` after it, and
-the browser polls the state about once a second with the ``revision`` it has,
-to see results arrive. The revision counts the changes made here, and those
-that the batch, the manager, the runs and Follow count, which a poll compares
-(such as :attr:`~ess.batch.Batch.revision`). ``start`` tells a page that
-the server started again, so that the same revision may be another state.
-
-A reduction refused raises :class:`~.errors.Rejected`. It says the reasons
-that no cell or setting shows. The others stay in the state until the value of each is
-changed, a setting's by Apply, or a reduction succeeds, so that the page marks
-each at its cell, or at its setting while the form shows the batch's settings.
-The state of the batch reports most refusals of a cell as problems of its row,
-but not those that only a submission finds, since they read the records: a
-reference to a record that the workspace does not know, or to an output whose
-type does not fit the cell.
-Any other request that cannot be done raises :class:`~.errors.Rejected`
-too, with what to tell the person; :mod:`.errors` says how a refusal of
-the batch layer reads, so the page copies no rule. A ``Page`` serves one
-batch to one person, and takes one request at a time, under the lock of all
-pages.
-
-Statuses are named in a scientist's words (:attr:`RowState.status
-<ess.batch.RowState.status>`): ``ready``, ``running``, ``done``,
-``settings changed``, ``outdated``, ``failed``, ``cancelled`` and ``incomplete``. A
-change of settings applies to rows not reduced yet: a done row whose result
-differs from its request only at settings
-(:func:`~ess.batch.with_changed_settings`) reads ``settings changed``, reduced with
-earlier settings, and "Reduce" leaves it
-(:func:`~ess.batch.left_to_reduce`) until a person reduces it with the
-settings now. Its result counts as one of a done row: the plot and the
-downloads take it. A failed or cancelled row stays so when the settings change,
-since it needs reducing either way. The rows read as with the batch's
-settings, whatever the form holds. While the workflow refuses the
-batch's settings, no result can be said to be current, so a done row is
-outdated.
-
-The tab "Batch" shows the header of the batch, and changes its title and
-description with the manager (:meth:`Page.change`). Removing a batch is
-:meth:`Pages.remove <.pages.Pages.remove>`; a request to a page of a batch
-removed answers :class:`~.errors.NotFound`.
-
-The tab "Output" shows the output options of the batch
-(:class:`~..writing.Writing`) in a form: the format its results are written
-in, and what is said of them. The browser holds a change of it until Apply
-(:meth:`Page.set_output_form`), and refuses a download meanwhile, so that the
-zip of :meth:`Page.results_file` is what the form shows. Kept output options
-whose format the application lacks, such as those kept by the command line
-with other writers, write nothing: the tab says why
-(:attr:`~.models.OutputShown.problem`) until a person applies a format that
-the application has. An application given a catalogue publishes by the same
-output options (:meth:`Page.publish`).
-
-A batch follows from the time it is made, if a person chooses Follow in
-"New batch" (:meth:`Pages.create <.pages.Pages.create>`). Its page then has
-the action "Stop following" (:meth:`Page.stop_following`); the page offers
-no action to let a stopped batch follow again
-(:meth:`~ess.batch.Intake.follow`), and the page of a batch that does
-not follow has no action of Follow. While a batch follows, :meth:`Pages.tick
-<.pages.Pages.tick>` steps it every ``interval`` seconds
-(:meth:`~ess.batch.Intake.step`), which adds the rows of its
-source that are new and complete, and reduces the rows that
-:func:`~ess.batch.not_reduced` gives, the rows that are ready and have
-no result, under the lock of all pages, with the batch's settings, whatever
-the form holds; then :meth:`Page.after_step` shows what the step changed, if
-the page is open; a page made later shows the batch as it is then. The
-page of the batch that follows says what the last step raised, why rows were
-not reduced, at each such row, whose status stays that of its state, and how
-many rows of the source are incomplete; the next step runs all the same. A
-row with a result is left to a person, also one that is outdated. An action
-submits only what a person asks to reduce, and the next step reduces what the
-rule gives after it. Apply forgets why Follow could not reduce rows, since its
-next step tries them with the settings applied. Which batch follows is kept in
-the definitions, so a restart resumes.
+How the browser polls the state: ``README.md`` in this folder.
 """
 
 from __future__ import annotations
@@ -211,8 +114,8 @@ def _locked[**P, T](method: Callable[P, T]) -> Callable[P, T]:
 
 def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
     """
-    An action: it changes the revision, and returns the state with what the
-    action says it did.
+    Make ``method`` an action: it increments the revision and returns the
+    state, with the notice that ``method`` returns.
     """
 
     @functools.wraps(method)
@@ -231,16 +134,12 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
 
 class Page:
     """
-    What the API does for the page of one batch for one person, without HTTP.
-    It owns, and only it writes, the draft of the settings, the refusals of
-    the last reduction, and the revision. See the module for the rules.
+    The page of one batch for one person, without HTTP.
 
     Parameters
     ----------
     pages:
-        What the pages share: the manager of the batch, the ``Intake`` of its
-        rows and Follow, the lock, the listing of the files, and what the
-        application gives every page.
+        What the pages of all batches share.
     label:
         The label of the batch.
     """
@@ -251,16 +150,16 @@ class Page:
         pages.runs.list_again()
         self._columns: tuple[str, ...] | None = None
         self._fit()
-        # The reasons of the last reduction refused that a cell or a setting shows.
+        # The errors of the last failed submission that a cell or setting shows.
         self._submit_errors: list[FieldError] = []
         self.revision = 1
         self.start = uuid.uuid4().hex[:8]
-        # What :meth:`_live` gave at the last change of the revision.
+        # What :meth:`_live` returned at the last change of the revision.
         self._seen = self._live()
 
     @property
     def batch(self) -> Batch:
-        """The batch, asked of the manager at each use."""
+        """The batch, from the manager at each use."""
         return self.pages.intake.manager.batch(self.label)
 
     @property
@@ -271,11 +170,12 @@ class Page:
     @contextmanager
     def _held(self) -> Iterator[None]:
         """
-        The lock of all pages, taken for a request, with the forms fit to the
-        columns of the batch; raises :class:`~.errors.NotFound` if the batch
-        was removed since the page was handed out, such as by a request that
-        ran between this one's check of the label and its action
-        (:meth:`Pages.check <.pages.Pages.check>`).
+        Hold the lock of all pages, with the forms fit to the parameter
+        columns of the batch.
+
+        Raises :class:`~.errors.NotFound` if the batch was removed since the
+        page was handed out, such as by a request that ran between the check
+        of the label in :meth:`Pages.page <.pages.Pages.page>` and this one.
         """
         with self.lock:
             self.pages.check(self.label)
@@ -284,9 +184,9 @@ class Page:
 
     def _fit(self) -> None:
         """
-        Build the fields of the cells and the form of the settings again if
-        the columns of the batch changed, such as by a table loaded; the form
-        then shows the batch's settings.
+        Rebuild the cell fields and the settings form if the parameter columns
+        changed, such as by "Load table". The form then shows the batch's
+        settings.
         """
         batch = self.batch
         if batch.parameter_columns == self._columns:
@@ -306,14 +206,8 @@ class Page:
 
     def _live(self) -> tuple[object, ...]:
         """
-        What the page shows that changes without an action, each by what
-        counts its changes or as its value: the batch (its table and its
-        template), the records listed, the files listed and why they cannot
-        be (:attr:`SafeListing.revision <.runs.SafeListing.revision>`), the
-        headers of the batches, which batch follows, and what Follow said of
-        this batch (:meth:`LastStep.token <.last_step.LastStep.token>`).
-        A record that changed since the records listed is in the feed that
-        :meth:`poll` reads.
+        A value per thing the page shows that can change without an action of
+        this page: a revision counter, or the value itself.
         """
         pages = self.pages
         return (
@@ -330,10 +224,7 @@ class Page:
         self._seen = self._live()
 
     def _list_again(self) -> None:
-        """
-        List again (:meth:`Runs.list_again <.runs.Runs.list_again>`), and
-        give the pickers and the forms what is listed now.
-        """
+        """List the files again and refresh the pickers of the cells and the form."""
         self.pages.runs.list_again()
         self.draft.refresh(self.pages.runs.listing)
         self._cells.refresh(self.pages.runs.listing)
@@ -345,18 +236,15 @@ class Page:
     def _states(
         self, keys: Sequence[str] | None = None
     ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
-        """
-        The state of the rows of ``keys``, or of all, with the batch's settings;
-        and, if those are refused, the reasons, and the rows not compared
-        (:meth:`~ess.batch.Batch.shown`).
-        """
+        """The state of the rows ``keys``, or of all rows."""
         return self.batch.shown(keys)
 
     @_locked
     def poll(self, after: int, start: str = '') -> State | None:
         """The state, or ``None`` if it is still that of revision ``after``."""
-        # The feed catches a record that ended after the last relist but before
-        # ``_seen`` was read, which ``_live`` holds already and the listing lacks.
+        # The feed catches a record that ended after the last listing but
+        # before ``_seen`` was read: ``_live`` holds the new value already, and
+        # the listing lacks the record.
         changes = self.batch.client.changes(after=self.pages.runs.listing.cursor)
         # A table changed by another caller may name files that the listing lacks.
         if changes.records or self._live() != self._seen:
@@ -367,10 +255,7 @@ class Page:
         return self.state()
 
     def _table(self, keys: Iterable[str] = ()) -> pd.DataFrame:
-        """
-        The batch table, a copy; a ``Rejected`` unless it has a row of each of
-        ``keys``.
-        """
+        """A copy of the batch table. Raises ``Rejected`` if a key has no row."""
         frame = self.batch.table()
         for key in keys:
             if key not in frame.index:
@@ -378,7 +263,7 @@ class Page:
         return frame
 
     def _set_table(self, table: pd.DataFrame) -> None:
-        """Make ``table`` the batch table; what the batch refuses is a ``Rejected``."""
+        """Set the batch table. Raises ``Rejected`` if the batch rejects it."""
         try:
             self.batch.set_table(table)
         except ValueError as error:
@@ -386,7 +271,7 @@ class Page:
 
     @_locked
     def state(self, notice: str = '') -> State:
-        """Everything the page shows but a row's details, the plot, and the runs."""
+        """Everything the page shows except a row's details, the plot and the runs."""
         batch = self.batch
         columns = batch.parameter_columns
         states, unusable = self._states()
@@ -417,8 +302,8 @@ class Page:
             for key, cells in frame.to_dict('index').items()
         ]
         missing = self.draft.params_and_missing()[1]
-        # A refusal of the batch's settings is said, and marked at its field,
-        # while the form shows the value refused.
+        # An error of the batch's settings is marked at its field only while
+        # the form shows the invalid value.
         errors = [*missing, *self.draft.at_applied(unusable)]
         problem = view.settings_problem(errors, self.draft.unfit, titles)
         unapplied = self.draft.unapplied()
@@ -506,8 +391,8 @@ class Page:
         record = state.record
         failure = '' if record is None else failures.get(record.id, '')
         reason, changed = view.reason(state, problems, unsubmitted, failure, titles)
-        # An empty cell is shown empty, not as the setting or the default that
-        # a request takes.
+        # An empty cell is shown empty, not as the setting or default that the
+        # request uses.
         given = {c: requested[c] for c in requested if c in state.overrides}
         pid = '' if record is None else published.get(record.id, '')
         return Row(
@@ -532,7 +417,7 @@ class Page:
         )
 
     def _placed(self, error: FieldError, keys: Iterable[str]) -> bool:
-        """Whether a cell of a row of ``keys`` or a setting shows ``error``."""
+        """Whether a cell of a row of ``keys``, or a setting, can show ``error``."""
         if not error.loc:
             return False
         if error.request_key is None:
@@ -546,16 +431,16 @@ class Page:
 
     @_action
     def relist(self) -> str:
-        """List the files again, for the pickers and the Runs view; no row changes."""
+        """List the files again. No row changes."""
         self._list_again()
         return 'Listed the runs again.'
 
     @_action
     def edit(self, edit: CellEdit) -> str:
-        """Set one column of rows, as its field reads the value sent."""
+        """Set one column of rows ``edit.keys`` to the value sent."""
         value = view.read(self._cells, edit)
         frame = self._table(edit.keys)
-        # As objects, so that the batch, not pandas, refuses a cell.
+        # As objects, so that the batch, not pandas, rejects an invalid cell.
         column = frame[edit.column].astype(object)
         column.loc[edit.keys] = (
             None if value is UNSET or value is None else cell_of(value)
@@ -568,7 +453,7 @@ class Page:
         return f'{title} set on {_rows(len(edit.keys))}.'
 
     def _forget(self, keys: Sequence[str], column: str) -> None:
-        """Forget the reasons of a refusal at ``column`` of rows ``keys``."""
+        """Drop the submit errors at ``column`` of the rows ``keys``."""
         self._submit_errors = [
             e
             for e in self._submit_errors
@@ -583,7 +468,7 @@ class Page:
 
     @_action
     def add_empty_row(self, key: str) -> str:
-        """Add an empty row of ``key``; what the batch refuses is a ``Rejected``."""
+        """Add an empty row with ``key``."""
         key = key.strip()
         if not key:
             raise Rejected('Give the new row a key.')
@@ -594,10 +479,10 @@ class Page:
     @_locked
     def available_rows(self) -> SourceRows:
         """
-        The rows of the source that the batch table lacks, those incomplete marked
-        (:meth:`~ess.batch.Intake.available_rows`), for :meth:`add_rows`;
-        what the source refuses is a :class:`~.errors.Rejected`
-        (:func:`~.errors.reject_on_error`).
+        The rows of the row source that the batch table lacks
+        (:meth:`~ess.batch.Intake.available_rows`).
+
+        Raises :class:`~.errors.Rejected` if the source raises.
         """
         with reject_on_error('The rows of the source cannot be listed'):
             given = self.pages.intake.available_rows(self.label)
@@ -606,15 +491,15 @@ class Page:
     @_action
     def add_rows(self, keys: Sequence[str]) -> str:
         """
-        Add the rows of ``keys`` as the source makes them now, so that Follow
-        does not add them again once removed
-        (:meth:`~ess.batch.Intake.add_rows`). What ``Intake`` or the
-        source refuses is a :class:`~.errors.Rejected`
-        (:func:`~.errors.reject_on_error`).
+        Add the rows ``keys`` of the row source, as the source makes them now
+        (:meth:`~ess.batch.Intake.add_rows`).
+
+        Raises :class:`~.errors.Rejected` if the ``Intake`` or the source
+        raises.
         """
         with reject_on_error('No row was added'):
             self.pages.intake.add_rows(self.label, keys)
-        # The rows may name files that the listing lacks.
+        # The rows may refer to files that the listing lacks.
         self._list_again()
         return f'Added {_rows(len(keys))}.'
 
@@ -623,8 +508,8 @@ class Page:
     @_locked
     def values(self, name: str) -> list[Value]:
         """
-        The different values of the column ``name``, each with a row that has
-        it (:meth:`~ess.batch.Batch.values`), for "Make this a setting".
+        The distinct values of the column ``name``, each with a row that has
+        it, for "Make this a setting" (:meth:`~ess.batch.Batch.values`).
         """
         try:
             values = self.batch.values(name)
@@ -637,18 +522,16 @@ class Page:
 
     def _settled(self) -> None:
         """
-        Raise :class:`~.errors.Rejected` while the form holds a change: a
-        change of which parameters are columns builds the form again, which
-        would drop it.
+        Raise :class:`~.errors.Rejected` while the form holds a change, which
+        a change of the parameter columns would drop.
         """
         if unapplied := self.draft.unapplied():
             raise Rejected(f'Nothing was changed: {unapplied.lower()} first.')
 
     def _reshape(self, name: str, change: Callable[[], None]) -> None:
         """
-        Make ``change`` of the columns at the parameter ``name``, unless the
-        form holds a change, which the new form would drop; then forget the
-        refusals at ``name``.
+        Call ``change`` of the parameter columns at ``name``, then drop the
+        submit errors at ``name``.
         """
         self._settled()
         try:
@@ -664,8 +547,8 @@ class Page:
     @_action
     def make_column(self, name: str) -> str:
         """
-        Make the parameter ``name`` a column with empty cells, which take the
-        setting (:meth:`~ess.batch.Batch.make_column`).
+        Make the parameter ``name`` a column with empty cells
+        (:meth:`~ess.batch.Batch.make_column`).
         """
         title = self._titles.get(name, name)
         self._reshape(name, lambda: self.batch.make_column(name))
@@ -675,8 +558,8 @@ class Page:
     @_action
     def make_setting(self, made: MakeSetting) -> str:
         """
-        Make a column a setting, of the value that a row takes, or that every
-        row takes (:meth:`~ess.batch.Batch.make_setting`).
+        Make a column a setting, with the value of one row or of all rows
+        (:meth:`~ess.batch.Batch.make_setting`).
         """
         title = self._titles.get(made.name, made.name)
         self._reshape(made.name, lambda: self.batch.make_setting(made.name, made.key))
@@ -722,9 +605,9 @@ class Page:
     @_action
     def stop_following(self) -> str:
         """
-        Let none follow, if this batch follows
-        (:meth:`~ess.batch.Intake.stop`); the page offers no action to
-        let it follow again.
+        Stop Follow if this batch follows (:meth:`~ess.batch.Intake.stop`).
+
+        The page has no action to resume it.
         """
         if not self._follows():
             return ''  # another batch follows, or none
@@ -733,11 +616,11 @@ class Page:
 
     def after_step(self) -> None:
         """
-        Show what a step of Follow on this batch changed: list again once, and
-        refresh the forms, since new rows may name files that they do not
-        offer yet. A step that changes nothing the page shows, such as the
-        rows, the runs, the records, what waits and why, or how it went,
-        leaves the revision, so that a page polling it gets nothing new.
+        Show what a step of Follow on this batch changed.
+
+        Lists the files again, since new rows may refer to files that the
+        pickers lack. The revision changes only if something the page shows
+        changed, so that a polling page receives nothing new otherwise.
         """
         with self.lock:
             try:
@@ -750,7 +633,7 @@ class Page:
 
     @_action
     def edit_settings(self, edit: Edit) -> None:
-        """Change the form of the settings; the batch's stay until Apply."""
+        """Change the settings form. The batch's settings stay until Apply."""
         try:
             self.draft.edit(edit)
         except (KeyError, ValueError) as error:
@@ -758,7 +641,7 @@ class Page:
 
     @_action
     def apply_settings(self) -> str:
-        """Give the batch the settings of the form, unless one is missing."""
+        """Set the batch's settings to those of the form, unless one is missing."""
         given, missing = self.draft.params_and_missing()
         if missing:
             raise Rejected(
@@ -766,8 +649,8 @@ class Page:
             )
         self.batch.settings = given
         self._show_settings()
-        # A refusal of a setting was a refusal of the settings replaced, and
-        # Follow tries every row again with these at its next step.
+        # An error of a setting belonged to the settings replaced, and Follow
+        # tries every row again with these at its next step.
         self._submit_errors = [e for e in self._submit_errors if e.request_key]
         self.pages.last_step.clear_submit_errors(self.label)
         return 'Applied the settings.'
@@ -779,8 +662,8 @@ class Page:
 
     def _fill(self, params: Mapping[str, Any]) -> None:
         """
-        Show ``params`` in the form, all or none, but those that the batch
-        refuses (:meth:`~ess.batch.Batch.settable`); raises as
+        Show ``params`` in the form, all or none, except those at source
+        columns (:meth:`~ess.batch.Batch.settable`). Raises as
         :meth:`Fields.set`.
         """
         self.draft.fill(self.batch.settable(params), self.pages.runs.listing)
@@ -807,9 +690,11 @@ class Page:
     @_action
     def change(self, edit: HeaderEdit) -> str:
         """
-        Give the batch the title and description of ``edit``
-        (:meth:`~ess.batch.BatchManager.change`). What the manager
-        refuses is a :class:`~.errors.Rejected`, and changes nothing.
+        Set the title and description of the batch
+        (:meth:`~ess.batch.BatchManager.change`).
+
+        Raises :class:`~.errors.Rejected`, and changes nothing, if the
+        manager raises ``ValueError``.
         """
         try:
             self.pages.intake.manager.change(
@@ -826,8 +711,8 @@ class Page:
     @_action
     def set_output_form(self, fields: Mapping[str, Any]) -> str:
         """
-        Keep the form of the tab "Output", given as its fields
-        (:meth:`~..writing.Writing.set_options`).
+        Set the output options of the batch from the fields of the tab
+        "Output" (:meth:`~..writing.Writing.set_options`).
         """
         with reject_on_error('Not applied'):
             self.pages.writing.set_options(
@@ -838,10 +723,12 @@ class Page:
     @_action
     def publish(self, keys: Sequence[str]) -> str:
         """
-        Publish the result of each row of ``keys``, as the output options say
-        (:meth:`~..publish.Publisher.publish`). A refusal publishes nothing;
-        an upload that fails keeps those before it, which its message names
-        and the rows then show.
+        Publish the result of each row of ``keys`` with the output options
+        (:meth:`~..publish.Publisher.publish`).
+
+        If the publisher rejects the request, nothing is published. If an
+        upload fails, the datasets published before it stay published, and
+        the message lists them.
         """
         if (publisher := self.pages.publisher) is None:
             raise Rejected('This application publishes to no catalogue.')
@@ -856,9 +743,8 @@ class Page:
     @_locked
     def row(self, key: str) -> RowDetail:
         """
-        What the result of row ``key`` was reduced with: the value of each
-        parameter that the row took, its own cells and the settings, and
-        where its request differs from the row's now.
+        The parameters that the result of row ``key`` was reduced with, and
+        those that differ from what the row would use now.
         """
         self._table([key])
         state = self._states([key])[0][key]
@@ -936,20 +822,24 @@ class Page:
     @_action
     def load_table(self, name: str, content: bytes) -> str:
         """
-        Make the rows of a table file the batch table. Its columns may
-        differ, so it is refused while the form holds a change (:meth:`_settled`).
+        Replace the batch table with the rows of a table file.
+
+        Rejected while the form holds a change, since the parameter columns
+        may change.
         """
         self._settled()
         try:
             params = self.batch.spec.params
             frame = read_file(name, content, lambda path: read_table(path, params))
-            with reject_on_write_error():  # a fault of the definitions, not of the file
+            with (
+                reject_on_write_error()
+            ):  # an error of the definitions, not of the file
                 self.batch.set_table(frame)
         except (ValueError, OSError) as error:
             raise Rejected(f'Cannot load {name}: {request_error_text(error)}') from None
         finally:
-            # The rows may name files that the listing lacks, even if the
-            # table is then refused.
+            # The rows may refer to files that the listing lacks, even if the
+            # table is then rejected.
             self._list_again()
         return f'Loaded {_rows(len(frame))} from {name}.'
 
@@ -985,10 +875,9 @@ class Page:
     @_locked
     def results_file(self, keys: Sequence[str]) -> bytes:
         """
-        A zip of the results of the done rows among ``keys``, or of all,
-        written as the form of the tab "Output" says
-        (:meth:`~..writing.Writing.by_options`), with the rows as
-        ``results.csv``.
+        A zip of the results of the done rows among ``keys``, or of all rows,
+        written with the output options (:meth:`~..writing.Writing.by_options`),
+        with the rows as ``results.csv``.
         """
         batch = self.batch
         frame = batch.table()
@@ -1013,8 +902,8 @@ class Page:
 
 class _NotReduced(Rejected):
     """
-    A reduction refused. It says the reasons that no cell or setting shows,
-    such as a row still running; those that one shows are in the state.
+    A failed submission, with the errors that no cell or setting shows, such
+    as a row still running. The state holds the others.
     """
 
     def __init__(self, said: list[str], placed: int) -> None:

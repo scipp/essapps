@@ -3,18 +3,15 @@
 """
 Checks of what a workflow author promises, for a package's tests.
 
-:func:`check_digests` checks that a spec whose interface changed has a new
-version; ``packages/essspec/docs/params.md`` (The digest of a spec) shows how
-a package uses it. The other checks are of the symmetries of a binding;
-``packages/essspec/docs/bindings.md`` (Testing the symmetries) shows how a
+``packages/essspec/docs/params.md`` (The digest of a spec) and
+``packages/essspec/docs/bindings.md`` (Testing the symmetries) show how a
 package uses them.
 
-Each check computes the same outputs in two ways and compares them with
-:func:`assert_close`. A request is made with :func:`instance`, as the workspace
-makes one from data it read, so that a check calls a binding with what the
-workspace would pass. The check for shared memory compares only arrays that
-numpy holds. A failed check raises ``AssertionError`` naming the symmetry and
-the call.
+Each check of a symmetry computes the same outputs in two ways and compares
+them with :func:`assert_close`. :func:`instance` makes a request as the
+workspace makes one from data it read, so that a check calls a binding with
+what the workspace would pass. A failed check raises ``AssertionError`` that
+states the symmetry and the call.
 """
 
 from __future__ import annotations
@@ -33,23 +30,16 @@ from ._workflow_spec import WorkflowSpec
 from .binding import Binding, Driver, StageBinding, fixed_values
 
 Rows = Sequence[Any]
-"""A table's rows, as a push gives them."""
+"""A table's rows, as a push carries them."""
 
 
 def check_digests(specs: Iterable[WorkflowSpec[Any, Any]], path: Path) -> None:
     """
-    Raise ``AssertionError`` unless the file at ``path`` keeps the digest of
+    Raise ``AssertionError`` unless the file at ``path`` holds the digest of
     each spec under the spec's name and version, and nothing else.
 
-    A digest changes when the stored form of the params or the outputs
-    changes (see :attr:`~ess.spec.WorkflowSpec.digest`). A record made with
-    the old models is then of an unbound spec under the same
-    name and version, so such a change comes with a new version. The file is
-    JSON, ``{"loki-iofq/v1": "9f2c..."}``, kept in the package and written by
-    :func:`write_digests`. The message names each spec whose digest differs,
-    each spec the file lacks, with the entry that the file would need, and
-    each entry of the file that no spec has, so that a test that finds no
-    specs fails.
+    The file is JSON, ``{"loki-iofq/v1": "9f2c..."}``, written by
+    :func:`write_digests`.
 
     Raises
     ------
@@ -111,9 +101,11 @@ def check_one_row(
 ) -> None:
     """
     One-row: the binding of a multi-run spec, with one row in each table,
-    gives the outputs of the binding of a single-run spec. The two specs
-    agree on the parameters that are not tables, and each table is a list of
-    the type of the parameter of the same name of the single-run spec.
+    returns the outputs of the binding of a single-run spec.
+
+    The two specs agree on the parameters that are not tables, and each table
+    is a list of the type of the parameter of the same name of the single-run
+    spec.
 
     ``params`` is a request of ``single``, an instance of its spec's params
     model; the request of ``multi`` is made from it.
@@ -139,11 +131,11 @@ def one_row(spec: WorkflowSpec[Any, Any], params: BaseModel) -> BaseModel:
 
 def instance(spec: WorkflowSpec[Any, Any], values: Mapping[str, Any]) -> BaseModel:
     """
-    An instance of the spec's params model from ``values`` by name, as a
-    stage or a driver takes them, made as the workspace makes one from data it
-    read: each value validated from the object by its own field, a table
-    without its length constraints, which the workspace checks when a request
-    is submitted.
+    An instance of the spec's params model from ``values`` by name, made as
+    the workspace makes one from data it read.
+
+    Each value is validated by its own field, a table without its length
+    constraints, which the workspace checks when a request is submitted.
     """
     model: type[BaseModel] = spec.params
     return model.model_construct(
@@ -162,12 +154,12 @@ def check_caching(
     rtol: float = 1e-12,
 ) -> None:
     """
-    Caching: each call through one stage gives the outputs of the plain
+    Caching: each call through one stage returns the outputs of the plain
     request with the same values.
 
-    The stage is made with ``fixed`` and the names of the first call as its
+    The stage is created with ``fixed`` and the names of the first call as its
     blanks, and called in the order given. Values are by name, as
-    ``make_stage`` takes them.
+    ``make_stage`` accepts them.
     """
     spec = binding.spec
     blanks = tuple(calls[0])
@@ -190,23 +182,20 @@ def check_arrival_and_order(
     rtol: float = 1e-12,
 ) -> None:
     """
-    Arrival and order: after each push, a driver gives the outputs that one
-    push of each table's rows so far gives.
+    Arrival and order: after each push, a driver returns the outputs that one
+    push of each table's rows so far returns.
 
-    ``make_driver`` makes a driver from ``fixed``, as for a
+    ``make_driver`` creates a driver from ``fixed``, as for a
     ``DriverBinding``, so a package tests its driver without a spec.
-    ``fixed`` holds every value that is not a table, defaults
-    included: this function does not fill them in. ``tables`` holds the rows
-    of each table by its name. The rows are pushed into a new
-    driver for each of several schedules, each table's rows in their order:
-    one push per table, the tables reversed, one row per push table by
-    table, and one row per push alternating between the tables. Every
-    schedule ends with the same rows, so arrival in all of them is order too.
+    ``fixed`` holds every value that is not a table, defaults included,
+    since this function does not fill them in. ``tables`` holds the rows of
+    each table by its name. The rows are pushed into a new driver for each of
+    several schedules (see :func:`_schedules`), each table's rows in their
+    order.
 
-    The expected outputs come from a new driver with one push per table that
-    has rows so far. A state whose expected outputs raise is not read, since
-    a driver may refuse a state; the state with every row is always read.
-    The check fails if a push modifies the values it was given.
+    A state whose expected outputs raise is not read, since a driver may
+    reject a state. The state with every row is always read. The check fails
+    if a push modifies the values it received.
     """
     pristine = copy.deepcopy(tables)
     for name, schedule in _schedules(tables):
@@ -283,11 +272,9 @@ def _check_no_shared_memory(outputs: Any, values: Any, *, where: str) -> None:
     """
     Raise ``AssertionError`` if an output shares memory with one of ``values``.
 
-    A workflow returns no output that shares memory with a value it reads,
-    such as a slice that is a view of it: the framework passes the values it
-    keeps, so changing one would change the other. Only arrays that numpy
-    holds are compared: numpy arrays, and the data, variances, coords, and
-    masks of scipp objects.
+    The framework passes the values it holds, so an output that is a view of
+    one would change with it. Only arrays that numpy holds are compared:
+    numpy arrays, and the data, variances, coords, and masks of scipp objects.
     """
     given = [array for _, array in _arrays(values, '')]
     if not given:

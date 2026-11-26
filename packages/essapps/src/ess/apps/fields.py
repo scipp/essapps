@@ -1,47 +1,24 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The fields of a form for a pydantic model of params, such as a spec's, without
-widgets. :class:`ess.apps.panel.Form` shows them; another widget library would
-show the same fields.
+The fields of a form for a pydantic model of params, without widgets.
 
-The fields give the params as a request does: at each field, at any depth,
-the JSON form of a value, a file, a reference to an output, or ``None``. They
-are filled from params as a record stores them, so that a record's request
-can be edited and submitted again.
+:class:`ess.apps.panel.Form` shows them, and another widget library would show
+the same fields. A widget layer reads a field's public attributes when the field
+calls back (:meth:`Field.subscribe`). It passes on what a person does by setting
+``value`` or by calling the field's methods.
 
-The field of a value follows from its type, as the table in
-``packages/essspec/docs/params.md`` gives (see :func:`_make`), and is labelled by
-:func:`ess.spec.field_types.title`.
-
-A record's output fits a field if its type, from the record's spec, fits the
-field, and a request of the client may reference it now
-(``client.readable``), so a pending record is offered too. A file is offered for
-a file field as :meth:`ess.apps.Listing.files` says, among those the workspace
-accepts there. A file that the fields are set to, such as one a record names,
-stays picked when the listing no longer has it.
+The fields collect params as a request writes them, and are set from params as a
+record holds them. So a record's request can be edited and submitted again. The
+field of a value follows from its type, as the table in
+``packages/essspec/docs/params.md`` shows. A field offers the outputs that the
+client may reference now (``client.readable``), so a pending record is offered
+too.
 
 A field without a default starts unset, so that a value a correct reduction
-needs is never filled in for the user; so does a list, of rows or of scalars,
-until an element is added or removed, so that a table, which has no default, is
-never given without rows by mistake. A field is left out of the request only if
-it is a choice with no alternative chosen, which it is only without a default,
-so the workspace refuses it as required. An alternative chosen, or an input,
-with nothing given
-is not left out, since the workspace would fill in the default: the params name
-it as missing (see :attr:`Fields.params`). An empty text is the value ``''``
-where the field has a default, and nothing given where it has none, since a
-text input cannot tell an empty text from none; an element of a list of texts
-is a text, ``''`` too, since it was added.
-
-A time is picked to the second, in the zone of the value the picker was
-set to, or of the default, which its label names: ``Start (UTC)``. A time
-without a zone stays without one, and a time of ``AwareDatetime`` without a
-value is in UTC. The fraction of a second of the value is kept.
-
-A widget layer shows a field by reading its public attributes when the field
-calls back (:meth:`Field.subscribe`), and gives it what a person does by setting
-``value`` or calling its methods.
+needs is never filled in for the user. A list without a default stays unset
+until an element is added or removed, so that a table is never submitted without
+rows by mistake.
 """
 
 from __future__ import annotations
@@ -72,12 +49,12 @@ class _Unset:
 
 UNSET: Any = _Unset()
 """
-The value of a field that the request leaves out; given to ``set``, the
-field as it starts, at its default or unset.
+The value of a field that the request leaves out. Passed to ``set``, it resets
+the field to its default, or to unset.
 """
 
 type Missing = list[FieldError]
-"""The fields with nothing given, each with what the user is to do."""
+"""Each field with nothing given, with what the user must do."""
 
 type Changed = Callable[[], None]
 """Called when a field changed."""
@@ -86,20 +63,22 @@ _KINDS = {'float': Real, 'int': Integral, 'text': str, 'time': datetime}
 """What an input of each kind holds, besides ``None``."""
 
 _HOLDS_CHANGES = 'the editor holds changes: add or update a row, or discard them'
-"""What a user who changed the editor of a table is to do before going on."""
 
 
 class Field:
     """
-    A field of any type: ``collect(loc, missing)`` gives its value as a request
-    writes it, ``set`` shows a value, ``refresh`` lists the files and records anew.
+    A field of any type.
+
+    ``collect(loc, missing)`` returns the value as a request writes it, and
+    appends each field with nothing given to ``missing``. ``set`` shows a value.
+    ``refresh`` lists the files and records again.
     """
 
     def __init__(self) -> None:
         self._subscribers: list[Changed] = []
 
     def subscribe(self, changed: Changed) -> None:
-        """Call ``changed`` whenever this field or one inside it changes."""
+        """Calls ``changed`` whenever this field or one inside it changes."""
         self._subscribers.append(changed)
 
     def _notify(self) -> None:
@@ -117,7 +96,7 @@ class Field:
 
 
 class Input(Field):
-    """A field a person gives through one input: ``value``, of ``options`` if any."""
+    """A field filled through one input: ``value``, one of ``options`` if any."""
 
     def __init__(self, label: str = '') -> None:
         super().__init__()
@@ -179,15 +158,8 @@ def _make(
     """
     The field of a value of the shape ``field``, at any depth.
 
-    The shape is read as the sources of the request type are
-    (:func:`ess.spec.request_types.sources`). A scalar is an input
-    of its type, and a file field a picker of the files to offer. Anything with
-    more than one way to give the value is a :class:`ChoiceField`: the alternatives
-    of a union of groups, a group (one alternative, ``Given``, whose selector is
-    hidden), a
-    scalar or a file field with ``None`` or a ``Referenced[...]`` member
-    (``Given``, ``A file``), ``From a record``, and ``None``. A list of scalars is
-    :class:`ScalarsField`, and any other list :class:`RowsField`.
+    Reads the shape as :func:`ess.spec.request_types.sources` reads the request
+    type.
     """
     inline, referenced = field.inline, field.referenced
     match inline:
@@ -223,13 +195,12 @@ def _make(
 
 class FileField(Input):
     """
-    A file field: a picker of the files to offer for its marker
-    (:meth:`~ess.apps.Listing.files`), labelled ``label``. A
-    file that the field is set to and the listing lacks stays picked,
-    labelled by its reference as given, an identity or a name such as
-    ``run:101``.
+    A picker of the files that :meth:`~ess.apps.Listing.files` lists for
+    ``marker``.
 
-    The option of nothing has the value :data:`UNSET`.
+    A file that the field is set to and the listing lacks stays picked. It is
+    labelled by its reference as given, an identity or a name such as
+    ``run:101``. The option of nothing has the value :data:`UNSET`.
     """
 
     def __init__(self, marker: File, listing: Listing, label: str = '') -> None:
@@ -249,7 +220,7 @@ class FileField(Input):
         return UNSET
 
     def set(self, value: Any) -> None:
-        # A reference, or its JSON form, as a request may give it.
+        # A reference, or its JSON form, as a request may write it.
         ref = None if value is UNSET else as_ref(value)
         picked = ref if isinstance(ref, FileRef) else UNSET
         options = dict(self._listed)
@@ -262,12 +233,13 @@ class FileField(Input):
 
 class ScalarField(Input):
     """
-    A scalar: an ``int``, ``float``, or ``str`` input, or a picker of a time,
-    that may be unset, or for a ``bool``, an enum, or a ``Literal``, a picker
-    of its values with an option for none, :data:`UNSET` as at a file, so that it
-    may start unset. It gives the JSON form of its value. ``set`` raises
-    ``ValueError`` for a value of another type, and a value that a picker does
-    not list leaves it unset.
+    An input of an ``int``, ``float``, ``str`` or time, or a picker of the values
+    of a ``bool``, an enum or a ``Literal``.
+
+    ``collect`` returns the JSON form of the value. A picker has the option
+    :data:`UNSET` for none, so that it may start unset. ``set`` raises
+    ``ValueError`` for a value of another type. A value that a picker does not
+    list leaves it unset.
     """
 
     def __init__(
@@ -299,12 +271,14 @@ class ScalarField(Input):
 
     def collect(self, loc: Loc, missing: Missing) -> Any:
         value = self.value
+        # A text input cannot tell an empty text from none, so ``''`` is a value
+        # only where the field has a default.
         if value is None or value is UNSET or (value == '' and self._default is UNSET):
             missing.append(FieldError(None, loc, 'give a value'))
             return UNSET
         if self.kind == 'time':
-            # The picker gives a time without a zone, to the second: the time
-            # set, unless the user changed it.
+            # The picker holds a time without a zone, to the second. Unless the
+            # user changed it, the time set is returned.
             value = value.replace(tzinfo=self._zone)
             if (set_ := self._time_set) is not None and value == set_.replace(
                 microsecond=0
@@ -331,10 +305,9 @@ class ScalarField(Input):
 
     def _time(self, value: datetime | str | None) -> datetime | None:
         """
-        ``value``, a time, or its text, as a record holds it, as the picker
-        shows it: without its zone, which is kept and named in the label, and
-        without its fraction of a second, which is kept until the user changes
-        the time.
+        ``value``, a time or its text, as the picker shows it: without its zone,
+        which the label names, and without its fraction of a second, which is
+        kept until the user changes the time.
         """
         if isinstance(value, str):
             value = datetime.fromisoformat(value)
@@ -350,10 +323,11 @@ class ScalarField(Input):
 
 class ScalarsField(Field):
     """
-    A list of scalars: a :class:`ScalarField` per element in ``elements``, with
-    :meth:`add` and :meth:`remove` of the last. Unset, it has no
-    element until one is added or removed: a removal gives no element, the
-    empty list.
+    A list of scalars, with a :class:`ScalarField` per element.
+
+    :meth:`add` appends an element, and :meth:`remove` removes the last. Unset,
+    the list has no elements until one is added or removed. A removal from an
+    unset list makes it the empty list.
     """
 
     def __init__(
@@ -381,8 +355,8 @@ class ScalarsField(Field):
 
     def _resize(self, n: int) -> None:
         """
-        Keep the first ``n`` elements, none for ``-1``, or add elements with
-        nothing given, but a text, which is ``\'\'``.
+        Keeps the first ``n`` elements, or appends new ones up to ``n``. A new
+        element has nothing given, except a text, which is ``''``.
         """
         elements = self._elements or []
         del elements[n:]
@@ -416,7 +390,7 @@ class ScalarsField(Field):
 
 
 class GroupField(Field):
-    """The fields of a group, each by its type; the tag of an alternative has none."""
+    """The fields of a group, except the tag field of an alternative of a union."""
 
     def __init__(
         self, group: type[BaseModel], tag: dict[str, str], listing: Listing
@@ -453,8 +427,8 @@ class GroupField(Field):
 
 class RecordField(Input):
     """
-    An output of a record that fits ``tp``, a group or a union of groups: a
-    picker of references, with :data:`UNSET` for none, as at a file.
+    A picker of references to outputs that fit ``tp``, a group or a union of
+    groups. The option of nothing has the value :data:`UNSET`.
     """
 
     def __init__(self, tp: Any, listing: Listing) -> None:
@@ -489,14 +463,17 @@ class NothingField(Field):
 
 class ChoiceField(Field):
     """
-    The alternatives for a value, each a field: the members of a union
-    of groups, whose tag field is ``tag``; a group, a file, or a scalar
-    given; an output of a record; ``None``. ``chosen`` is the label of the
-    alternative, ``None`` for none. A selector of one alternative only is hidden.
+    A choice between alternative ways to give a value, each a field, such as a
+    group given inline, an output of a record, or ``None``.
 
-    It starts at its default's alternative. Without a default, it starts unset,
-    unless it has one alternative only. Set, each alternative not chosen is as it
-    starts, so that it shows no value set before, such as a row shown before.
+    ``tag`` is the tag field of a union of groups. ``chosen`` is the label of the
+    chosen alternative, or ``None``. The selector is hidden if there is only one
+    alternative.
+
+    The field starts at its default's alternative. Without a default, it starts
+    unset, unless it has only one alternative. ``set`` resets each alternative
+    not chosen, so that it shows no value set before, such as of a row shown
+    before.
     """
 
     GIVEN = 'Given'
@@ -554,10 +531,7 @@ class ChoiceField(Field):
         self._notify()
 
     def _label(self, value: Any) -> str | None:
-        """
-        The label of the alternative that writes ``value``, or ``None`` if unset.
-        Raises ``ValueError`` if no alternative writes it.
-        """
+        """The label of the alternative that writes ``value``, or ``None``."""
         if value is UNSET:
             return (
                 next(iter(self.alternatives)) if len(self.alternatives) == 1 else None
@@ -588,30 +562,25 @@ class ChoiceField(Field):
 
 class RowsField(Field):
     """
-    A list of ``element``, not a scalar: a table with a row per element, and
-    a column per field of the element, of the tag and the fields of every
-    alternative of a union, and of the file and the output that a row may
-    be given as, such as ``File`` and ``Record`` for ``list[Run |
-    Referenced[X]]``; and below it the editor of a row, the field of the
-    element's type. A cell is empty where an alternative lacks the field,
-    and shows a group or a list as its JSON text. The rows are held as a
-    request writes them, so the fields do not grow with the rows.
+    A list of anything except scalars: a table with a row per element, and an
+    editor of one row.
 
-    The editor shows the row selected, and is empty if none or several are.
-    ``Update row`` writes the editor back to the row selected, and ``Add as
-    new row`` appends it, each only if nothing is missing in it, so that every
-    row is complete. ``Remove`` removes the rows selected, with any changes to
-    them in the editor. ``Discard`` shows the selection in the editor again.
+    The table has a column per field of every alternative of the element, and a
+    ``File`` or ``Record`` column for a row given by reference. A cell shows a
+    group or a list as its JSON text. The editor is the field of the element's
+    type. The rows are held as a request writes
+    them, so the number of fields does not grow with the rows.
 
-    So that a change in the editor is not lost unseen, the selection stays
-    while the editor differs from what it showed, and the params refuse it. A
-    refresh is no change: a record gone from the listing leaves its row as it
-    is, as a row the editor cannot show whole.
+    The editor shows the selected row, and the defaults if no row or several are
+    selected. While the editor differs from what it showed, the selection stays,
+    and :attr:`Fields.params` reports the changes as missing. So a change in the
+    editor is not lost unseen. A refresh does not count as a change, even if a
+    record of the selected row is gone from the listing.
 
-    Unset, it has no row until one is added or ``Remove`` is clicked, which
-    gives the empty list. A row set that the editor cannot show whole, such
-    as a reference to an output that the client may not read now, is kept
-    as given.
+    Unset, the field has no rows until one is added or :meth:`remove_rows` is
+    called, which makes it the empty list. A row that the editor cannot show
+    whole, such as a reference to an output that the client may not read now,
+    stays as given.
     """
 
     def __init__(self, element: Any, default: Any, listing: Listing) -> None:
@@ -671,7 +640,7 @@ class RowsField(Field):
 
     @contextmanager
     def _loads(self) -> Iterator[None]:
-        """Load the editor without telling of each field on the way."""
+        """Within this block, editor changes do not notify this field's subscribers."""
         self._loading = True
         try:
             yield
@@ -684,14 +653,14 @@ class RowsField(Field):
 
     def _held(self) -> tuple[Any, Missing]:
         """
-        The editor's value and what is missing in it, which names any changes
-        in the editor of a table within this editor.
+        The editor's value, and what is missing in it, including changes held
+        in the editor of a table inside this editor.
         """
         missing: Missing = []
         return self.editor.collect((), missing), missing
 
     def select(self, selection: list[int]) -> None:
-        """Show ``selection`` in the editor, or keep the last if the editor changed."""
+        """Shows ``selection`` in the editor, unless the editor holds changes."""
         if selection == self.selection:
             return
         if self._held() != self._shown:
@@ -702,7 +671,7 @@ class RowsField(Field):
         self._load()
 
     def discard(self) -> None:
-        """Show the row selected in the editor, or nothing if none is."""
+        """Shows the selected row in the editor, or nothing if none is selected."""
         self._load()
 
     def _load(self) -> None:
@@ -715,11 +684,11 @@ class RowsField(Field):
         self._notify()
 
     def add_row(self) -> None:
-        """Append the editor as a new row, if nothing is missing."""
+        """Appends the editor's value as a new row, if nothing is missing."""
         self._write(None)
 
     def update_row(self) -> None:
-        """Write the editor to the row selected, if one is and nothing is missing."""
+        """Writes the editor to the selected row, if one is and nothing is missing."""
         if (i := self._selected()) is not None:
             self._write(i)
 
@@ -743,7 +712,7 @@ class RowsField(Field):
         self._notify()
 
     def remove_rows(self) -> None:
-        """Remove the rows selected, with any changes to them in the editor."""
+        """Removes the selected rows, with any changes to them in the editor."""
         selected = set(self.selection)
         self._rows = [r for i, r in enumerate(self._rows or []) if i not in selected]
         if selected:
@@ -753,7 +722,7 @@ class RowsField(Field):
         self._notify()
 
     def _render(self) -> None:
-        """The text of each column, a file or an output by its label."""
+        """Sets the text of each column, with a file or an output by its label."""
         rows = self._rows or []
         listed: dict[File, dict[FileRef, str]] = {}
 
@@ -829,11 +798,10 @@ class RowsField(Field):
 
 class Fields:
     """
-    The params of one pydantic model, such as a spec's ``params``: a field per
-    parameter in ``fields``, listing what ``listing`` offers at each.
+    A field per parameter of one pydantic model, such as a spec's ``params``.
 
-    ``fields`` limits them to these parameters. So a template's two parts
-    are one form each, its values and its blanks::
+    ``fields`` limits the form to these parameters, so that a template's values
+    and its blanks are one form each::
 
         Fields(IOFQ.params, listing, fields=settings)
         Fields(IOFQ.params, listing, fields=('sample', 'sample_transmission'))
@@ -867,9 +835,9 @@ class Fields:
 
     def watch(self, on_change: Changed) -> None:
         """
-        Call ``on_change`` when a person changes what the fields hold or what
-        is missing. Selecting a row does neither. :meth:`set` and :meth:`refresh`
-        do not call it, whatever they change.
+        Calls ``on_change`` when a person changes what the fields hold or what is
+        missing. Selecting a row changes neither. :meth:`set`, :meth:`set_fitting`
+        and :meth:`refresh` never call it.
         """
         self._on_change = on_change
         self._last = self.params_and_missing()
@@ -894,9 +862,11 @@ class Fields:
     @property
     def params(self) -> dict[str, Any]:
         """
-        The params as a request gives them; a field with no alternative chosen
-        is left out. Raises :class:`~ess.apps.SubmitError` at each field where
-        an alternative is chosen, or an input or a list is, with nothing given::
+        The params as a request writes them.
+
+        A field with no alternative chosen is left out. Raises
+        :class:`~ess.apps.SubmitError` with a problem at each other field with
+        nothing given::
 
             beam_centre: choose a record
             reduction.bins: give a value
@@ -910,8 +880,8 @@ class Fields:
 
     def params_and_missing(self) -> tuple[dict[str, Any], list[FieldError]]:
         """
-        What the fields hold: the params given in full, leaving out each with
-        anything missing, and what is missing, as :attr:`params` names it.
+        The params given in full, and what is missing, as :attr:`params` reports
+        it. A parameter with anything missing is left out of the params.
         """
         missing: Missing = []
         given = {n: f.collect((n,), missing) for n, f in self.fields.items()}
@@ -922,14 +892,16 @@ class Fields:
 
     def set(self, params: Mapping[str, Any], listing: Listing) -> None:
         """
-        Show ``params``, as a record or a request holds them, such as
-        ``record.request.params``, with what ``listing`` offers; a field left
-        out is as it starts, at its default or unset, and a parameter that is
-        not shown is ignored. A reference that the client may not
-        read now chooses the alternative of a record, with no record picked; a file
-        that is not listed stays picked. Raises ``KeyError`` for a name that
-        is not a parameter, and ``ValueError`` for a value that a field cannot
-        show.
+        Shows ``params`` as a record or a request holds them, such as
+        ``record.request.params``, with what ``listing`` offers.
+
+        A field left out of ``params`` is reset to its default, or to unset. A
+        parameter that the form does not show is ignored. A reference that the
+        client may not read now chooses the alternative of a record, with no
+        record picked. A file that is not listed stays picked.
+
+        Raises ``KeyError`` for a name that is not a parameter, and
+        ``ValueError`` for a value that a field cannot show.
         """
         if unknown := set(params) - self._every:
             raise KeyError(f'{self.title} has no parameters {sorted(unknown)}')
@@ -940,10 +912,11 @@ class Fields:
 
     def set_fitting(self, params: Mapping[str, Any], listing: Listing) -> list[str]:
         """
-        Show what fits of ``params``, parameter by parameter, as :meth:`set`
-        does, and the others as they start. Returns, for each parameter that
-        does not fit, such as one kept for another version of the model, its
-        name, its value, and why.
+        Shows each parameter of ``params`` that fits, as :meth:`set` does, and
+        resets the others.
+
+        Returns a line for each parameter that does not fit, such as one stored
+        for another version of the model, with its name, its value, and why.
         """
         unfit = {
             name: 'not a setting here' for name in params if name not in self.fields
@@ -963,16 +936,18 @@ class Fields:
 
     def alternatives(self, name: str) -> list[str]:
         """
-        The alternatives offered at the parameter ``name``, a choice, such as
-        ``['Given', 'From a record']``. Raises ``TypeError`` for a
-        parameter of another type, such as a file or a list.
+        The alternatives offered at the choice ``name``, such as
+        ``['Given', 'From a record']``.
+
+        Raises ``TypeError`` if the parameter is not a choice, such as a file or
+        a list.
         """
         if not isinstance(field := self.fields[name], ChoiceField):
             raise TypeError(f'{name}: not a choice of alternatives')
         return field.offered
 
     def refresh(self, listing: Listing) -> None:
-        """List the files and the records that fit again, from ``listing``."""
+        """Lists the files and the records that fit again, from ``listing``."""
         with self._loads():
             for field in self.fields.values():
                 field.refresh(listing)

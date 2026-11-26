@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-Lightweight records of load-bearing design decisions and their rationale.
+Records of design decisions and their reasons.
 Each ADR captures one decision.
 While the design is in flux, a changed decision is rewritten in place; git history keeps the earlier text.
 Reversing or replacing a decision gets a new ADR that links back.

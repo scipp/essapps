@@ -3,46 +3,27 @@
 """
 The request type of a spec: what a request may write in its params, as a type.
 
-A params model is typed for the call phase: each field holds the value that
-the binding takes, a group, the local path of a file, or data. A request
-writes something else in the same field: a group inline, a file by name, or
-a reference to an output. This module derives, from the params model, the
-type of what a request writes, the *request type*, so that the rules on
-what a request writes (``packages/essspec/docs/params.md``) are stated once,
-as types, and so that one type both validates a request and is the JSON schema
-of the params. The request type is the params type with each
-``Referenced[T]`` replaced by a reference to an output whose data fit
+A params model holds what the binding receives: a group, the local path of a
+file, or data. A request writes a group inline, a file by name, or a reference
+to an output. This module derives the *request type* from the params model, so
+that one type both validates a request and is the JSON schema of the params.
+It replaces each ``Referenced[T]`` by a reference to an output whose data fit
 ``T``, and each file field by a file, at any depth::
 
-    params model (call phase)              request type (request phase)
-    -------------------------              ----------------------------
-    reduction: Reduction                   Reduction
-    mask: Referenced[PixelMask]            OutputRef
-    centre: BeamCentre                     BeamCentre | OutputRef
-            | Referenced[BeamCentre]
-    beam_centre: GivenCentre | Find...     GivenCentre | FindCentre  (by tag)
-    sample: RunFile                        FileRef
-    runs: list[RunFile]                    list[FileRef]
-    samples: list[Sample]                  list[Sample'], with Sample' derived
-    # Sample.run: RunFile                    run: FileRef
-    # Sample.transmission:                   transmission: OutputRef
-    #     Referenced[Transmission]
-
-with ``RunFile`` from :mod:`ess.spec`, a file field (see
-:class:`~ess.spec.parameters.File`).
+    # params model                              request type
+    reduction: Reduction                        # Reduction
+    mask: Referenced[PixelMask]                 # OutputRef
+    centre: BeamCentre | Referenced[BeamCentre] # BeamCentre | OutputRef
+    sample: RunFile                             # FileRef
+    runs: list[RunFile]                         # list[FileRef]
+    samples: list[Sample]                       # list[Sample'], Sample'.run a FileRef
 
 The request type of a field is the union of the *sources* that the field
-takes (see :func:`sources`), tagged by :func:`source_of`: a group, a union
-of groups, or a scalar written ``inline``, a ``file``, or a reference to an
-``output``. The source of a value is known from the value alone, by its key
-``"@ref"``. A group that holds neither ``Referenced[...]`` nor a file field,
-at any depth, is the group's own class, with its validators. A group that
-holds one is a model derived from it without its validators (see
-:func:`_group_request_type`): they run when the params model validates the
-group (see :func:`ess.spec.validation.validated`). A file is a
-:class:`~ess.spec.refs.FileRef`, which a workspace validates with a resolver of
-files, :data:`FileResolver`, given the field's
-:class:`~ess.spec.parameters.File` marker.
+accepts (see :func:`sources`), tagged by :func:`source_of`. A group that holds
+neither ``Referenced[...]`` nor a file field, at any depth, is its own class,
+with its validators. A group that holds one becomes a derived model without
+its validators, which run when the params model validates the group (see
+:func:`ess.spec.validation.validated`).
 """
 
 from __future__ import annotations
@@ -101,30 +82,24 @@ def source_of(value: Any) -> str | None:
 
 def sources(field: FieldShape) -> dict[str, Any]:
     """
-    The sources that a field of shape ``field`` takes, by tag, each the type
-    that validates it, with the constraints of the field. Raises
-    ``ValueError`` for a list, whose element takes sources instead. Of what a
-    request writes inline:
+    The sources that a field of shape ``field`` accepts, by tag, each the type
+    that validates it, with the constraints of the field.
 
-    - :data:`INLINE`: the union of groups, with its discriminator, the
-      group, or the scalar, each group as :func:`_group_request_type` gives it;
+    - :data:`INLINE`: the union of groups, the group, or the scalar.
     - :data:`FILE`: a :class:`~ess.spec.refs.FileRef`, resolved by the
-      resolver of files given the field's marker (see :data:`FileResolver`), with
-      the marker's metadata under ``metadata`` in the JSON schema, which say
-      which files to offer. The other metadata of the field are of its ``Path``,
-      so the file has none of them.
-
-    Of the groups that ``Referenced[...]`` marks:
-
+      resolver of files (see :data:`FileResolver`), with the marker's metadata
+      under ``metadata`` in the JSON schema. The other metadata of the field
+      are of its ``Path``, so the file has none of them.
     - :data:`OUTPUT`: a reference to an output, with the name of the group,
-      or of the union of the groups, as its ``dataType`` in the JSON schema,
-      and the groups in its metadata (see
-      :func:`ess.spec.validation.validate_request_value`).
+      or of the union of the groups, under ``dataType`` in the JSON schema.
 
-    In the JSON schema, each alternative of a union requires its tag, since a
-    request always writes it, and is titled by its tag (see
-    :func:`~ess.spec.field_types.title`). A form panel shows a widget for each
-    source a field takes.
+    In the JSON schema, each alternative of a union requires its tag and is
+    titled by it.
+
+    Raises
+    ------
+    ValueError
+        For a list, whose element has sources instead.
     """
     taken: dict[str, Any] = {}
     match field.inline:
@@ -158,7 +133,7 @@ def sources(field: FieldShape) -> dict[str, Any]:
 class _ResolvedFile:
     """
     The metadata of the request type of a file field with ``marker``: it
-    takes a file only, resolved to the file's identity by the context
+    accepts a file only, resolved to the file's identity by the context
     ``files``, if given (see :data:`FileResolver`), which it adds to the context's
     set ``resolved``, and its JSON schema holds the marker's metadata under
     ``metadata``.
@@ -234,7 +209,7 @@ _SOURCES: Final = {
 
 def _source_union(taken: Mapping[str, Any], none: bool) -> Any:
     """
-    The type of a field that takes the sources ``taken`` (see :func:`sources`):
+    The type of a field that accepts the sources ``taken`` (see :func:`sources`):
     the source, if one, else their union tagged by :func:`source_of`; ``| None``
     if ``none``.
     """
@@ -254,13 +229,12 @@ def _source_union(taken: Mapping[str, Any], none: bool) -> Any:
 
 def _field_request_type(annotation: Any, metadata: tuple[Any, ...] = ()) -> Any:
     """
-    The request type of a field typed ``annotation``, with ``metadata`` (see
-    :func:`~ess.spec.field_types.field_metadata`): a list of the request type of
-    its element, with the list's constraints, or the :func:`_source_union` union of
-    its :func:`sources`. Of a list of elements that hold ``Referenced[...]``
-    or a file field, it keeps the length constraints only: the others, such
-    as a validator, check the data or the paths, and run when the params
-    model validates the list (see :func:`ess.spec.validation.validate_request_value`).
+    The request type of a field typed ``annotation``, with ``metadata``.
+
+    Of a list whose elements hold ``Referenced[...]`` or a file field, it
+    retains the length constraints only. The others, such as a validator,
+    check the data or the paths, and run when the params model validates the
+    list.
     """
     field = field_types.shape(annotation, metadata)
     if not isinstance(field.inline, List):
@@ -283,14 +257,13 @@ def _annotated(tp: Any, metadata: tuple[Any, ...]) -> Any:
 def _group_request_type(group: type[BaseModel]) -> type[BaseModel]:
     """
     The request type of ``group``: the group itself, if it holds neither
-    ``Referenced[...]`` nor a file field (see
-    :func:`~ess.spec.field_types.holds_marker`), so that validating a request
-    validates it whole. Otherwise a model derived from it, of the group's
-    name, qualified name, docstring, and config, with each field that holds
-    one typed its request type, and its metadata, default, title, and
-    description kept. It has no validators of the group, which run when the
-    params model validates the group (see
-    :func:`ess.spec.validation.validate_request_value`).
+    ``Referenced[...]`` nor a file field, so that validating a request
+    validates it whole.
+
+    Otherwise a model derived from it, with the group's name, docstring and
+    config, and each field that holds one typed its request type. It has none
+    of the group's validators, which run when the params model validates the
+    group.
     """
     if not field_types.holds_marker(group):
         return group
@@ -332,10 +305,8 @@ def _request_field(name: str, info: FieldInfo) -> tuple[Any, FieldInfo]:
 @functools.cache
 def request_model(model: type[BaseModel]) -> type[BaseModel]:
     """
-    The request type of the params model ``model``: a model of the same
-    docstring and fields, each typed its :func:`_field_request_type`, with its field
-    info as :func:`_request_field` keeps it. Its JSON schema is the params
-    schema of a spec (see :meth:`ess.spec.WorkflowSpec.serialize`).
+    The request type of the params model ``model``, whose JSON schema is the
+    params schema of a spec (see :meth:`ess.spec.WorkflowSpec.serialize`).
     """
     fields: dict[str, Any] = {
         name: _request_field(name, info) for name, info in model.model_fields.items()
@@ -351,11 +322,10 @@ def single_field_request_model(
 ) -> type[BaseModel]:
     """
     A model of the field ``name`` of ``model`` alone, typed its request type,
-    with the config of ``model``; without the length constraints of a list
-    if it is a ``table``: an accumulator takes a table a few rows at a time,
-    and the workspace checks the number of rows of the whole table. It is made
-    from the one field, so that a problem of another field does not hide that
-    of this one.
+    with the config of ``model``. A ``table`` has no length constraints,
+    since an accumulator receives a table a few rows at a time, and the
+    workspace checks the number of rows of the whole table. The model has one
+    field, so that a problem of another field does not hide that of this one.
     """
     info = model.model_fields[name]
     field: Any = (
@@ -368,7 +338,7 @@ def single_field_request_model(
 
 type FileResolver = Callable[[str, File], str]
 """
-Resolves a file in the request phase. It takes the file as the request names
+Resolves a file in the request phase. It accepts the file as the request writes
 it, such as ``'run:101'``, and the marker of the file field, and returns the
 file's identity, or raises ``ValueError`` if the file is unknown, if the
 request's proposal may not read it, or if its metadata do not fit the

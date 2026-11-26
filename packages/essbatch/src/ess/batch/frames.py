@@ -2,17 +2,16 @@
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
 A batch run as a command: reduce its rows, wait, and return its batch table
-with what came of each row. It needs pandas.
+with what came of each row::
 
-The batch table is the frame of a batch (:mod:`.table`): the key of each row as
-index, a column per blank, and notes. :func:`reduce_table` reduces a table
-with a template, keeping nothing; :func:`reduce_batch` reduces the rows of a
-batch, such as one of a manager. Both return the table with the columns of
-:data:`RESULT`, so the table that comes back is the table that went in::
+    reduce_batch(batch)
+    #        sample     name   status  record   failure       published
+    # key
+    # 60339  run:60339  water  done    3f2a...                pid:20.500/...
+    # 60340  run:60340  sds    failed  81c0...  refused: ...
 
-    key    sample     name    status  record    failure         published
-    60339  run:60339  water   done    3f2a...                   pid:20.500/...
-    60340  run:60340  sds     failed  81c0...   refused: ...
+A table file written from the result reads back as the batch table:
+:func:`~.table.read_table` drops the columns of :data:`~.table.RESULT`.
 """
 
 from __future__ import annotations
@@ -43,35 +42,28 @@ def reduce_table(
     settings_changed: bool = False,
 ) -> pd.DataFrame:
     """
-    Reduce each row of ``table`` with the settings of ``template``, wait, and
-    return the table with what came of each row (see :func:`reduce_batch`).
-    The batch is of the spec of the template's name that the workspace binds,
-    the highest version if it binds several
-    (:meth:`~ess.apps.Client.spec_named`). The settings are read as a page
-    loads them (:func:`~.templates.checked_settings`). It keeps nothing in
-    definitions, so no manager lists it.
+    Returns ``table`` with what came of each row, after reducing the rows
+    with the settings of ``template`` and waiting.
+
+    The spec is the one of the template's name that the workspace binds
+    (:meth:`~ess.apps.Client.spec_named`). The batch has no definitions, so no
+    manager lists it.
 
     Parameters
     ----------
-    client:
-        The client that submits.
     template:
-        The settings, of the spec and the version that the workspace binds.
-        Its blanks are not read: the parameter columns of ``table`` are the
-        blanks, and a value at one of them is the value of each row whose
-        cell is empty. A file in it may be named as in a cell
-        (:func:`~.table.as_request`), and a record by ``@latest``.
+        The settings, as :func:`~.templates.checked_settings` reads them.
     table:
-        The rows, as :meth:`~.reduction.Batch.set_table` takes them.
+        The batch table, as :meth:`~.reduction.Batch.set_table` accepts it.
     label:
-        The label of the records. A batch is found again by it, so each batch
-        has its own.
+        The label of the records. Give each batch its own: a batch is found
+        again by its label.
     staged:
         Run the rows through a stage.
     persist:
-        As :meth:`~ess.apps.Client.submit` takes it.
+        As in :meth:`~ess.apps.Client.submit`.
     remaining, settings_changed:
-        As :func:`reduce_batch` takes them.
+        As in :func:`reduce_batch`.
 
     Raises
     ------
@@ -102,35 +94,26 @@ def reduce_batch(
     settings_changed: bool = False,
 ) -> pd.DataFrame:
     """
-    Reduce the rows of ``keys`` of ``batch``, or all of its rows, wait, close
-    the batch, and return those rows of its table with what came of each
-    (:func:`with_results`).
+    Returns the rows of ``keys``, or all rows, with what came of each
+    (:func:`with_results`), after reducing them and waiting.
+
+    ``batch`` is closed afterwards.
 
     Parameters
     ----------
-    batch:
-        The batch to reduce.
-    keys:
-        The rows to reduce, all if not given.
     remaining:
-        Reduce only the rows that :func:`~.state.left_to_reduce` gives: those
-        whose newest record under the label did not complete, or is outdated
-        since the row's cells or its spec changed, or since the settings
-        changed for a row that has no result of them yet. A row reduced with
-        earlier settings is left, as it is by the page's "Reduce".
+        Reduce only the rows that :func:`~.state.left_to_reduce` returns. It
+        leaves the rows with status ``settings changed``.
     settings_changed:
-        Together with ``remaining``, reduce also the rows reduced with earlier
-        settings (:func:`~.state.with_changed_settings`), as the page's
-        "Reduce them again" does. The rows of both are chosen by
-        :func:`~.state.to_reduce`, as the page chooses them.
+        With ``remaining``, also reduce the rows with status ``settings
+        changed`` (:func:`~.state.with_changed_settings`).
 
     Raises
     ------
     SubmitError
-        If a row cannot run, or the settings are refused; nothing is
-        submitted.
+        If a row cannot run or the settings are invalid. Nothing is submitted.
     ValueError
-        If a blank is named as one of :data:`RESULT`.
+        If a parameter column has the name of a column of :data:`RESULT`.
     """
     if taken := sorted(set(batch.parameter_columns) & set(RESULT)):
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
@@ -144,7 +127,8 @@ def reduce_batch(
         client.wait([s.record for s in found if s.record])
         states = batch.state(keys)
         left = {k for w in which for k in to_reduce(states, w)}
-        # A row that cannot run is given too, so that reduce refuses it by key.
+        # A row that cannot run is passed too, so that reduce raises for it by
+        # key.
         picked = [k for k, s in states.items() if k in left or s.problems]
         client.wait(batch.reduce(picked))
     except KeyboardInterrupt:
@@ -161,13 +145,12 @@ def with_results(
     keys: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """
-    The rows of ``keys`` of the table of ``batch``, or all, with the columns
-    of :data:`RESULT`, replaced if it has them: what ``states`` say of the
-    row of each key. ``status`` is the row's status in the words of the page
-    (:attr:`~.state.RowState.status`), ``record`` the ID of its result,
-    ``failure`` why that failed, and ``published`` its catalogue identifier
-    (:func:`~.definition.published`); each text is empty where there is
-    nothing to say.
+    The rows of ``keys`` of the batch table, or all rows, with the columns of
+    :data:`RESULT` set from ``states``.
+
+    ``status`` is :attr:`~.state.RowState.status`, ``record`` the ID of the
+    row's result, ``failure`` why that result failed, and ``published`` its
+    catalogue identifier. Each is empty text where there is no value.
     """
     client = batch.client
     kept = batch.definitions

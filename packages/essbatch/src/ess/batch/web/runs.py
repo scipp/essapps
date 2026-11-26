@@ -1,23 +1,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The files that the client lists, as every page shows them: the listing of
-the pickers and the Runs view, and the runs as a person corrects them:
-:class:`Runs`.
+The files that the client lists, shared by every page: :class:`Runs`.
 
-The pages share one listing of what the client lists (:attr:`Runs.listing`):
-the files, with their metadata, and the records. A page asks to list again
-(:meth:`Runs.list_again`) when the records or its batch table changed, at a
-step of Follow, at "List runs again", and as it is made; the listing counts
-the changes of the files and of why they cannot be listed
-(:attr:`SafeListing.revision`), which every page compares at its poll.
-The runs are the files, the same on every page (:meth:`Runs.shown`), and a
-person corrects them on any page, with or without a batch
-(:meth:`Runs.correct`). A correction changes no row of a batch: a batch
-table names files, and the page shows each with its metadata now. The Runs
-view names the batches of each run from the files that each batch names,
-which come with the counts (:meth:`Pages.counts <.pages.Pages.counts>`),
-since Follow adds rows without a change of the runs.
+The pickers and the Runs view of every page use one listing
+(:attr:`Runs.listing`). A correction of a run changes no batch table: a cell
+refers to a file, and the page shows the file with its metadata now. The Runs
+view gets the batches of each run from
+:meth:`Pages.counts <.pages.Pages.counts>`, not from :meth:`Runs.shown`, since
+Follow adds rows to a batch without a change of the runs.
 """
 
 from __future__ import annotations
@@ -43,12 +34,11 @@ from .models import CellEdit, Cells, Column, Notice, RunCell, RunRow
 
 class SafeListing(Listing):
     """
-    What the client lists now, as :class:`Listing` gives it, but without files
-    if the file source raises: a picker then offers none, the Runs view lists
-    none, and :attr:`failure` says why. It lists every file with its metadata
-    as it is made (:attr:`files_listed`), and :attr:`revision` counts, from
-    the first listing, each listing whose files or failure differ from those
-    of the listing ``previous``.
+    A :class:`Listing` that lists no files if the file source raises, and
+    then sets :attr:`error`.
+
+    :attr:`revision` starts at 1 and counts each listing whose files or
+    failure differ from those of ``previous``.
     """
 
     error: str | None = None
@@ -57,8 +47,7 @@ class SafeListing(Listing):
     def __init__(self, client: Client, previous: SafeListing | None = None) -> None:
         super().__init__(client, previous)
         self.files_listed = self.listed(Selector())
-        # The files and why they cannot be listed, as made: a picker may
-        # list files later, and set :attr:`error`.
+        # A snapshot: a picker may list files later and set :attr:`error`.
         self._said = (self.files_listed, self.failure)
         self.revision = 1
         if previous is not None:
@@ -66,7 +55,7 @@ class SafeListing(Listing):
 
     @property
     def failure(self) -> str | None:
-        """Why the files cannot be listed, as the page says it."""
+        """The message the page shows if the files cannot be listed."""
         return (
             None if self.error is None else f'The files cannot be listed: {self.error}'
         )
@@ -88,9 +77,10 @@ class SafeListing(Listing):
 
 class Runs:
     """
-    The files that the client lists, for every page: the listing of the
-    pickers (:attr:`listing`) and the Runs view (:meth:`shown`). Each public
-    method takes ``lock``; a property reads one value without it.
+    The files that the client lists, for the pickers (:attr:`listing`) and the
+    Runs view (:meth:`shown`) of every page.
+
+    Each public method holds ``lock``. A property reads one value without it.
 
     Parameters
     ----------
@@ -122,40 +112,29 @@ class Runs:
 
     @property
     def listing(self) -> SafeListing:
-        """
-        What the client lists, as :meth:`list_again` listed it last: the
-        files, their labels and the records, for every page.
-        """
+        """What the client listed at the last :meth:`list_again`."""
         return self._listing
 
     @property
     def revision(self) -> int | None:
         """
-        :attr:`SafeListing.revision`, which the Runs view of each page compares
-        to ask for the runs again; ``None`` if the application corrects no
-        runs, so that the pages have no Runs view.
+        :attr:`SafeListing.revision`, or ``None`` if the application corrects
+        no runs. The page has no Runs view if ``None``.
         """
         return self._listing.revision if self.corrects else None
 
     @property
     def corrects(self) -> bool:
-        """Whether the application corrects runs: it gives their marks and files."""
+        """Whether the application passed ``marks`` and ``corrected``."""
         return self._marking is not None
 
     def list_again(self) -> None:
-        """
-        List what the client lists now (:attr:`listing`): when the records
-        or a table changed, at a step of Follow, at "List runs again", as a
-        page is made, and for the Runs view.
-        """
+        """Replace :attr:`listing` with what the client lists now."""
         with self._lock:
             self._listing = SafeListing(self._client, previous=self._listing)
 
     def _marks(self) -> tuple[Fields, CorrectedFiles]:
-        """
-        The form of what a person corrects of a run, and the files to
-        correct; :class:`~.errors.Rejected` if the application corrects no runs.
-        """
+        """The fields of a run that a person corrects, and the file source."""
         if self._marking is None:
             raise Rejected('This application corrects no runs.')
         marks, corrected = self._marking
@@ -163,10 +142,9 @@ class Runs:
 
     def shown(self) -> models.Runs:
         """
-        The runs, listed again, with what a person corrected of each, as the
-        Runs view of every page shows them, and that of the page without a
-        batch; none, with why, if the file source raises. Raises
-        :class:`~.errors.Rejected` if the application corrects no runs.
+        The runs, listed again, with the corrections of each.
+
+        Raises :class:`~.errors.Rejected` if the application corrects no runs.
         """
         with self._lock:
             marks, corrected = self._marks()
@@ -185,7 +163,7 @@ class Runs:
             )
 
     def correct(self, edit: CellEdit) -> Notice:
-        """Correct a field of the runs ``edit.keys``, as its field reads the value."""
+        """Correct a field of the runs ``edit.keys``."""
         with self._lock:
             marks, corrected = self._marks()
             value = view.read(marks, edit)
@@ -200,7 +178,7 @@ class Runs:
             return Notice(notice=f'{title} corrected on {n} run{"s" * (n > 1)}.')
 
     def revert(self, cells: Cells) -> Notice:
-        """Take a field of runs back to what the files say, as :meth:`correct`."""
+        """Set a field of runs back to the value in the file."""
         with self._lock:
             marks, corrected = self._marks()
             self._kept(
@@ -214,9 +192,10 @@ class Runs:
 
     def _kept(self, correction: Callable[[], None]) -> None:
         """
-        Make ``correction``, then list again, so that the pages show the runs
-        again. Raises :class:`~.errors.Rejected` if the definitions do not keep
-        it, or if the runs cannot be listed after it.
+        Call ``correction``, then list again.
+
+        Raises :class:`~.errors.Rejected` if the definitions cannot be written,
+        or if the runs cannot be listed afterwards.
         """
         with reject_on_write_error():
             correction()
@@ -228,10 +207,7 @@ class Runs:
 def _run(
     ref: FileRef, marks: Fields, files: CorrectedFiles, listing: Listing
 ) -> RunRow:
-    """
-    The run of the file ``ref`` in the Runs view: at each field of ``marks``,
-    its value now, whether a person corrected it, and what the file says.
-    """
+    """The row of the file ``ref`` in the Runs view."""
     metadata = files.metadata(ref)
     original = files.source.metadata(ref)
     corrected = files.corrections(ref)

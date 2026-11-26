@@ -26,7 +26,7 @@ Our record IDs are random UUIDs already (`ess.apps.workspace`), so `client.publi
 **Software versions on every process node.** A process stores the versions of aiida-core and its plugin on its node when it starts ([process.py L786-789][version]).
 There, the worker that creates the node also runs it.
 Our workspace logs a record before it decides where the request runs, so only the finish can say which versions ran it.
-This bears on ADR 0002, Open ("what a finish records besides the status") and on software versions in provenance, which the README promises and the code lacks ([README, Provenance and publication](../README.md#provenance-and-publication)).
+This bears on the open question of what a finish records besides the status and on software versions in provenance, which the README promises and the code lacks ([README, Provenance](../README.md#provenance)).
 
 **A cache keyed on package versions reset at every upgrade.** Until v2.6 the cache hash included the aiida-core and plugin versions, so "the cache would essentially be reset each time AiiDA or any of the plugin packages would be updated".
 v2.6 removed them and gave plugins a `CACHE_VERSION` that the author bumps when behaviour changes ([CHANGELOG L1673-1679, L1747][cl-cache]).
@@ -41,7 +41,7 @@ The record then names a spec version that does not describe the code that ran.
 Provenance should at least say that the binding came from no installed package; AiiDA goes further and keeps the source.
 
 **An unrecorded mode came anyway.** Every process is recorded unless `store_provenance=False`, documented as "use with care" ([usage.rst L303][usage], [tricks_real_world_runs.rst L168][tricks]).
-For us, `select=` and `client.output` of an accumulator already make no record, and open question 4 asks for looks that compute without one ([README, Open questions](../README.md#open-questions)).
+For us, `select=` and `client.output` of an accumulator already make no record, and looks that compute without one are an open question.
 AiiDA shows the demand is real; keeping such a result a copy, never an input, keeps provenance whole without a "use with care".
 
 ## Deleting and exporting
@@ -73,7 +73,7 @@ Whether the workspace retries before it fails a record, or marks the failure so 
 The unreleased version says such checkpoints "cannot be continued after upgrading. Finish or terminate all active processes before upgrading" ([CHANGELOG L11-12][cl-head]).
 The FAQ says to restart the daemon after every code change ([faq.rst L29][faq]).
 Our workspace pickles nothing: after a restart it runs again, from history, the persisted pending records that had not started ([ADR 0002](../adr/0002-a-value-lives-while-something-keeps-it.md)).
-On an upgrade with work in flight, AiiDA's answer is to drain first, the orderly stop of ADR 0002, Open, and system story H2.
+On an upgrade with work in flight, AiiDA's answer is to drain first, the orderly stop of system story H2.
 Warm workers (scipp/essapps#27) hold imported code as AiiDA's daemon workers do, so a package upgrade must restart them.
 
 **A broker queue drifted from the database.** v1.0 made RabbitMQ mandatory for process control.

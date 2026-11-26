@@ -406,6 +406,33 @@ def test_a_value_whose_json_form_reads_back_as_another_is_refused(
     )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason='Submission accepts a validator that changes a valid value in a group '
+    'with a file, so a value written already converted is converted again',
+)
+def test_a_validator_that_changes_a_valid_value_is_refused_in_a_group_with_a_file() -> (
+    None
+):
+    class Placed(BaseModel):
+        run: RunFile
+        distance: float
+
+        @field_validator('distance')
+        @classmethod
+        def _metres(cls, millimetres: float) -> float:
+            return millimetres / 1000
+
+    class PlacedParams(BaseModel):
+        placed: Placed
+
+    with pytest.raises(ParamsError) as raised:
+        _stored(PlacedParams, 'placed', {'run': FILE, 'distance': 1500.0}, _named)
+    assert raised.value.errors == (
+        (('placed', 'distance'), 'has no JSON form that reads back as the value'),
+    )
+
+
 @pytest.mark.parametrize(
     ('model', 'name', 'value', 'loc'),
     [
@@ -630,6 +657,37 @@ def test_a_parameter_that_holds_a_reference_gets_no_local_paths_when_written() -
     )
     assert stored == {'run': FILE.model_dump(), 'sample': OUTPUT.model_dump()}
     assert looked_up == []
+
+
+def test_a_file_group_beside_a_reference_is_validated_when_the_request_runs() -> None:
+    class Measurement(BaseModel):
+        run: RunFile
+
+        @model_validator(mode='after')
+        def _nexus(self) -> 'Measurement':
+            if self.run.suffix != '.nxs':
+                raise ValueError('not a NeXus file')
+            return self
+
+    class Specimen(BaseModel):
+        measurement: Measurement
+        sample: Referenced[Sample]
+
+    class SpecimenParams(BaseModel):
+        specimen: Specimen
+
+    value = {'measurement': {'run': FILE}, 'sample': OUTPUT}
+    stored, _ = validate_request_value(
+        SpecimenParams, 'specimen', value, _named, lambda ref: Path('a.xml')
+    )
+    with pytest.raises(ParamsError, match='not a NeXus file'):
+        value_of(
+            SpecimenParams,
+            'specimen',
+            stored,
+            lambda ref: Sample(),
+            {FILE_ID: Path('a.xml')},
+        )
 
 
 class TaggedCentre(BaseModel):

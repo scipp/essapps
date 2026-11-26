@@ -1,27 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The batches of I(Q) of LoKI, on the toolbox of :mod:`ess.batch`. It
-needs the extra ``[loki-app]``.
+LoKI's row sources for :mod:`ess.batch`. It needs the extra ``[loki-app]``.
 
-A sample run is a row. The ``sample`` key of the metadata of its file names the
-sample, and pairs the run with the transmission run of the same sample::
-
-    {'file': 'run-1.nxs', 'run': 1, 'role': 'sample', 'sample': 'water'}
-    {'file': 'run-2.nxs', 'run': 2, 'role': 'transmission', 'sample': 'water'}
-
-The batches of the bank histogram, a stand-in for runs that esssans does not
-read yet, have a row per raw run, with no role (:func:`per_run`).
-
-:data:`SOURCES` gives an :class:`~ess.batch.Intake`, and :data:`STAGED`
-a :class:`~ess.batch.BatchManager`, the batches of I(Q). A batch without
-a manager keeps nothing::
-
-    Batch(client, IOFQ, label='iofq', table=rows_of(client, SAMPLE_RUNS), staged=True)
-
-The command takes the sources as ``essbatch -s
-ess.instruments.loki.batch:SOURCES``, and a source by its name, such as
-``essbatch -s ... rows sample-runs``.
+``essbatch`` accepts them as ``-s ess.instruments.loki.batch:SOURCES``, and one
+source by its name, such as ``essbatch -s ... rows sample-runs``.
 """
 
 import sys
@@ -37,17 +20,23 @@ from .specs import IOFQ
 
 def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
     """
-    A row for each sample run, in the order measured, keyed by its run, so that
-    a sample measured twice has two rows. The cells ``sample`` and
-    ``sample_transmission`` name the files; the notes are ``run``, the run
-    number, empty if the run is not a number, and ``name``, the sample's name.
-    Where several transmission runs have the sample's name, the last measured
-    is the row's. A sample run without a name has an empty transmission cell.
+    Returns a row per sample run, with the last transmission run of its sample.
 
-    The files are sorted by run number, since a file source lists them in no
-    promised order, and "the last measured" transmission run must not depend
-    on it.
+    Files with this metadata::
+
+        {'run': 1, 'role': 'sample', 'sample': 'water'}
+        {'run': 2, 'role': 'transmission', 'sample': 'water'}
+        {'run': 3, 'role': 'transmission', 'sample': 'water'}
+
+    make one row, keyed by the run::
+
+        {'1': {'run': 1, 'name': 'water', 'sample': <file of run 1>,
+               'sample_transmission': <file of run 3>}}
+
+    ``run`` is empty if the run is not a number.
     """
+    # A file source lists files in no promised order, and the last transmission
+    # run must not depend on it.
     files = sorted(files, key=_measured)
     transmissions: dict[object, str] = {}
     for f in files:
@@ -74,13 +63,11 @@ def pair_by_sample(files: Sequence[FileInfo]) -> pd.DataFrame:
 
 def per_run(files: Sequence[FileInfo]) -> pd.DataFrame:
     """
-    A row for each raw run, in the order measured, keyed by its run, or, for a
-    run that two files give, such as a run ingested twice, by the identity of
-    the file, so that each has a row. The cell ``run`` names the file. The
-    note ``name``, which names the row on the page and in the plot, is the
-    ``title`` of the file, and the note ``sample`` its sample, as the file
-    source gives them. A run needs no role, so this serves runs that no person
-    has marked yet.
+    Returns a row per raw run, in the order measured, with no role needed.
+
+    A row is keyed by its run, or by the file where two files have the same run,
+    such as a run ingested twice. ``NAME``, shown on the page and in the plot,
+    is the file's ``title``.
     """
     runs = Counter(str(f.metadata['run']) for f in files if 'run' in f.metadata)
 
@@ -109,7 +96,7 @@ def _run_number(f: FileInfo) -> int | None:
 
 
 def _measured(f: FileInfo) -> tuple[int, str]:
-    """The order measured: by run number; a file without one last, by identity."""
+    """The order measured: by run number, then files without one, by identity."""
     run = _run_number(f)
     return (sys.maxsize, f.ref.file) if run is None else (run, '')
 
@@ -134,4 +121,4 @@ RAW_RUNS = RowSource(
 SOURCES = {'sample-runs': SAMPLE_RUNS, 'raw-runs': RAW_RUNS}
 """The sources of LoKI's batches, by name."""
 STAGED = frozenset({IOFQ.name})
-"""A batch of I(Q) runs through one stage, so that the can is reduced once."""
+"""The specs whose batches run through one stage, so that the can is reduced once."""

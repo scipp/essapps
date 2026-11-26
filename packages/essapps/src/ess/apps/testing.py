@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Fakes for tests: a file source whose files a test makes appear, a store
-held in memory, clients that count the records they read or log the values they
-read, and bindings over plain functions.
+Fakes for tests: a file source, a store in memory, clients that count or
+record reads, and bindings over plain functions.
 """
 
 from __future__ import annotations
@@ -37,8 +36,9 @@ _CORRUPT = b'\x00corrupt'
 
 def read_file(path: Path) -> Any:
     """
-    The content of a file that :class:`FakeFiles` wrote; raises ``OSError``
-    for a corrupt file.
+    The content of a file that :class:`FakeFiles` wrote.
+
+    Raises ``OSError`` for a corrupt file.
     """
     content = path.read_bytes()
     if content == _CORRUPT:
@@ -48,20 +48,19 @@ def read_file(path: Path) -> Any:
 
 class FakeFiles:
     """
-    A file source over files in ``directory``.
+    A file source over JSON files in ``directory``.
 
     A file is identified by its run number, or by the PID of its SciCat
-    dataset if it has one. :meth:`measure` writes a file to ``directory``,
-    one per identity, ``run-1.json`` or the PID's, with the given content,
-    which must have a JSON form, and a workflow reads it with
-    :func:`read_file`. A run measured again keeps its identity and its
-    position in the order of measurement, and its file is written again. A
-    file is named by its run, its PID, or its path. Its metadata are the
-    proposal, the run, and the fields :meth:`measure` is given, such as
-    ``kind='mask'``; a file without ``kind`` is raw (see
-    :class:`~.files.Selector`). :meth:`corrupt` makes the file of one
-    identity unreadable, as a file cut short in transfer is: it has a path,
-    but :func:`read_file` cannot read it.
+    dataset if it has one. It is named by its run, its PID, or its path::
+
+        ref = files.measure(1, {'counts': 3}, kind='mask')  # writes run-1.json
+        files.metadata(ref)  # {'proposal': 'p1', 'run': 1, 'kind': 'mask'}
+
+    A workflow reads a file with :func:`read_file`. A run measured again keeps
+    its identity and its position in the order of measurement. A file without
+    ``kind`` is raw (see :class:`~.files.Selector`). :meth:`corrupt` makes a
+    file unreadable, as a file cut short in transfer is: it has a path, but
+    :func:`read_file` raises.
     """
 
     def __init__(self, proposal: str, directory: Path) -> None:
@@ -117,11 +116,12 @@ class FakeFiles:
 
 class CountingClient:
     """
-    Delegates to a client and counts the records its calls read: ``reads``
-    holds the number of records that :meth:`records` returned and that
-    :meth:`status`, :meth:`readable`, and :meth:`bound` were asked for, and,
-    under ``resolve``, the number of calls of :meth:`resolve` with one
-    template, as a batch resolves its settings.
+    Delegates to a client and counts the records its calls read.
+
+    ``reads['records']`` counts the records that :meth:`records` returned.
+    ``reads['status']``, ``reads['readable']`` and ``reads['bound']`` count the
+    records asked for. ``reads['resolve']`` counts the calls of :meth:`resolve`
+    with one template.
     """
 
     def __init__(self, client: Client) -> None:
@@ -156,9 +156,11 @@ class CountingClient:
 
 class RecordingClient:
     """
-    Delegates to a client and logs the reads of values: ``outputs`` holds the
-    record ID, output name, and ``select`` of each :meth:`output`, and
-    ``described`` the record ID and output name of each :meth:`describe`.
+    Delegates to a client and records the reads of values.
+
+    ``outputs`` holds the record ID, output name, and ``select`` of each
+    :meth:`output`, and ``described`` the record ID and output name of each
+    :meth:`describe`.
     """
 
     def __init__(self, client: Client) -> None:
@@ -186,12 +188,12 @@ class RecordingClient:
 
 class FakeStore:
     """
-    A store held in memory.
+    A store in memory.
 
-    It keeps a copy of each value written and returns a copy of it, as a
-    store that writes files reads back a new value each time; read without a
-    type, as :mod:`ess.apps.hdf5` stores it, which needs scipp. ``fill``
-    makes every write fail, as a full disk does, until ``free``.
+    It holds a copy of each value written, and returns a new copy at each read,
+    as a store that writes files would. Read without a type, a value is as
+    :mod:`ess.apps.hdf5` stores it, which needs scipp. ``fill`` makes every
+    write fail, as a full disk does, until ``free``.
     """
 
     def __init__(self) -> None:
@@ -228,13 +230,13 @@ class FakeStore:
 @dataclass
 class StagedFunction:
     """
-    A binding that makes stages, over a function that takes an instance of
-    the spec's params model and returns one of its outputs model, as
-    ``function_binding`` takes. A stage holds nothing: each call calls the
-    function. ``staged`` lists the blanks of each stage made, and
-    ``fail_next`` makes the next stage fail. Neither is guarded against calls
-    from several threads at once, which is fine for tests that read them
-    after the calls.
+    A binding that makes stages, over a function from the params model to the
+    outputs model, as for ``function_binding``.
+
+    A stage holds nothing: each call calls the function. ``staged`` lists the
+    blanks of each stage made, and ``fail_next`` makes the next stage fail.
+    Neither is thread-safe, which is fine for tests that read them after the
+    calls.
     """
 
     spec: Spec
@@ -284,12 +286,10 @@ class ListDriver:
 
 def list_driver(spec: Spec, function: Callable[[Any], BaseModel]) -> DriverBinding:
     """
-    A ``DriverBinding`` whose drivers hold the rows in lists (:class:`ListDriver`):
-    ``function`` takes the params, as ``function_binding`` takes, each table
-    as lists of every row so far.
+    A ``DriverBinding`` whose drivers hold the rows in lists (:class:`ListDriver`).
 
-    A fake for tests that need an accumulator over a plain function, not a
-    recommended driver: each read computes over every row again. A package
-    writes its own driver, which decides how rows combine.
+    ``function`` accepts the params, as for ``function_binding``, with each
+    table as the list of every row so far. Each read computes over every row
+    again, so this is a fake for tests, not a model for a package's driver.
     """
     return DriverBinding(spec, functools.partial(ListDriver, spec, function))

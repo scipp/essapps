@@ -536,6 +536,20 @@ def test_the_reduce_menu_reduces_the_rows_of_earlier_settings(
     }
 
 
+def test_reduce_them_again_in_the_settings_tab_reduces_the_rows_of_earlier_settings(
+    settings_changed: Any, client: Client, batch: Batch
+) -> None:
+    page = settings_changed
+    page.once('dialog', lambda dialog: dialog.accept())
+
+    page.click('#reduce-settings-changed')
+    client.wait(client.records())
+
+    page.wait_for_selector('.chip.st-done .n:text-is("2")')
+    assert page.is_hidden('#settings-changed')
+    assert batch.state()['3'].status == 'ready'
+
+
 def test_the_progress_strip_of_an_idle_reduce_button_has_no_width(
     settings_changed: Any,
 ) -> None:
@@ -1520,6 +1534,17 @@ def test_a_person_makes_a_batch_and_lands_on_its_page(
     assert page.is_hidden('#stop-follow')
 
 
+def test_the_form_new_batch_starts_with_the_source_and_columns_of_the_batch_shown(
+    page: Any,
+) -> None:
+    page.click('[data-view=batches]')
+    page.click('#new-batch-open')
+    page.wait_for_selector('#new-columns input[value=thickness]')
+
+    assert page.inner_text('#new-source option:checked') == 'from pairs'
+    assert page.is_checked('#new-columns input[value=thickness]')
+
+
 def test_a_batch_made_after_apply_starts_with_the_settings_applied(
     page: Any, batch: Batch, manager: BatchManager
 ) -> None:
@@ -2039,3 +2064,25 @@ def test_the_output_form_is_in_force_after_apply_and_holds_publishing_back_till_
     assert unfilled.startswith('The form names no owner, no contact email')
     assert held
     assert owner == 'Anna'
+
+
+def test_publish_is_disabled_while_a_publication_runs(publishing: Any) -> None:
+    page = publishing
+    page.check('#output-outputs input[value=total]')
+    page.fill('#output-owner', 'Anna')
+    page.fill('#output-email', 'anna@example.org')
+    page.click('#output-draft button.primary')
+    page.wait_for_selector('#output-draft:not(.changed)')
+    select(page, 'water')
+    kept = stop(page, 'publish')
+    page.once('dialog', lambda dialog: dialog.accept())
+
+    page.click('#publish')
+    page.wait_for_selector('#publish:disabled')
+    hint = page.inner_text('#publish-hint')
+    send(page, kept)
+
+    page.locator('#rows .tabulator-row', has_text='water').locator(
+        '[tabulator-field=published]'
+    ).filter(has_text='pid:').wait_for()
+    assert hint == 'Publishing…'

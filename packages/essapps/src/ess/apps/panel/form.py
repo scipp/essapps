@@ -3,18 +3,16 @@
 """
 A form for a pydantic model of params: the fields of :mod:`ess.apps.fields`, shown.
 
-This module only places widgets and connects their events. What a field holds, and
+This module places widgets and connects their events. What a field holds, and
 what is missing, is in :mod:`ess.apps.fields`.
 
-The form has a tab per parameter, with the tabs on the left, as
-esslivedata's dashboard has (scipp/esslivedata#1426). A parameter is labelled by
-the title of its tab. The same widgets serve a parameter, a field of a group at any
-depth, and the element of a list. At a field of a group, a choice and a table show
-in a card titled by the field, so that a nested group is a card of its fields.
+The form has a tab per parameter, with the tabs on the left, as in esslivedata's
+dashboard (scipp/esslivedata#1426). The same widgets serve a parameter, a field
+of a group at any depth, and an element of a list.
 
-A picker's option of nothing has the value ``UNSET``: Panel does not send a value
-of ``None`` to the browser when it first shows a picker, which then shows no
-option at all.
+The option of nothing in a picker has the value ``UNSET``, not ``None``. Panel
+does not send ``None`` to the browser when it first shows a picker, so the
+picker would show no option at all.
 
 A table is a ``Tabulator``, so a notebook loads Panel with
 ``pn.extension('tabulator')``.
@@ -52,9 +50,11 @@ def _bound(
     name: str = 'value',
 ) -> None:
     """
-    Run ``show`` now and whenever ``field`` changes, and give ``written`` what a
-    person sets at ``name`` of ``widget``. What ``show`` does to the widget does not
-    count, also where Panel moves a value that new options lack.
+    Runs ``show`` now and on each change of ``field``.
+
+    Passes to ``written`` each value a person sets at ``name`` of ``widget``. Changes
+    that ``show`` makes are not passed. This includes a value that Panel replaces
+    because the new options lack it.
     """
     showing = False
 
@@ -223,10 +223,7 @@ def _view(field: Field) -> Any:
 
 
 class Form(Fields):
-    """
-    The :class:`~ess.apps.fields.Fields` of a pydantic model, shown as tabs by
-    :meth:`panel`.
-    """
+    """The :class:`~ess.apps.fields.Fields` of a pydantic model, shown as tabs."""
 
     def __init__(
         self,

@@ -1,15 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Request-phase checks: what the workspace checks of a request, a template, a
-push, and the state of an accumulator before any data is read.
+The checks of the request phase that need neither the workspace's lock nor its
+history.
 
-The workspace checks a request in two phases (see ``workspace.py``): this module
-is the part of the request phase that needs neither the workspace's lock nor
-its history. What depends on history or on what the workspace keeps is the
-workspace's.
-:class:`Checks` holds the checks of one spec, one method for each thing
-checked::
+:class:`Checks` holds the checks of one spec::
 
     checks = Checks(IOFQ, files)
     request, reads = checks.request(request, proposal)  # a plain request
@@ -18,39 +13,14 @@ checked::
     rows, reads = checks.push(blanks, rows, proposal)
     problem = checks.state_problem(plain, blanks)  # at a read or a freeze
 
-The methods differ in what they hold each value against, since a template and
-a push give only some of the params:
+Each check returns the references to outputs in the values, with the type that
+their data must fit (:data:`ess.spec.validation.OutputReads`). The workspace
+checks them against what may be read, and with :func:`check_fit`.
+:func:`ess.spec.validation.validate_request_value` validates each value.
 
-- ``request``: each parameter by its field, and the table rules on its tables.
-- ``template``: each fixed value by its own field, and the table rules on the
-  fixed tables.
-- ``push``: each row by its table's element type. Whether a row repeats one the
-  table holds is the workspace's to check, which knows the table.
-- ``state``: the number of rows of each blank table, since each value was
-  checked when it was given.
-
-They share ``_values``, which validates a value by its request type (see
-:func:`ess.spec.validation.validate_request_value`), resolves each file with
-the file source, and returns what the record stores. Three choices in it follow
-from the call phase:
-
-- A parameter that holds no reference to an output is also validated whole by
-  the params model, with the local path of each file, so that the validators of
-  a group that holds a file run at submission.
-- A field that a model lacks is refused, since validating would drop it
-  silently.
-- The JSON form of a value must read back as the value, since the call phase
-  makes the value from it (see :func:`ess.spec.field_types.inline`).
-
-Each check returns the references to outputs in the values, each with its
-position and the type its data must fit (see
-:data:`ess.spec.validation.OutputReads`). The workspace checks each against what
-may be read (see :func:`check_fit`).
-
-The params model has no validators of its own, which
-:class:`~ess.spec.WorkflowSpec` refuses: a stage and a driver never get a whole
-params instance. The terms (group, file field, reference, table) and the
-rules of what a request may write are in ``packages/essspec/docs/params.md``.
+``docs/developer/accumulators.md``, "Validation", shows what each check holds a
+value against. ``packages/essspec/docs/params.md`` defines groups, file fields,
+references and tables.
 """
 
 from __future__ import annotations
@@ -96,8 +66,10 @@ class Checks:
 
     def request(self, request: Request, proposal: str) -> tuple[Request, OutputReads]:
         """
-        The request as the record holds it: names resolved, defaults filled
-        in, inline values in JSON's types; and the references to outputs in it.
+        The request as the record holds it, and the references to outputs in it.
+
+        File names are resolved, defaults filled in, and inline values are in
+        JSON's types.
         """
         spec = self.spec
         params, reads = self._values(_fixed(spec, request.params, ()), proposal)
@@ -108,14 +80,12 @@ class Checks:
         self, template: Template, proposal: str
     ) -> tuple[Template, dict[str, Any], OutputReads]:
         """
-        The template as given, with file names resolved, as the stage or
-        the accumulator holds it, its fixed values by name, defaults filled
-        in, and the references to outputs in these.
+        The template as the stage or accumulator holds it, its fixed values by
+        name, and the references to outputs in these.
 
-        A blank is a parameter, a table among them. A parameter in neither
-        the values nor the blanks takes its default, so it must have one. Each
-        fixed value is checked by its own field, and the table rules hold on
-        the fixed tables.
+        The template has file names resolved. The fixed values also have
+        defaults filled in. A parameter in neither the values nor the blanks
+        takes its default, so it must have one.
         """
         spec, blanks = self.spec, template.blanks
         given = {n: v for n, v in template.params.items() if n not in blanks}
@@ -128,13 +98,12 @@ class Checks:
         self, blanks: Collection[str], rows: Mapping[str, Any], proposal: str
     ) -> tuple[dict[str, list[Any]], OutputReads]:
         """
-        The rows of a push by the name of their table, as the log holds them,
-        and the references to outputs in them.
+        The rows of a push by table, as the log holds them, and the references
+        to outputs in them.
 
-        A push gives one or more rows of each of one or more of the
-        ``blanks``, tables. Each row is checked by its table's element type,
-        as a request's is. Whether a row repeats one the table holds is the
-        workspace's to check, which knows the table (see :func:`distinct`).
+        Does not check whether a row repeats one that its table holds. The
+        workspace checks this with :func:`distinct`, since only it knows the
+        table.
         """
         if not rows:
             raise SubmitError.at((), 'a push gives rows of a blank table, not none')
@@ -149,13 +118,12 @@ class Checks:
 
     def state_problem(self, plain: Request, blanks: Collection[str]) -> str | None:
         """
-        Why the plain request of an accumulator's state would be refused, or
+        Why the plain request of an accumulator's state would be rejected, or
         ``None``.
 
-        Each value was checked by its field when it was given, and the params
-        model has no validators of its own, so this checks the rest: the
-        number of rows of each table among the ``blanks``, by its length
-        constraints.
+        Checks only the number of rows of each table in ``blanks``. Each value
+        was checked when it was given, and the params model has no validators
+        of its own, which :class:`~ess.spec.WorkflowSpec` rejects.
         """
         try:
             _lengths(self.spec, plain.params, blanks)
@@ -166,10 +134,7 @@ class Checks:
     def _values(
         self, values: Mapping[str, Any], proposal: str
     ) -> tuple[dict[str, Any], OutputReads]:
-        """
-        ``values`` by name as the record holds them, and the references to
-        outputs in them (see :meth:`_value`).
-        """
+        """``values`` as the record holds them, and the references in them."""
         stored, reads = {}, []
         for name, value in values.items():
             stored[name], found = self._value(name, value, proposal)
@@ -177,11 +142,7 @@ class Checks:
         return stored, reads
 
     def _value(self, name: str, value: Any, proposal: str) -> tuple[Any, OutputReads]:
-        """
-        The value of parameter ``name`` as the record holds it, the JSON form
-        of an inline value with each file resolved, and the references to
-        outputs in it (see :func:`ess.spec.validation.validate_request_value`).
-        """
+        """The value of ``name`` as the record holds it, and the references in it."""
         try:
             return validation.validate_request_value(
                 self.spec.params,
@@ -196,9 +157,9 @@ class Checks:
 
     def _path(self, name: str, ref: FileRef) -> Path:
         """
-        The local path of ``ref``, a file of parameter ``name``. The file
-        source raising ``OSError``, such as a catalogue that timed out,
-        refuses the file as :meth:`_file` does.
+        The local path of ``ref``, a file of parameter ``name``.
+
+        ``OSError`` from the file source rejects the file, as in :meth:`_file`.
         """
         try:
             return self._files.path(ref)
@@ -209,14 +170,14 @@ class Checks:
 
     def _file(self, name: str, marker: File, proposal: str) -> str:
         """
-        The identity of the file ``name``, which must be known, readable by
-        ``proposal``, and fit ``marker``; raises ``ValueError`` otherwise.
+        The identity of the file ``name``.
 
-        The file source raising ``OSError``, such as a mount gone or a
-        catalogue that timed out, refuses the file, as an unknown one is: the
-        value cannot be checked, and a refusal touches only the request, or
-        the row of a batch, that names the file. Anything else it raises is a
-        defect and is raised.
+        Raises ``ValueError`` unless the file is known, readable by
+        ``proposal``, and fits ``marker``. ``OSError`` from the file source,
+        such as when a mount is gone, rejects the file as one that cannot be
+        read. Then the value cannot be checked, and only the request that names
+        the file is rejected. Anything else the file source raises is a defect
+        and propagates.
         """
         ref = FileRef(file=name)
         try:
@@ -238,11 +199,12 @@ class Checks:
 
 def check_fit(spec: Spec, ref: OutputRef, tp: Any, loc: Loc) -> None:
     """
-    Refuse a reference to an output that ``spec`` lacks, or whose data do
-    not fit ``tp``. A reference with a key names one element of an output, of
-    the output's element type, and the key of an element of a list is an
-    integer in its canonical form, such as ``'0'`` or ``'12'``, not
-    ``'012'``.
+    Raises ``SubmitError`` if ``spec`` lacks the referenced output, or if its
+    data do not fit ``tp``.
+
+    A reference with a key refers to one element of an output, of the output's
+    element type. The key of an element of a list is an integer in canonical
+    form, such as ``'12'`` but not ``'012'``.
     """
     field = spec.outputs.model_fields.get(ref.output)
     if field is None:
@@ -271,9 +233,11 @@ def distinct(
 ) -> dict[bytes, int]:
     """
     The ``rows`` of ``table`` after the rows ``seen``, each by its JSON form,
-    with its index. Refuses a row equal to one seen or to an earlier one: a
-    reference by its fields, such as a file's identity, and a value given
-    inline by its JSON form.
+    with its index.
+
+    Raises ``SubmitError`` for a row equal to a seen or an earlier one. Rows
+    are compared by JSON form, so a reference compares by its fields, such as
+    a file's identity.
     """
     new: dict[bytes, int] = {}
     for i, row in enumerate(rows, start=len(seen)):
@@ -289,10 +253,7 @@ def distinct(
 def _fixed(
     spec: Spec, values: Mapping[str, Any], blanks: Collection[str]
 ) -> dict[str, Any]:
-    """
-    The values of a request or a template by name, with the defaults of the
-    parameters in neither ``values`` nor ``blanks`` (see :func:`fixed_values`).
-    """
+    """``values``, with the default of each parameter in neither it nor ``blanks``."""
     try:
         return fixed_values(spec, values, blanks)
     except ParamsError as error:
@@ -300,21 +261,14 @@ def _fixed(
 
 
 def _rows(spec: Spec, values: Mapping[str, Any], tables: Collection[str]) -> None:
-    """
-    Refuse a table of ``tables`` whose number of rows breaks its length
-    constraints, or with a row repeated; ``values`` by name, as the record
-    holds them.
-    """
+    """Raises ``SubmitError`` for a table of a wrong length or with a repeated row."""
     _lengths(spec, values, tables)
     for table in tables:
         distinct(table, values.get(table) or [], {})
 
 
 def _lengths(spec: Spec, values: Mapping[str, Any], tables: Iterable[str]) -> None:
-    """
-    Refuse a table of ``tables`` whose number of rows breaks its length
-    constraints, such as a table that needs a row without one.
-    """
+    """Raises ``SubmitError`` for a table whose length breaks its constraints."""
     for table in tables:
         n = len(values.get(table) or [])
         if need := _length_problem(spec, table, n):
@@ -324,10 +278,7 @@ def _lengths(spec: Spec, values: Mapping[str, Any], tables: Iterable[str]) -> No
 
 
 def _length_problem(spec: Spec, name: str, n: int) -> str | None:
-    """
-    The length constraint of the list parameter ``name`` that ``n`` rows
-    break, such as ``'at least 1'``, or ``None``.
-    """
+    """The constraint that ``n`` rows of ``name`` break, such as ``'at least 1'``."""
     for limit in spec.params.model_fields[name].metadata:
         if isinstance(limit, MinLen) and n < limit.min_length:
             return f'at least {limit.min_length}'

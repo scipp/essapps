@@ -1,13 +1,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-What an application decides about plots before it draws any, which needs no
-widget library: which dimensions of an array get a slider, and which values a plot
-configured for a spec reads.
+Decisions about plots that need no widget library.
 
-An application learns what an output is from :meth:`~ess.apps.Client.describe`,
-which reads no array, and reads the part of an array that it draws with
-``select=`` (see :meth:`~ess.apps.Client.output`).
+Which dimensions of an array get a slider, and which values a plot configured
+for a spec reads.
 """
 
 from __future__ import annotations
@@ -28,11 +25,11 @@ class Plot:
     """
     A plot configured for the records of a spec.
 
-    ``function`` takes the record's outputs, as an instance of ``spec.outputs``, and
-    returns a figure. ``inputs`` names params that hold a reference to a whole output,
-    each passed to ``function`` by that name as the value it references. So a workflow
-    with a small output, such as a mask, draws it on the large value that it was
-    computed from, such as a detector, which its record names::
+    ``function`` accepts the record's outputs, as an instance of ``spec.outputs``,
+    and returns a figure. Each param in ``inputs`` refers to a whole output.
+    ``function`` receives the value of that output as a keyword argument named as
+    the param. For example, a plot draws a mask on the detector image that the
+    mask was computed from::
 
         Plot(masks_on_image, inputs=('detector',))
 
@@ -44,15 +41,14 @@ class Plot:
 
 def read_inputs(plot: Plot, client: Client, record: Record) -> dict[str, Any]:
     """
-    The value of each input of ``plot`` that the request of ``record`` references.
+    The value of each input of ``plot`` that the request of ``record`` refers to.
 
     Raises
     ------
     ValueError
-        If a param holds anything but a reference to a whole output.
+        If a param holds anything except a reference to a whole output.
     NotReadable
-        If the output is no longer readable, which names the param: computing the
-        output again makes a new record, which this record does not reference.
+        If the output is no longer readable.
     """
     values = {}
     for name in plot.inputs:
@@ -71,8 +67,5 @@ def read_inputs(plot: Plot, client: Client, record: Record) -> dict[str, Any]:
 
 
 def slider_dims(sizes: Mapping[str, int]) -> list[str]:
-    """
-    The dimensions of an array that get a slider: all but the last two, which
-    are drawn. An array of one or two dimensions has none.
-    """
+    """The dimensions of an array that get a slider: all but the last two."""
     return list(sizes)[:-2]

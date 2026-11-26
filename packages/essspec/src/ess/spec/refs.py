@@ -13,13 +13,10 @@ request's params. The value of ``"@ref"`` names its kind::
 The first two are references to an output: of a record, and of one element
 of a list or dict output of a record. The last is the JSON form of a file
 (see :class:`~ess.spec.parameters.File`). Since the key marks a reference
-wherever it is, code that reads a record lists its references and files
-without the spec: :func:`iter_refs` finds each one, and :func:`map_refs`
-replaces each one.
-
-Where a request may write each kind is stated in
-``packages/essspec/docs/params.md``. Turning a reference into the data a
-workflow takes is the business of whatever runs the workflow.
+wherever it is, code that reads a record finds its references and files
+without the spec, with :func:`iter_refs` and :func:`map_refs`.
+``packages/essspec/docs/params.md`` states where a request may write each
+kind.
 """
 
 from __future__ import annotations
@@ -33,10 +30,7 @@ from pydantic.config import JsonDict
 
 
 def _kind_required(schema: JsonDict) -> None:
-    """
-    Require ``"@ref"`` in a reference's JSON schema: an object without it is
-    not a reference.
-    """
+    """Require ``"@ref"`` in a reference's JSON schema."""
     required = schema.get('required', [])
     schema['required'] = ['@ref', *(required if isinstance(required, list) else [])]
 
@@ -44,9 +38,8 @@ def _kind_required(schema: JsonDict) -> None:
 class _Ref(BaseModel, frozen=True):
     """
     A reference. Its field ``kind`` is the key ``"@ref"`` of its JSON form,
-    in every dump, the log's among them, and its JSON schema requires it.
-    Each class has one kind, so a reference made in Python does not give it.
-    A field the class lacks is refused.
+    in every dump, and its JSON schema requires it. Each class has one kind,
+    so a reference made in Python omits it.
     """
 
     model_config = ConfigDict(
@@ -59,9 +52,7 @@ class OutputRef(_Ref, frozen=True):
     Output ``output`` of record ``record``, or one element ``key`` of it, if
     the output is a list or a dict.
 
-    The identity ``record`` is opaque to the spec. In a request, the framework
-    refuses the ID of an accumulator in ``record``: a request references the
-    record of the accumulator's freeze instead.
+    The identity ``record`` is opaque to the spec.
     """
 
     kind: Literal['output'] = Field(default='output', alias='@ref', repr=False)
@@ -109,7 +100,7 @@ _KINDS: dict[str, type[Ref]] = {'output': OutputRef, 'file': FileRef}
 def as_ref(value: Any) -> Ref | None:
     """
     The reference a plain value denotes, if it is one: a dict with the key
-    ``"@ref"``. Raises ``ValueError`` if that names no kind of reference, or
+    ``"@ref"``. Raises ``ValueError`` if its value is no kind of reference, or
     the other fields do not fit the kind.
     """
     if isinstance(value, Ref):
@@ -149,7 +140,7 @@ def loc_text(loc: Loc) -> str:
 
 class ParamsError(ValueError):
     """
-    Params that are refused, with each reason at its position: ``errors`` lists
+    Params that are rejected, with each reason at its position: ``errors`` lists
     ``(loc, msg)`` pairs, as pydantic's errors give them, and the message
     joins them, such as ``runs[1]: ...; sample: a required parameter, not
     given``.
@@ -211,7 +202,7 @@ def iter_refs(params: Mapping[str, Any]) -> Iterator[tuple[Loc, Ref]]:
 def map_refs(params: Mapping[str, Any], fn: Callable[[Ref], Any]) -> dict[str, Any]:
     """
     The params of a request, by name, with each reference replaced by
-    ``fn(ref)``; the params are as :func:`iter_refs` takes them, and any other
+    ``fn(ref)``; the params are as :func:`iter_refs` accepts them, and any other
     value is kept. A malformed reference raises :class:`ParamsError` at its
     position.
     """

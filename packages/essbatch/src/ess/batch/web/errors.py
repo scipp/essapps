@@ -1,41 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-How the web layer refuses a request, and says why: :class:`Rejected` (a 422
-with a message) or :class:`NotFound` (a 404). :class:`~.pages.Pages` and
-:class:`~.page.Page` raise them; :mod:`.api` answers them.
+The exceptions by which the web layer rejects a request, and the messages made
+of exceptions.
 
-The batch layer refuses with exceptions, and the page says each as a
-sentence for a person:
+:mod:`.api` returns a :class:`Rejected` as a 422 with its message, and a
+:class:`NotFound` as a 404. A message adds what the person asked for, such as
+"The batch was not made: ", to the text of the exception as it is. So the page
+copies no rule of the batch layer.
 
-======================================  ==================================
-raised by the batch layer               said
-======================================  ==================================
-``ValueError``                          its text, as it is
-                                        (:func:`request_error_text`)
-``KeyError``                            its first argument
-                                        (:func:`request_error_text`)
-:class:`~ess.batch.DefinitionWriteError`             "The change was not kept: ..."
-                                        (:func:`reject_on_write_error`)
-======================================  ==================================
-
-A reason at a field of the page is said with the title of the field
-(:func:`titled_field_error`), as :func:`ess.apps.errors.field_error_text`
-words it: "Thickness is missing".
-
-So the page copies no rule of the batch layer: it adds what the person
-asked for, such as "The batch was not made: ", and says the rest as given.
-
-Code of the application, such as a source, the file source or a drawing,
-may raise anything; the page says it and keeps working
-(:func:`ess.apps.errors.error_text`, which the command ``essbatch`` uses too).
-A ``ValueError`` or an ``OSError``, such as a mount that went away, is a
-refusal, said as its text; a pydantic ``ValidationError``, such as of
-metadata that the code validates, as each reason at its field. Anything else
-is a defect of that code, and is said with its type, so that a person can
-tell: ``RuntimeError: boom``, ``KeyError: 'run'``. A request that runs such
-code says it with :func:`reject_on_error`; the listing of the files, the step of
-Follow and the plot show it in place of what they could not give.
+Code of the application, such as a row source, may raise anything.
+:func:`reject_on_error` turns any exception into a :class:`Rejected`, worded by
+:func:`ess.apps.errors.error_text`, which names the type of an unexpected
+exception.
 """
 
 from __future__ import annotations
@@ -50,7 +27,7 @@ from . import forms
 
 
 class Rejected(Exception):
-    """A request that cannot be done, with what to tell the person."""
+    """A rejected request, with the message for the person."""
 
 
 class NotFound(Exception):
@@ -58,18 +35,14 @@ class NotFound(Exception):
 
 
 def titled_field_error(title: str, message: str) -> str:
-    """
-    A reason at the field ``title``, as a sentence
-    (:func:`~ess.apps.errors.field_error_text`).
-    """
+    """A reason at the field ``title`` as a sentence: "Thickness is missing"."""
     return field_error_text(title, forms.message(message))
 
 
 def request_error_text(error: Exception) -> str:
     """
-    What a ``ValueError``, ``OSError`` or ``KeyError`` of a request says,
-    without its type or quotes: a ``KeyError`` as its first argument, the
-    others as :func:`~ess.apps.errors.error_text` says them.
+    The message of a ``ValueError``, ``OSError`` or ``KeyError``, without its
+    type or quotes. For a ``KeyError``, it is the first argument.
     """
     if isinstance(error, KeyError) and error.args:
         return str(error.args[0])
@@ -79,11 +52,12 @@ def request_error_text(error: Exception) -> str:
 @contextmanager
 def reject_on_error(doing: str = '') -> Iterator[None]:
     """
-    A block that runs code of the application, such as a source, and so
-    may raise anything: a write that the definitions refuse raises
-    :class:`Rejected` as :func:`reject_on_write_error` says it, and any other
-    exception as ``'<doing>: <error_text>.'``, or as the sentence of
-    :func:`error_text` if ``doing`` is empty (:func:`error_text`).
+    A block that runs code of the application, and so may raise anything.
+
+    An exception becomes a :class:`Rejected` with the message
+    ``'<doing>: <error_text>.'``, or the sentence of :func:`error_text` if
+    ``doing`` is empty. A rejected write of the definitions becomes the
+    message of :func:`reject_on_write_error`.
     """
     try:
         with reject_on_write_error():
@@ -99,8 +73,8 @@ def reject_on_error(doing: str = '') -> Iterator[None]:
 @contextmanager
 def reject_on_write_error() -> Iterator[None]:
     """
-    A block whose writes to the definitions, if refused
-    (:class:`~ess.batch.DefinitionWriteError`), raise :class:`Rejected`.
+    A block in which a :class:`~ess.batch.DefinitionWriteError` raises
+    :class:`Rejected`.
     """
     try:
         yield

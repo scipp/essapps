@@ -1,34 +1,9 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-SciCat as a file source and as the place results are published. It needs the
-extra ``scicat`` (scitacean).
+SciCat as a file source and as the place where results are published.
 
-:class:`ScicatFiles` lists the raw datasets of a proposal as files, from the
-catalogue's records alone, so listing runs downloads nothing.
-:func:`scan_catalogue` writes them as the table of a workspace folder.
-
-:func:`publish` makes one derived dataset of one completed record: its files
-are the outputs written beforehand, and the rest is read from the record and
-the workspace::
-
-    input_datasets      the catalogue identifiers of the files the record read,
-                        also through upstream records (ADR 0010); other files,
-                        such as masks, are listed in scientific_metadata
-    proposal_ids        the workspace's proposal, which is also the owner group
-    instrument_ids      the catalogue's instrument
-    used_software       the Python packages installed now (installed_software)
-    scientific_metadata the spec, the request and the record's ID
-
-A person gives the rest as :class:`~ess.apps.writers.DatasetMetadata`.
-:class:`Catalogue` says where to publish: a ``scitacean.Client``, real or
-``scitacean.testing.client.FakeClient``, with its file transfer. Whether the
-files are copied on a shared file system or sent over SFTP is the choice of
-that transfer, not of this module.
-
-The software is that of the process that publishes, not of the one that
-reduced, since a record names no software versions: correct while one
-install reduces and publishes.
+It needs the extra ``scicat`` (scitacean).
 """
 
 from __future__ import annotations
@@ -76,11 +51,11 @@ class Catalogue:
     instrument:
         The instrument of the workspace, such as ``'loki'``.
     folder:
-        The folder on the file server that holds the files of a dataset, as a
-        pattern of ``proposal``, ``instrument`` and ``record``. The default is
-        that of ESS. A file transfer made with a ``source_folder`` of its own
-        puts the files there instead, so that the datasets of one proposal may
-        share a folder; give the client a transfer without one.
+        The folder on the file server for the files of a dataset, as a pattern
+        of ``proposal``, ``instrument`` and ``record``. The default is that of
+        ESS. A file transfer with a ``source_folder`` of its own puts the files
+        there instead, so that the datasets of one proposal would share a
+        folder. Give the client a transfer without one.
     """
 
     client: ScicatClient
@@ -90,10 +65,11 @@ class Catalogue:
 
 def principal_investigator(catalogue: Catalogue, proposal: str) -> Person | None:
     """
-    The principal investigator of ``proposal``, as the catalogue says, whom
-    the ESS ingestor makes owner and contact of each raw dataset; ``None`` if
-    the catalogue cannot say, such as without a login or for a proposal it
-    lacks, or if it cannot be reached; that is logged.
+    The principal investigator of ``proposal``, as the catalogue states.
+
+    The ESS ingestor makes this person the owner and contact of each raw
+    dataset. Returns ``None`` and logs a warning if the catalogue cannot tell,
+    such as without a login or when it cannot be reached.
     """
     try:
         found = catalogue.client.get_proposal(proposal)
@@ -127,14 +103,16 @@ def publish(
     format: str,
 ) -> str:
     """
-    Upload ``files``, written from ``record`` in ``format``, the name of a
-    writer (:class:`ess.apps.writers.Writer`), as a new derived dataset, and
-    return its catalogue identifier, as ``pid:<pid>`` like the files a record
-    names (ADR 0010). The dataset keeps the format, since files of different
-    formats may have the same names, such as ``iofq.h5``.
+    Uploads ``files`` as a new derived dataset of ``record``, and returns its identity.
 
-    Raises what the SciCat client raises, such as ``pydantic.ValidationError``
-    for a dataset that lacks a required field.
+    The identity is ``pid:<pid>``, as for a file (ADR 0010). The input datasets
+    are the files with a catalogue identifier that the record read, also
+    through upstream records. The used software is that of this process, since
+    a record holds no software versions.
+
+    ``format`` is the name of the writer of ``files``. The dataset stores it,
+    since files of two formats may have the same names, such as ``iofq.h5``.
+    Raises what the SciCat client raises, such as ``pydantic.ValidationError``.
     """
     provenance = client.provenance(record)
     identities = [f.file for f in provenance.files()]
@@ -202,46 +180,42 @@ class _Failure:
 
 class ScicatFiles:
     """
-    A file source over the raw datasets of ``proposal`` in SciCat, one file per
-    dataset, read with the login of ``client``::
+    A file source over the raw datasets of ``proposal`` in SciCat, one file each.
+
+    The catalogue is read with the login of ``client``::
 
         ScicatFiles(scitacean.Client.login('staging.ess'), '336349')
 
     A file is identified by the PID of its dataset, ``pid:20.500.12269/<uuid>``,
     and named by it or by its run, ``run:385``. Its metadata come from the
-    dataset's record, not from the file::
+    dataset's record in the catalogue::
 
         kind      'raw'
-        run       runNumber, as text, as files.csv gives it
+        run       runNumber, as text, as in files.csv
         pid       the PID
         proposal  the proposal
         sample    sample_name of the scientific metadata, if given
         title     datasetName, without the end that the ingestor adds,
                   ' - Proposal:<proposal> - Run: <run>'
 
-    The catalogue does not say what a run is for, so no file has a ``role``;
-    :class:`~ess.batch.CorrectedFiles` lets a person give one. A run number
-    that two datasets give names neither, and is logged.
+    The catalogue does not state what a run is for, so no file has a ``role``.
+    :class:`~ess.batch.CorrectedFiles` lets a person add one.
 
-    :meth:`list` asks the catalogue each time, so that a run ingested since is
-    listed. :meth:`resolve` and :meth:`metadata` answer from the last listing,
-    and ask again for a file not in it. :meth:`path` asks once per file for the
-    file list of its dataset, and gives the path that the ingestor recorded,
-    such as ``/ess/raw/loki/<proposal>/raw/<file>.hdf``. Nothing is
-    downloaded, so a workflow reads the file only on a machine where that path
-    is mounted; elsewhere the workflow fails, not the listing.
+    :meth:`list` queries the catalogue on each call, so that it finds a run
+    ingested since. :meth:`resolve` and :meth:`metadata` use the last listing,
+    and query again for a file not in it. :meth:`path` queries the file list of
+    a dataset once, and returns the path that the ingestor recorded, such as
+    ``/ess/raw/loki/<proposal>/raw/<file>.hdf``. Nothing is downloaded. A
+    workflow can read the file only on a machine where that path is mounted.
 
-    A page asks for the files of all its rows every second. So what the
-    catalogue said no to, or did not answer, is not asked again for
-    ``max_age`` seconds: a name the listing lacks is looked for in a listing
-    older than that only; a file list without one NeXus file is kept as
-    such; and after a query that was not answered, such as at a timeout or
-    once the login expired, the catalogue is not asked at all. The load is
-    then a few queries per ``max_age``, however many rows a page has.
+    A page asks for the files of all its rows every second. So a query that
+    failed is not repeated for ``max_age`` seconds: for a name that the listing
+    lacks, for the file list of a dataset without one NeXus file, and for any
+    query after one that was not answered, such as after a timeout.
 
-    Raises ``OSError`` if the catalogue cannot be reached, refuses a query, or
-    the login expired, as :class:`~ess.apps.protocol.FileSource` requires, and
-    from :meth:`path` if the dataset does not list exactly one NeXus file.
+    Raises ``OSError`` if the catalogue cannot be reached, rejects a query, or
+    the login expired. :meth:`path` also raises it if the dataset does not list
+    exactly one NeXus file.
     """
 
     def __init__(
@@ -302,7 +276,7 @@ class ScicatFiles:
         return found
 
     def _read(self) -> _Listing:
-        """Ask the catalogue for the raw datasets, and keep them as the listing."""
+        """Queries the catalogue for the raw datasets, and holds them as the listing."""
         fields = {'type': 'raw', 'proposalIds': [self._proposal]}
         found = self._ask(lambda: self._client.scicat.query_datasets(fields))
         found.sort(key=_measured)
@@ -342,8 +316,7 @@ class ScicatFiles:
     def _title(self, dataset: DownloadDataset) -> str | None:
         """
         The name of ``dataset`` without the end the ingestor adds, which holds
-        what the metadata hold anyway: only that exact end is cut, so a name
-        of another form stays whole.
+        what the metadata hold anyway.
         """
         added = f' - Proposal:{self._proposal} - Run: {dataset.runNumber}'
         name = dataset.datasetName
@@ -351,8 +324,10 @@ class ScicatFiles:
 
     def _ask[T](self, query: Callable[[], T]) -> T:
         """
-        The answer to ``query``; raises ``OSError`` if it is not answered, and
-        for ``max_age`` from then on without asking.
+        The answer to ``query``.
+
+        Raises ``OSError`` if it is not answered, and then for ``max_age``
+        without asking.
         """
         if (failed := self._unanswered) is not None and self._recent(failed.time):
             raise OSError(failed.reason)
@@ -374,8 +349,9 @@ class ScicatFiles:
 
 def _nexus_file(dataset: DownloadDataset) -> Path:
     """
-    The path of the one NeXus file that ``dataset``, with its file list,
-    lists; raises ``ValueError`` if it lists none or several.
+    The path of the one NeXus file in the file list of ``dataset``.
+
+    Raises ``ValueError`` if the list holds none or several.
     """
     listed = [
         PurePosixPath(f.path)
@@ -393,25 +369,22 @@ def _nexus_file(dataset: DownloadDataset) -> Path:
 
 
 def _measured(dataset: DownloadDataset) -> tuple[bool, datetime, str]:
-    """The order measured: by start time; a dataset without one last, by PID."""
+    """The order of measurement: by start time, then datasets without one by PID."""
     start = dataset.startTime or datetime.min.replace(tzinfo=UTC)
     return (dataset.startTime is None, start, str(dataset.pid))
 
 
 def scan_catalogue(files: ScicatFiles) -> list[dict[str, Any]]:
     """
-    A row of ``files.csv`` for each raw file that ``files`` lists, in the order
-    measured, as :func:`ess.apps.folder.scan_folder` gives for the files of a
-    folder: ``file``, the path that the ingestor recorded, and the metadata
-    (see :class:`ScicatFiles`). A folder with this table identifies each file
-    by its ``pid``, as ``files`` does, so records name the same files either
-    way. The table opens only where the paths are mounted, since
-    :class:`~ess.apps.FolderFiles` refuses a file that does not exist.
+    The rows of ``files.csv`` for the raw files that ``files`` lists.
 
-    It asks the catalogue for the file list of each dataset. A dataset whose
-    path cannot be given is left out, with a warning, as ``scan_folder`` leaves
-    out a file it cannot read. Raises ``OSError`` if the catalogue does not
-    answer the listing.
+    ``file`` is the path that the ingestor recorded, and the rest is the
+    metadata. A folder with this table identifies each file by its ``pid``, as
+    ``files`` does. The table opens only where the paths are mounted, since
+    :class:`~ess.apps.FolderFiles` rejects a file that does not exist.
+
+    A dataset whose path cannot be found is left out with a warning. Raises
+    ``OSError`` if the catalogue does not answer the listing.
     """
     rows = []
     for ref in files.list(Selector()):

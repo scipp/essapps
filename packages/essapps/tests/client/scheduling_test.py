@@ -223,6 +223,40 @@ def test_a_failed_append_wakes_what_waits(
         workspace.close()
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason='After a failed append stops the workspace, its workers still append to '
+    'the log',
+)
+def test_a_stopped_workspace_appends_nothing_more_to_its_log(
+    files: FakeFiles, loading: threading.Event
+) -> None:
+    entered = threading.Event()
+
+    def load(params: toys.Sample) -> toys.LoadOutputs:
+        entered.set()
+        loading.wait(timeout=5)
+        return toys.load_run(params)
+
+    log = FullDisk()
+    bind = [function_binding(toys.LOAD, load)]
+    workspace = Workspace(proposal='p1', files=files, bind=bind, log=log)
+    client = Client(workspace, submitter='anna')
+    loading.clear()
+    client.submit(toys.load_request(1))
+    assert entered.wait(timeout=5)  # its start is logged
+    log.full = True
+    with pytest.raises(OSError, match='no space left on device'):
+        client.submit(toys.load_request(2))
+    events = len(log)
+    log.full = False  # space freed
+    loading.set()
+
+    with pytest.raises(RuntimeError, match='no space left on device'):
+        workspace.close()  # waits for the workflow running
+    assert len(log) == events
+
+
 def test_a_failed_append_while_closing_lets_go_and_raises(
     files: FakeFiles, bindings: list[Binding], loading: threading.Event
 ) -> None:

@@ -1,30 +1,24 @@
 # Stages and accumulators
 
+For a client author who tunes a parameter or sums runs.
+After reading you can use stages and accumulators, and know what a read of an accumulator waits for.
+
 A plain request loads its runs again each time it is submitted.
 Tuning `reduction.bins` over three values loads the sample three times, and adding a run to a sum of a hundred runs reduces all hundred again.
-Stages and accumulators keep what such work computes in the workspace's memory between requests:
+Stages and accumulators hold what such work computes in the workspace's memory between requests:
 
-| | Made from | Each call gives | Keeps | Needs a binding that |
+| | Made from | Each call specifies | Holds | Needs a binding such as |
 |---|---|---|---|---|
-| stage | a template | values of the blanks | the part that depends only on the fixed values | makes stages, such as `PipelineBinding` |
-| accumulator | a template whose blanks are tables | rows of one or more tables (a *push*) | the sum, or whatever its driver holds, over the rows so far | makes drivers, such as `DriverBinding` |
+| stage | a template | values of the blanks | what depends only on the fixed values | `PipelineBinding` |
+| accumulator | a template whose blanks are tables | rows of tables (a *push*) | what its driver holds over the rows so far | `DriverBinding` |
 
-Both make records that are identical to the records of plain requests with the same values (see Symmetries).
-The workspace keeps a stage or an accumulator until a client releases it or the workspace closes.
-Every client that holds a stage or an accumulator may call through it, push into it, and read it.
-No client call lists them or reopens one by its ID, and they are not in the changes.
-So a second client of a workspace reaches the stages and accumulators of the first only if it is handed them ([README, open question 9](README.md#open-questions)).
-Making one over a binding that does not serve it is refused.
-[ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) give the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) gives the binding's side of the contract.
-
-**In short:**
-
-- A call through a stage, and every state of an accumulator, has a plain request. The record of a stage call, and of a freeze, is the record of that request.
-- A push returns once logged. The workspace adds it later, in the order logged.
-- `client.output(acc, ...)` copies the *logged state*, state n for the n pushes logged so far, and makes no record.
-- Push n+1 waits until everyone reading state n is done, so no reader ever sees a value change.
-- `freeze` turns the logged state into an ordinary record, without a copy. A request references that record, never the accumulator.
-- A failure in a push stops the accumulator for good.
+A call through a stage, and every state of an accumulator, has a *plain request*: the same values, submitted without a stage or accumulator.
+Its record is the record of that plain request.
+The workspace holds a stage or an accumulator until a client releases it or the workspace closes.
+Every client that holds the object may call through it, push into it, and read it.
+No client call lists stages and accumulators or reopens one by its ID, and they do not appear in the changes.
+Creating one over a binding that does not serve it raises.
+[ADR 0006](adr/0006-the-unit-is-an-accumulating-workflow.md) and [ADR 0003](adr/0003-accumulators-add-in-place.md) state the reasons; [bindings.md](../../packages/essspec/docs/bindings.md) states the binding's side.
 
 ## Stage
 
@@ -36,16 +30,15 @@ for bins in (50, 100, 200):
     client.compute(tune, params={'reduction': Reduction(bins=bins)}, label='iofq')
 ```
 
-The first call has the binding make its stage from the fixed values, and compute what depends only on them.
+The first call has the binding create its stage from the fixed values, and compute what depends only on them.
 Later calls compute only the rest.
-Each call gives values for the blanks only, fills them, and makes the record of the plain request.
 A blank is a whole parameter, never a field of a group.
-A file name in the template is resolved when the stage is made, so the stage keeps the file that the name meant then.
+A file name in the template is resolved when the stage is created, so the stage uses the file that the name meant then.
 
 ## Accumulator
 
-A *table* is a list parameter that the spec names in `tables=` ([params.md](../../packages/essspec/docs/params.md#tables-several-runs)), and its elements are *rows*.
-An accumulator is a template whose blanks are tables:
+A *table* is a list parameter that the spec lists in `tables=` ([params.md](../../packages/essspec/docs/params.md#tables-several-runs)), and its elements are *rows*.
+An accumulator is created from a template whose blanks are tables:
 
 ```python
 iofq = client.accumulator(Template(IOFQ_MULTI, params={'reduction': Reduction(bins=100),
@@ -58,40 +51,34 @@ client.output(iofq, 'iofq')                             # the output of state 3
 ```
 
 *State n* is the accumulator after its first n pushes.
-Its plain request is the template with each table filled by the rows of the first n pushes, in push order, and it has the outputs of that request.
+Its plain request is the template with each table filled by the rows of the first n pushes, in push order.
 The rows of one push enter one state, so states 1 and 2 above, which have no can row, are never read.
 Tables stand side by side: the first sample row is not paired with the first can row.
 
-A push of no rows is refused, and so is a push into a table that the template fixes.
-A push gives rows of one or more tables, each row as a request writes it there: a group as a model or a dict, a file as `file(...)` or a `Path`, a reference to an output.
-A push references files and outputs of records, never an accumulator.
-A reference to a record that failed or was cancelled is refused, and a pending record is not waited for when the push is logged.
-`client.accumulator` and `push` return once logged; the workspace makes the driver and adds each push later, once the records it references have completed.
+A push specifies rows as a request specifies them in that table: a group as a model or a dict, a file as `file(...)` or a `Path`, a reference to an output.
+A push may reference a pending record, and does not wait for it.
+`client.accumulator` and `push` return once logged.
+The workspace creates the driver and adds each push later, once the records it references have completed.
 
-**Distinct rows.** A push refuses a row that its table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
+**Distinct rows.** A push raises for a row that its table already holds, since pushing a run twice is usually a mistake, such as running a notebook cell again.
 Rows are compared as the record stores them: a value written inline by its JSON form, a file by its identity, and a reference by record, output, and key.
 So `file(run=611)` and `file(path=...)` of the same file are one row, but two references to equal data are two rows.
-A plain request with a repeated row is refused too.
 
 ## Reading a state
 
-Each call below reads the logged state, state n, where n is the number of pushes logged when it is called; a freeze takes n once no other freeze of the accumulator is being checked.
-It does not wait for these pushes to be added before it returns, except where it returns the value itself:
+A read is of the *logged state*, state n for the n pushes logged when it is called:
 
 | Call | Returns | Push n+1 waits |
 |---|---|---|
-| `client.output(acc, 'iofq')` | a copy of the output of state n (or the part `select=` names); no record | while it waits for state n and copies |
+| `client.output(acc, 'iofq')` | a copy of the output of state n, or of the part `select=` picks; no record | until the copy is made |
 | `client.freeze(acc)` | the record of state n | no push follows |
 | `client.provenance(acc)` | the provenance of state n's plain request, at once | no |
 
-`select=` copies only the part it names, but the outputs of a state are computed whole, the first time a read or a freeze needs them.
-
-A request, a template, and a push never reference an accumulator.
-Each is refused with a `SubmitError`, which names the record of the accumulator's freeze if one is pending or has completed.
-A request reads an accumulator's outputs through the record of its freeze, as any other record's (see Freeze).
+`client.output` waits until the pushes of state n are added.
+The outputs of a state are computed whole, the first time a read or a freeze needs them.
 
 **Push n+1 waits for the readers of state n.** A driver only moves forward, and may add the next push into the arrays its last outputs returned.
-So the workspace adds push n+1 only once the *readers* of state n are done: the reads of state n, until they have copied, and a freeze of state n, while it is checked.
+So the workspace adds push n+1 only once the reads of state n have copied, and a freeze of state n has been checked.
 The calls still read as if they ran one after another:
 
 ```python
@@ -103,19 +90,19 @@ for run in runs:
 
 In Rust's terms, each reader of a state holds a shared borrow of the driver, and a push waits for a mutable borrow.
 
-## Freeze, release, stop
+## Freeze
 
 ```python
 total = client.freeze(iofq)                 # the record of the logged state; no copy, no more pushes
 client.output(total, 'iofq')
-final = client.freeze(volume, persist=True) # the store keeps the outputs, not the workspace
+final = client.freeze(volume, persist=True) # the store holds the outputs, the workspace does not
 cut = client.submit(CUT, params={'position': Position(index=0), 'volume': final.ref('volume')})
 ```
 
-At the end of a scan, freezing makes the final volume an ordinary record, which the workspace keeps.
-A client can reference that record from a request, a template, or a push, where the accumulator itself may not be referenced.
-A record of a state while the accumulator goes on is not offered ([ADR 0003](adr/0003-accumulators-add-in-place.md), Open).
-A controller that should skip a run whose reduction failed waits for the record of that run's reduction before it pushes, since a failed push stops the accumulator.
+A request, a template, and a push never reference an accumulator, only the record of its freeze.
+`submit` raises a `SubmitError` for a reference to an accumulator, and the message contains the ID of the record of its freeze if there is one.
+A failed push stops the accumulator for good.
+So a controller that should skip a run whose reduction failed waits for that reduction's record before it pushes.
 [`WorkspaceProtocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules of `freeze`, `release`, and a stopped accumulator.
 
 ## Validation
@@ -124,26 +111,25 @@ Templates, stage calls, and pushes are validated in the same two phases as a pla
 
 | What | When logged | When it runs |
 |---|---|---|
-| a template, when `client.stage` or `client.accumulator` makes it | each fixed value by its type; each fixed reference readable and fitting; the table rules on fixed tables | each fixed value, once, when the stage or driver is made |
-| a stage call | the same, for the values given | each given value |
-| a push | each row by the table's element type; each reference readable and fitting; the table rules on the table with the push | each row, with the data of its references, before the driver gets it |
-| a read or a freeze of a state | the number of rows of each table, by its length constraints | (none) |
+| a template | each fixed value and reference; length and distinct rows of fixed tables | each fixed value, once |
+| a stage call | each value given, and its references | each value given |
+| a push | each row and its references; distinct rows | each row, with its data |
+| a read or a freeze of a state | the length constraints of each blank table | nothing |
 
-The *table rules* are a table's length constraints and distinct rows.
-A value that fails when it runs stops the accumulator, as any failing push does.
+A row that fails when it runs stops the accumulator, as any failing push does.
 
 ## Symmetries
 
-Each symmetry names a change that a caller may make without changing the outputs:
+Each symmetry is a change that a caller may make without changing the outputs:
 
-| Symmetry | The caller may change | Unchanged | Kept by |
+| Symmetry | The caller may change | Unchanged | Held by |
 |---|---|---|---|
-| one-row | the single-run spec ↔ the multi-run spec with one row per table | the outputs | the workflow package: its driver computes what its pipeline computes |
-| caching | a call through a stage ↔ the plain request | the record and its outputs | the framework for the record; for the outputs, `sciline.Stage`, given a pure pipeline |
-| arrival | rows pushed one at a time, or in groups ↔ one plain request | the outputs of state n | the driver's promises |
-| order | the order of pushes into different tables | the outputs once the same rows are in | the driver's promises |
+| one-row | single-run spec ↔ multi-run spec with one row per table | the outputs | the workflow package |
+| caching | a call through a stage ↔ the plain request | the record and its outputs | the framework, and `sciline.Stage` for a pure pipeline |
+| arrival | rows pushed one at a time or in groups ↔ one plain request | the outputs of state n | the driver |
+| order | the order of pushes into different tables | the outputs once the same rows are in | the driver |
 | placement | where a request runs | the record and its outputs | the framework |
 
 Arrival, order, and placement hold up to rounding.
-`ess.spec.testing` checks the symmetries that a workflow package keeps: `check_one_row`, `check_caching`, and `check_arrival_and_order`.
+`ess.spec.testing` checks the symmetries that a workflow package holds: `check_one_row`, `check_caching`, and `check_arrival_and_order`.
 Only `check_one_row` compares against an independent reference, the single-run binding.

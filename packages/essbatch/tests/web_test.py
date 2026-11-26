@@ -1115,6 +1115,17 @@ def test_while_the_form_holds_a_change_nothing_is_reduced(
     assert client.records(label='scan') == []
 
 
+def test_the_settings_file_holds_the_settings_at_parameter_columns(
+    http: TestClient, batch: Batch
+) -> None:
+    batch.settings = {**batch.settings, 'thickness': 2.5}
+
+    template = yaml.safe_load(http.get('/api/settings.yaml').content)
+
+    assert 'thickness' in batch.parameter_columns
+    assert template['params']['thickness'] == 2.5
+
+
 def test_while_the_form_holds_a_change_the_settings_are_not_downloaded(
     http: TestClient,
 ) -> None:
@@ -1568,18 +1579,19 @@ def test_a_group_setting_made_a_column_and_a_setting_again_keeps_its_value(
     assert form_bins(setting) == 5
 
 
-@pytest.mark.parametrize('way', ['make a column', 'load a table'])
+@pytest.mark.parametrize('way', ['make a column', 'make a setting', 'load a table'])
 def test_columns_do_not_change_while_the_form_holds_a_change(
     http: TestClient, batch: Batch, way: str
 ) -> None:
     draft(http, 9)
     table = b'key,sample,transmission,name\na,run:1,run:1001,first\n'
 
-    answer = (
-        http.post('/api/settings/column', json={'name': 'binning'})
-        if way == 'make a column'
-        else http.post('/api/table', params={'name': 'rows.csv'}, content=table)
-    )
+    if way == 'make a column':
+        answer = http.post('/api/settings/column', json={'name': 'binning'})
+    elif way == 'make a setting':
+        answer = http.post('/api/columns/setting', json={'name': 'thickness'})
+    else:
+        answer = http.post('/api/table', params={'name': 'rows.csv'}, content=table)
 
     assert answer.status_code == 422
     assert answer.json()['message'] == (

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""What a client lists now, looked up once for a refresh of every view."""
+"""What a client lists now, looked up once for a refresh of all views."""
 
 from __future__ import annotations
 
@@ -20,33 +20,26 @@ from .records import Record, SpecId, Status
 
 class Listing:
     """
-    What a request of ``client`` may name now, and the state of the proposal's
-    records, looked up once for a refresh of any number of views: the files
-    to offer for each file field and the proposal's records, each by a label, and
-    the outputs a request may reference. ``cursor`` is the position in the
-    proposal's changes (:meth:`~ess.apps.Client.changes`) that the listing is up
-    to date with. Given the ``previous`` listing, it reads only the records that changed
-    since, in the records, their status, and what is readable, and takes the
-    rest from ``previous``, which stays as it is. The records are oldest
-    first. Labels and the outputs offered are worked out from all the records
-    in memory, so a label that depends on the other records needs no read.
-    ``specs`` holds the spec of each record of the bound spec
-    (:meth:`~ess.apps.Client.bound`) by the record's id, ``status`` the status
-    of each record, and ``readable`` the names of its outputs that may be read
-    (:meth:`~ess.apps.Client.readable`). A record of an unbound spec has no
-    entry in ``specs``: it is labelled by its spec's name and version, its
-    outputs by their names, and none of them is offered to reference.
+    The records of ``client``, and the files and outputs that a request may
+    refer to now, each with a label, looked up once for a refresh of all views.
 
-    It stands in for two queries the client lacks (scipp/essapps#95). The
-    client lists no records by the type of their outputs (gap 1), so
-    :meth:`fitting` checks the type of each readable output. A record has no
-    short name (gap 4), so its label is its spec's title and the local time
-    it was created, ``Find centre (11:45)``, and an output's is its type's
-    name instead of the spec's title, ``BeamCentre (11:45)``. Where labels
-    would be the same, a record's adds the start of its id, ``Find centre
-    (11:45, 2f9c01)``, and an output's adds its name and then, if still the
-    same, the start of its record's id: ``BeamCentre (11:45, centre,
-    2f9c01)``.
+    Given the ``previous`` listing, it reads only the records that changed
+    since, and copies the rest from ``previous``, which stays unchanged.
+    ``cursor`` is the position in :meth:`~ess.apps.Client.changes` that the
+    listing is up to date with. ``records`` are oldest first. ``status`` holds
+    the status of each record, and ``readable`` the names of its outputs that
+    may be read. ``specs`` holds the spec of each record of a bound spec, by
+    record ID. A record of an unbound spec is labelled by its spec's name and
+    version, its outputs by their names, and none of its outputs is offered.
+
+    Labels are computed from all records in memory, so a label that depends on
+    other records needs no read::
+
+        Find centre (11:45)                 a record: its spec's title, local time
+        BeamCentre (11:45)                  an output: its type's name
+        Find centre (11:45, 2f9c01)         a record whose label would repeat
+        BeamCentre (11:45, centre)          an output whose label would repeat
+        BeamCentre (11:45, centre, 2f9c01)  ... and would still repeat
     """
 
     def __init__(self, client: Client, previous: Listing | None = None) -> None:
@@ -100,7 +93,7 @@ class Listing:
 
     def title(self, record: Record) -> str:
         """
-        The title of a record's spec; its name and version, ``centre/v1``, if
+        The title of a record's spec, or its name and version, ``centre/v1``, if
         the record is of an unbound spec.
         """
         spec = self.specs.get(record.id)
@@ -108,7 +101,7 @@ class Listing:
 
     def type_name(self, record: Record, name: str) -> str:
         """
-        The name of the type of an output, without ``| None``; the output's
+        The name of the type of an output, without ``| None``, or the output's
         name if its record is of an unbound spec.
         """
         if (spec := self.specs.get(record.id)) is None:
@@ -118,15 +111,16 @@ class Listing:
 
     def is_group(self, record: Record, name: str) -> bool:
         """
-        Whether an output of a record of the bound spec is a group, which
-        ``describe`` gives by field. Raises ``KeyError`` for a record of an
-        unbound spec: only its stored value says whether it is a ``DataGroup``.
+        Whether an output of a record of the bound spec is a group.
+
+        Raises ``KeyError`` for a record of an unbound spec, since only its
+        stored value shows whether it is a ``DataGroup``.
         """
         info = self.specs[record.id].outputs.model_fields[name]
         return field_types.is_group(field_types.value_type(info.annotation))
 
     def reads(self, record: Record) -> list[str]:
-        """The label of each file and output that the record's request names."""
+        """The label of each file and output that the record's request refers to."""
         return [
             self.file_label(ref) if isinstance(ref, FileRef) else self.output_label(ref)
             for _, ref in iter_refs(record.request.params)
@@ -134,10 +128,12 @@ class Listing:
 
     def files(self, marker: File) -> dict[str, FileRef]:
         """
-        The files to offer for a file field with ``marker``, each by a label, in
-        the order measured: those that may fill it (:meth:`Selector.of`), but not
-        a run with another role than the field's. A run without a role is offered
-        for every role.
+        The files to offer for a file field with ``marker``, by label, in the
+        order measured.
+
+        These are the files that may fill the field (:meth:`Selector.of`),
+        except a run with another role than the field's. A run without a role is
+        offered for every role.
         """
         if marker not in self._files:
             wanted = marker.metadata.get('role')
@@ -154,7 +150,7 @@ class Listing:
         return {ref: self._metadata[ref] for ref in self._list(selector)}
 
     def _list(self, selector: Selector) -> list[FileRef]:
-        """The files of ``selector``, looked up once, and their metadata in one call."""
+        """The files of ``selector``, with their metadata read in one call."""
         if (key := repr(selector)) not in self._listed:
             listed = self._client.files.list(selector)
             unknown = [ref for ref in listed if ref not in self._metadata]
@@ -171,9 +167,10 @@ class Listing:
 
     def file_label(self, ref: FileRef) -> str:
         """
-        The label of a file, as :meth:`files` gives it, without its role; the
-        reference itself if it is a name, such as ``file(run=1)``, or the file
-        source no longer has it.
+        The label of a file, as in :meth:`files` without its role.
+
+        The label is the reference itself if it is a name, such as
+        ``file(run=1)``, or if the file source no longer has the file.
         """
         try:
             return _file_label(ref, self._known(ref))
@@ -181,14 +178,15 @@ class Listing:
             return str(ref)
 
     def output_label(self, ref: OutputRef) -> str:
-        """The label of an output; the reference if its record is not listed."""
+        """The label of an output, or the reference if its record is not listed."""
         return self._output_labels.get(ref, str(ref))
 
     def text(self, value: Any) -> str:
         """
-        What a table shows for a value: a file or an output by its label, a
-        list as its items' texts joined by commas, a dict as JSON, and ``None``
-        as ``none``.
+        The text that a table shows for a value.
+
+        A file or an output is shown by its label, a list as its items' texts
+        joined by commas, a dict as JSON, and ``None`` as ``none``.
         """
         ref = as_ref(value)
         if isinstance(ref, OutputRef):
@@ -210,8 +208,8 @@ class Listing:
 
 def _labels[K](named: Mapping[K, tuple[str, Record, tuple[str, ...]]]) -> dict[K, str]:
     """
-    ``name (time)`` of each key, from its name, record, and tags; with as many
-    of its tags as it takes to tell it from each other key.
+    ``name (time)`` of each key, with as many of its tags as it takes to tell
+    it from each other key.
     """
     labels = {
         k: f'{name} ({record.created.astimezone():%H:%M}'
@@ -227,8 +225,9 @@ def _labels[K](named: Mapping[K, tuple[str, Record, tuple[str, ...]]]) -> dict[K
 
 def _file_label(ref: FileRef, metadata: Mapping[str, Any]) -> str:
     """
-    ``run 101`` where the metadata has a run, else the file's identity:
-    the contract of a file source names no field but ``proposal``.
+    ``run 101`` where the metadata has a run, else the file's identity.
+
+    The contract of a file source defines no metadata field except ``proposal``.
     """
     run = metadata.get('run')
     return str(ref) if run is None else f'run {run}'

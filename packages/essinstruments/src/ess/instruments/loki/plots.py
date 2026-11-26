@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The plots of LoKI's specs: each a function of the outputs of one record, and of
-what its request referenced, that returns a plopp figure, as
-``ess.apps.panel.App(plots=)`` takes them. They need plopp, not Panel, so a notebook
-can draw them as well.
+The plots of LoKI's specs, for ``ess.apps.panel.App(plots=PLOTS)``.
+
+Each plot is a function of a record's outputs and of what its request referenced,
+and returns a plopp figure. The plots need plopp but not Panel, so that a notebook
+can draw them too.
 """
 
 import plopp as pp

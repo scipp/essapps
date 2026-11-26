@@ -1,27 +1,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Writers of the outputs of a record to files. It needs scipp and h5py.
+Writers of the outputs of a record to files of one format, such as NXcanSAS.
 
-A :class:`Writer` writes the files of one format, such as NXcanSAS, from the
-outputs of one completed record and what a person says of them,
-:class:`DatasetMetadata`. :func:`write` writes a record into a new folder with a writer,
-and next to the writer's files the record itself, ``_record.json``, which names
-the values the outputs were computed from::
+It needs scipp and h5py. :func:`write` writes the files and the record, which
+refers to the values the outputs were computed from::
 
     iofq.h5            the files of the format
     _record.json       the record, the same for every format
 
-Download, ``export -l`` and publishing all write through :func:`write` by
-the form of a batch (:mod:`ess.batch.writing`), so that they give the
-same files. :data:`SCIPP_HDF5` writes each output as scipp HDF5
-(:mod:`ess.apps.hdf5`), for a spec that has no writer of its own, and for
-``export TABLE``, which names no batch.
-
-A writer is a plain function with the name of its format, a title and a
-description to show a person, and the outputs it reads. The writers of a
-technique call the save functions of its workflow package, and are given by
-the application as a mapping of spec name to writers, as bindings are.
+The writers of a technique call the save functions of its workflow package.
+The application provides them as a mapping of spec name to writers, as it
+provides bindings.
 """
 
 from __future__ import annotations
@@ -38,14 +28,13 @@ from .client import Client
 from .records import Record
 
 RECORD_FILE = '_record.json'
-"""The file of the record in the folder of a record; no output is named so."""
+"""
+The name of the record's file in the folder of :func:`write`. No output has this name.
+"""
 
 
 class DatasetMetadata(BaseModel, frozen=True):
-    """
-    What a person says of the data of one record. A format such as ORSO holds
-    it in the file, and the catalogue holds it with a dataset.
-    """
+    """What a person states about one record's data, for a file or the catalogue."""
 
     name: str
     owner: str = ''
@@ -70,19 +59,18 @@ class Writer:
     Parameters
     ----------
     name:
-        The name of the format, kept in a form, such as ``'nxcansas'``. A form
-        names its writer by it, so a title may change and a kept form still
-        finds its writer.
+        The name of the format, such as ``'nxcansas'``. A stored form refers to
+        its writer by this name, so that the title may change.
     title:
-        What the format is called, shown to a person, such as ``'NXcanSAS'``.
+        The name of the format shown to a person, such as ``'NXcanSAS'``.
     description:
-        What files the writer writes, shown to a person.
+        The files that the writer writes, shown to a person.
     outputs:
         The outputs of the spec that the writer reads, or ``None`` if a person
         picks them.
     write:
-        Writes the files from the outputs, by name, and what a person says of
-        them, directly into a folder, with no folder inside it: the publisher
+        Writes the files from the outputs by name and the metadata into a
+        folder. It must not create a folder inside it, since the publisher
         uploads the files of the folder.
     """
 
@@ -118,11 +106,11 @@ def write(
     chosen: Sequence[str] = (),
 ) -> None:
     """
-    Write the outputs of a completed ``record`` with ``writer`` into
-    ``directory``, a folder that does not exist, and the record as
-    ``_record.json``.
-    The outputs are those the writer reads, or ``chosen`` if it reads those
-    a person picks; then ``ValueError`` if none is chosen.
+    Writes the outputs of a completed ``record`` with ``writer`` into a new folder.
+
+    The folder also holds the record as ``_record.json``. ``chosen`` lists the
+    outputs if ``writer.outputs`` is ``None``. Raises ``ValueError`` if there is
+    no output to write, and ``FileExistsError`` if ``directory`` exists.
     """
     names = writer.outputs if writer.outputs is not None else tuple(chosen)
     if not names:
