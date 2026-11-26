@@ -21,6 +21,7 @@ The details live one level down:
 | why it is so | the [ADRs](adr/index.md), and those of [essspec](../../packages/essspec/docs/developer/adr/) |
 | what it must do | [the requirements](../requirements/README.md), [user-stories.md](user-stories.md), [system-stories.md](system-stories.md) |
 | how other systems do it | [prior-art/](prior-art/README.md) |
+| how to write and rewrite docs pages, docstrings, comments and messages | [writing.md](writing.md) |
 
 ## From a for loop
 

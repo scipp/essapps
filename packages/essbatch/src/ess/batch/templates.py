@@ -11,7 +11,8 @@ cell of a batch table (:func:`~.table.as_request`)::
     masks: [path:masks/a.xml]   a file of the workspace's folder, by its identity
 
 A file field inside a group takes the JSON form of a file, as the record holds
-it.
+it, since :func:`~.table.as_request` converts the value of a parameter, not of
+a field inside it.
 
 A file that is written before the records it reads exist names them by label
 (see :func:`with_latest`)::
