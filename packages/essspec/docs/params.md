@@ -382,18 +382,6 @@ It distinguishes a record made with other models under the same name and version
 | the root type of a `RootModel` | the spec's name and version |
 | the module or name of a class that is not a group | |
 
-A type is described so:
-
-```python
-class Centre(BaseModel):            # a group: by its fields, and by `extra` unless default
-    x: float                        # a builtin, a time, Path, a scipp type: by its name
-    unit: Literal['mm', 'm']        # a Literal or an enum: by its values, {'values': ['m', 'mm']}
-
-class Masks(RootModel[dict[str, sc.Variable]]): ...   # by its root type, dict[str, Variable]
-
-class Shapes(RootModel[list[Polygon]]): ...  # any other class, such as Polygon: by module and name, 'mypackage.shapes.Polygon'
-```
-
 `Referenced[T]` is described by the fields of `T`, since a reference is checked by class when it is used.
 So `T` replaced by another class with the same fields keeps the digest, and a reference made with the old class is rejected when it is checked.
 Requiredness counts, although a record stores its params with the defaults filled in, since a parameter that becomes required breaks callers.
