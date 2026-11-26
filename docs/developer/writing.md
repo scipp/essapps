@@ -114,7 +114,7 @@ One idea per sentence. A first sentence has at most 25 words. Then check for the
 
 - The first line says what the thing is or returns, on its own line.
 - Describe a parameter under `Parameters` and an attribute at the attribute, only where name and type do not say it.
-- Refer to code by plain name in double backticks. Use a Sphinx role only for a public name in another module; the docs will be built with Sphinx (and MyST for Markdown).
+- Refer to a public name with a Sphinx role, whose target must exist (`ess.apps.fields.Fields`, not `ess.apps.Fields`); the docs will be built with Sphinx (and MyST for Markdown). Refer to a private name, a parameter or a value in double backticks.
 - Prefer an input → output example to a description:
 
 ```python
