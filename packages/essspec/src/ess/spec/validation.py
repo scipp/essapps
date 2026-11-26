@@ -69,7 +69,7 @@ from pydantic_core import (
 
 from . import field_types, request_types
 from ._param_errors import params_model_errors, request_type_errors
-from .parameters import DataRefused
+from .parameters import ReferencedDataInvalid
 from .refs import FileRef, Loc, OutputRef, ParamsError, Ref, iter_refs
 
 type LocalPath = Callable[[FileRef], Path]
@@ -409,7 +409,7 @@ def validated(
     except ValidationError as error:
         tp = field_types.field_type(one.model_fields[name])
         raise ParamsError(params_model_errors((name,), tp, error.errors())) from None
-    except DataRefused as refused:
+    except ReferencedDataInvalid as refused:
         at = next(loc for loc, ref in iter_refs({name: value}) if ref == refused.ref)
         msg = '; '.join(dict.fromkeys(e['msg'] for e in refused.errors))
         raise ParamsError([(at, msg)]) from None
