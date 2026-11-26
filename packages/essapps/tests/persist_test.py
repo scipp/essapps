@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from ess.apps import (
     Client,
+    NotCleared,
     NotReadable,
     Record,
     RecordFailed,
@@ -27,6 +28,7 @@ from ess.apps import (
     file,
     local,
 )
+from ess.apps.folder import FolderStore
 from ess.apps.log import Finished, Log
 from ess.apps.testing import (
     FakeFiles,
@@ -345,6 +347,25 @@ def test_a_record_cancelled_while_it_runs_writes_nothing_to_the_store(
     assert (load.id, 'value') not in store
 
 
+def test_a_record_cancelled_while_it_runs_is_not_cleared_until_its_workflow_ends(
+    client: Client,
+    store: GatedStore,
+    loading: threading.Event,
+    entered: threading.Event,
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, params=_sample(1), persist=True)
+    assert entered.wait(timeout=5)  # in its workflow
+    client.cancel(load)
+
+    with pytest.raises(NotCleared, match=f'^record {load.id} is still running$'):
+        client.clear(load)
+    loading.set()
+    client.wait(client.submit(LOAD, params=_sample(2)))  # after it, on the one worker
+    client.clear(load)
+    assert (load.id, 'value') not in store
+
+
 def test_a_failed_write_fails_a_record_persisted_at_submission(
     client: Client, store: GatedStore
 ) -> None:
@@ -468,11 +489,11 @@ def test_clearing_a_record_held_in_memory_lets_go_of_its_values(
     assert boxes[0]() is None
 
 
-class PausedStore(FakeStore):
-    """A fake store whose reads wait until ``go`` is set; ``reading`` is set then."""
+class PausedStore(FolderStore):
+    """A folder store whose reads wait until ``go`` is set; ``reading`` is set then."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, directory: Path) -> None:
+        super().__init__(directory)
         self.go = threading.Event()
         self.go.set()
         self.reading = threading.Event()
@@ -484,9 +505,9 @@ class PausedStore(FakeStore):
 
 
 def test_a_read_that_a_clear_overtakes_raises_that_the_outputs_are_cleared(
-    files: FakeFiles, bind: list[Binding]
+    files: FakeFiles, bind: list[Binding], tmp_path: Path
 ) -> None:
-    store = PausedStore()
+    store = PausedStore(tmp_path / 'store')
     with local(proposal='p1', files=files, bind=bind, store=store) as client:
         load = client.compute(LOAD, params=_sample(1), persist=True)
         store.go.clear()

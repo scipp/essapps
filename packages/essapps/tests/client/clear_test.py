@@ -6,8 +6,20 @@ import threading
 
 import pytest
 
-from ess.apps import Client, NotReadable, Status, SubmitError, Template
-from ess.apps.testing import FakeStore
+from ess.apps import (
+    Client,
+    NotCleared,
+    NotReadable,
+    Status,
+    Stopped,
+    SubmitError,
+    Template,
+    Workspace,
+    local,
+)
+from ess.apps.log import Cleared, Event, Log
+from ess.apps.testing import FakeFiles, FakeStore
+from ess.spec import function_binding
 
 from . import toys
 
@@ -72,8 +84,9 @@ def test_a_pending_record_is_not_cleared(
     loading.clear()
     load = client.submit(toys.load_request(1))
 
-    with pytest.raises(ValueError, match=f'^record {load.id} is pending$'):
+    with pytest.raises(NotCleared) as refused:
         client.clear(load)
+    assert (refused.value.record, refused.value.held_by) == (load.id, 'pending')
     loading.set()
     client.wait(load)
     assert client.cleared(load) is False
@@ -88,7 +101,7 @@ def test_nothing_is_cleared_while_a_pending_record_reads_one_of_the_records(
     reader = client.submit(toys.read_request(first))
 
     with pytest.raises(
-        ValueError, match=f'^record {first.id} is read by pending record {reader.id}$'
+        NotCleared, match=f'^record {first.id} is read by record {reader.id}$'
     ):
         client.clear([second, first])
     assert client.cleared([first, second]) == [False, False]
@@ -127,9 +140,76 @@ def test_a_record_that_a_stage_reads_is_not_cleared_until_the_stage_is_released(
         Template(toys.SHIFT, params={'source': load.ref('value')}, blanks=['shift'])
     )
 
-    with pytest.raises(
-        ValueError, match=f'^record {load.id} is read by an open stage or accumulator$'
-    ):
+    with pytest.raises(NotCleared) as refused:
         client.clear(load)
+    assert refused.value.held_by == 'stage'
+    assert refused.value.reader == stage.id
     client.release(stage)
     client.clear(load)
+
+
+class FailingLog(Log):
+    """A log whose append of a ``Cleared`` fails, as on a full disk."""
+
+    def append(self, event: Event) -> Event:
+        if isinstance(event, Cleared):
+            raise OSError('no space left on device')
+        return super().append(event)
+
+
+def test_a_failed_append_of_a_clear_stops_the_workspace_and_keeps_the_files(
+    files: FakeFiles, store: FakeStore
+) -> None:
+    workspace = Workspace(
+        proposal='p1',
+        files=files,
+        bind=[function_binding(toys.LOAD, toys.load_run)],
+        log=FailingLog(),
+        store=store,
+    )
+    client = Client(workspace, submitter='anna')
+    load = client.compute(toys.load_request(1), persist=True)
+
+    with pytest.raises(OSError, match='no space left'):
+        client.clear(load)
+    assert (load.id, 'value') in store
+    with pytest.raises(Stopped):
+        client.status(load)
+    with pytest.raises(Stopped):
+        workspace.close()
+
+
+class FailingDelete(FakeStore):
+    """A fake store whose first delete fails."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    def delete(self, record: str) -> None:
+        if not self.failed:
+            self.failed = True
+            raise OSError('device busy')
+        super().delete(record)
+
+
+def test_a_failed_delete_leaves_the_record_cleared_and_a_second_clear_deletes(
+    files: FakeFiles,
+) -> None:
+    store = FailingDelete()
+    with local(
+        proposal='p1',
+        files=files,
+        bind=[function_binding(toys.LOAD, toys.load_run)],
+        store=store,
+    ) as client:
+        load = client.compute(toys.load_request(1), persist=True)
+
+        with pytest.raises(OSError, match='device busy'):
+            client.clear(load)
+        assert client.cleared(load) is True
+        assert (load.id, 'value') in store
+        with pytest.raises(NotReadable, match='its outputs are cleared'):
+            client.output(load, 'value')
+        client.clear(load)
+        assert (load.id, 'value') not in store

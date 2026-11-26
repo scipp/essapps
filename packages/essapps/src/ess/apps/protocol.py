@@ -226,11 +226,13 @@ class WorkspaceProtocol(Protocol):
         read of its outputs raises ``NotReadable``, and :meth:`submit` rejects
         a reference to them, each with ``its outputs are cleared``. The outputs
         are computed again by a new record of the same request. Clearing a
-        cleared record again deletes what the store still holds of it.
+        cleared record again deletes what the store still holds of it, as after
+        a delete that raised.
 
-        Raises ``ValueError``, and clears nothing, if a record is pending or a
-        pending record, a stage or an accumulator reads its outputs. The
-        message names the record.
+        Raises :class:`~ess.apps.errors.NotCleared`, and clears nothing, if a
+        record is pending, its workflow still runs after a cancel, or a pending
+        record, a stage or an accumulator reads its outputs. Its fields name
+        the record and what holds it.
         """
         ...
 
