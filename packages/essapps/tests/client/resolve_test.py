@@ -151,7 +151,9 @@ def test_resolve_does_not_look_at_whether_a_reference_may_be_read(
         failed.ref('value'),
         released.ref('value'),
     ]
-    with pytest.raises(SubmitError, match=r'failed; .* is not kept'):
+    with pytest.raises(
+        SubmitError, match=r'failed; .* is neither in memory nor persisted'
+    ):
         client.submit(requests)
 
 

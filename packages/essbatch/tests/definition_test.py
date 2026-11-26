@@ -15,24 +15,24 @@ from ess.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    DefinitionWriteError,
     FileInfo,
     FolderDefinitions,
     Header,
     Intake,
-    NotKept,
     RowSource,
 )
 from ess.batch.definition import (
     CORRECTIONS,
     FORMAT,
     HEADER,
-    ROWS,
     SETTINGS,
     SOURCE,
-    FromSource,
+    TABLE,
     Key,
+    SourceEntry,
 )
-from ess.batch.table import KEY, frame_of
+from ess.batch.table import KEY, table_of
 from ess.batch.templates import load_template
 
 from ess.apps import Client, Selector, SubmitError, Template
@@ -59,7 +59,9 @@ def first_transmission(files: Sequence[FileInfo]) -> pd.DataFrame:
     ).set_index(KEY)
 
 
-FIRST_TRANSMISSION = RowSource(first_transmission, fills=('sample', 'transmission'))
+FIRST_TRANSMISSION = RowSource(
+    first_transmission, source_columns=('sample', 'transmission')
+)
 
 type Opened = Callable[[], AbstractContextManager[tuple[Intake, CorrectedFiles]]]
 
@@ -87,7 +89,7 @@ def made(opened: Opened) -> str:
     """A batch ``b`` of PLAIN of the rows of samples 1, 2 and 3, kept in the folder."""
     with opened() as (intake, _):
         return intake.manager.create(
-            PLAIN.name, title='B', rows=intake.rows_of('first'), label='b'
+            PLAIN.name, title='B', table=intake.rows_of('first'), label='b'
         ).label
 
 
@@ -97,16 +99,16 @@ def test_a_batch_opened_again_has_the_table_and_the_settings_it_had(
     with opened() as (intake, _):
         batch = intake.manager.batch(made)
         batch.settings = {'binning': {'bins': 3}}
-        frame = batch.frame().drop('3').assign(thickness=[0.1 + 0.2, None])
+        frame = batch.table().drop('3').assign(thickness=[0.1 + 0.2, None])
         frame.loc['mine', 'sample'] = 'run:2'
         frame['note'] = pd.Series([['a', 1], {'b': None}, 2**53 + 1], index=frame.index)
-        batch.put(frame)
-        before = batch.frame()
+        batch.set_table(frame)
+        before = batch.table()
 
     with opened() as (intake, _):
         batch = intake.manager.batch(made)
 
-        pd.testing.assert_frame_equal(batch.frame(), before)
+        pd.testing.assert_frame_equal(batch.table(), before)
         assert batch.settings == {'binning': {'bins': 3}}
 
 
@@ -114,12 +116,12 @@ def test_a_table_kept_stays_when_its_files_go(
     opened: Opened, made: str, folder: Path
 ) -> None:
     with opened() as (intake, _):
-        before = intake.manager.batch(made).frame()
+        before = intake.manager.batch(made).table()
     files = folder / 'files.csv'
     files.write_text(files.read_text().replace('run-1001.json,1001,transmission', ''))
 
     with opened() as (intake, _):
-        pd.testing.assert_frame_equal(intake.manager.batch(made).frame(), before)
+        pd.testing.assert_frame_equal(intake.manager.batch(made).table(), before)
         assert intake.manager.batch(made).state()['1'].problems != ()
 
 
@@ -165,13 +167,13 @@ def test_the_settings_kept_are_a_template_of_all_settings_that_the_command_reads
         ),
     ],
 )
-def test_rows_that_cannot_be_read_are_refused_naming_the_file_and_the_entry(
+def test_a_table_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
     opened: Opened, made: str, folder: Path, data: Any, entry: str
 ) -> None:
-    FolderDefinitions(folder).save(ROWS.key(made), data)
+    FolderDefinitions(folder).save(TABLE.key(made), data)
 
     with opened() as (intake, _):
-        with pytest.raises(ValueError, match=rf'b/rows\.json: {re.escape(entry)}'):
+        with pytest.raises(ValueError, match=rf'b/table\.json: {re.escape(entry)}'):
             intake.manager.batch(made)
 
 
@@ -214,14 +216,14 @@ def test_a_folder_that_cannot_be_written_raises_that_the_table_was_not_kept(
 ) -> None:
     (tmp_path / 'definitions').write_text('a file where the folder should be')
 
-    with pytest.raises(NotKept, match='definitions'):
+    with pytest.raises(DefinitionWriteError, match='definitions'):
         FolderDefinitions(tmp_path).save(CORRECTIONS, {})
 
 
 def test_a_label_is_kept_in_a_folder_of_its_own(tmp_path: Path) -> None:
     store = FolderDefinitions(tmp_path)
     labels = ['auto/iofq', 'auto%2Fiofq', '..', '.', 'labels']
-    paths = [store.path(ROWS.key(label)) for label in labels]
+    paths = [store.path(TABLE.key(label)) for label in labels]
 
     assert len(set(paths)) == len(labels)
     assert all(p.parent.parent == tmp_path / 'definitions' / 'labels' for p in paths)
@@ -233,12 +235,12 @@ def test_a_label_that_looks_like_a_path_keeps_its_rows_inside_the_definitions(
 ) -> None:
     sample(1, 'water')
     store = FolderDefinitions(folder)
-    batch = Batch(client, PLAIN, label=label, rows=rows(client), definitions=store)
+    batch = Batch(client, PLAIN, label=label, table=rows(client), definitions=store)
 
     edit(batch, '1', thickness=2.0)
 
-    assert store.load(ROWS.key(label), frame_of).loc['1', 'thickness'] == 2.0
-    written = [p for p in folder.rglob('*.json') if p.name == 'rows.json']
+    assert store.load(TABLE.key(label), table_of).loc['1', 'thickness'] == 2.0
+    written = [p for p in folder.rglob('*.json') if p.name == 'table.json']
     assert [p.parent.parent for p in written] == [folder / 'definitions' / 'labels']
 
 
@@ -257,13 +259,13 @@ def test_a_file_left_by_a_write_cut_off_is_not_read_and_not_removed(
 ) -> None:
     with opened() as (intake, _):
         edit(intake.manager.batch(made), '1', thickness=2.0)
-    path = FolderDefinitions(folder).path(ROWS.key(made))
+    path = FolderDefinitions(folder).path(TABLE.key(made))
     # A reader cannot tell it from the file of a write of another process.
     left = path.parent / f'.{path.name}.x1y2z3'
     left.write_text('{"half')
 
     with opened() as (intake, _):
-        assert intake.manager.batch(made).frame().loc['1', 'thickness'] == 2.0
+        assert intake.manager.batch(made).table().loc['1', 'thickness'] == 2.0
 
     assert left.exists()
 
@@ -275,10 +277,10 @@ class Failing:
         return None
 
     def save(self, key: Key, data: Any) -> None:
-        raise NotKept('disk full')
+        raise DefinitionWriteError('disk full')
 
     def delete(self, key: Key) -> None:
-        raise NotKept('disk full')
+        raise DefinitionWriteError('disk full')
 
     def labels(self) -> list[str]:
         return []
@@ -288,18 +290,18 @@ def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
     client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
-    batch = Batch(client, PLAIN, label='f', rows=rows(client), definitions=Failing())
+    batch = Batch(client, PLAIN, label='f', table=rows(client), definitions=Failing())
     files = CorrectedFiles(client.files, definitions=Failing())
-    before = batch.frame()
+    before = batch.table()
 
-    with pytest.raises(NotKept, match='disk full'):
+    with pytest.raises(DefinitionWriteError, match='disk full'):
         edit(batch, '1', thickness=2.0)
-    with pytest.raises(NotKept, match='disk full'):
+    with pytest.raises(DefinitionWriteError, match='disk full'):
         batch.settings = {'binning': {'bins': 3}}
-    with pytest.raises(NotKept, match='disk full'):
+    with pytest.raises(DefinitionWriteError, match='disk full'):
         files.correct_each(list(client.files.list(Selector())), role='bad')
 
-    pd.testing.assert_frame_equal(batch.frame(), before)
+    pd.testing.assert_frame_equal(batch.table(), before)
     assert batch.settings == {}
     assert [files.corrections(r) for r in client.files.list(Selector())] == [{}, {}]
 
@@ -309,10 +311,10 @@ def test_the_labels_are_those_with_a_part_kept_written_back_as_given(
 ) -> None:
     store = FolderDefinitions(folder)
     for label in ('b', 'a.x', 'auto/iofq'):
-        store.save(ROWS.key(label), {})
-    cut_off = store.path(ROWS.key('c')).parent
+        store.save(TABLE.key(label), {})
+    cut_off = store.path(TABLE.key('c')).parent
     cut_off.mkdir(parents=True)
-    (cut_off / '.rows.json.k3j2h1g0').write_text('{')
+    (cut_off / '.table.json.k3j2h1g0').write_text('{')
 
     assert store.labels() == ['a.x', 'auto/iofq', 'b']
 
@@ -325,11 +327,11 @@ def test_a_part_deleted_is_gone_and_its_label_with_its_last_part(
     folder: Path,
 ) -> None:
     store = FolderDefinitions(folder)
-    store.save(ROWS.key('a'), {})
+    store.save(TABLE.key('a'), {})
     store.save(SETTINGS.key('a'), {'x': 1})
 
-    store.delete(ROWS.key('a'))
-    assert store.load(ROWS.key('a'), lambda data: data) is None
+    store.delete(TABLE.key('a'))
+    assert store.load(TABLE.key('a'), lambda data: data) is None
     assert store.labels() == ['a']
 
     store.delete(SETTINGS.key('a'))
@@ -338,9 +340,9 @@ def test_a_part_deleted_is_gone_and_its_label_with_its_last_part(
 
 def test_deleting_a_part_never_kept_does_nothing(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    store.save(ROWS.key('a'), {})
+    store.save(TABLE.key('a'), {})
 
-    store.delete(ROWS.key('b'))
+    store.delete(TABLE.key('b'))
     store.delete(SOURCE.key('a'))
 
     assert store.labels() == ['a']
@@ -368,24 +370,24 @@ def test_a_header_that_cannot_be_read_is_refused_naming_the_file_and_the_entry(
 
 def test_the_source_of_a_batch_is_kept_with_its_keys_sorted(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    made = FromSource('pairs', frozenset({'60340', '0342', '60339'}), follows=True)
+    made = SourceEntry('pairs', frozenset({'60340', '0342', '60339'}), follows=True)
     key = SOURCE.key('a')
 
     store.save(key, SOURCE.dump(made))
 
-    assert SOURCE.dump(made)['considered'] == ['0342', '60339', '60340']
+    assert SOURCE.dump(made)['seen_keys'] == ['0342', '60339', '60340']
     assert store.load(key, SOURCE.read) == made
-    store.save(key, {'source': 'pairs', 'considered': '60339', 'follows': False})
-    with pytest.raises(ValueError, match=r'source\.json: considered: '):
+    store.save(key, {'row_source': 'pairs', 'seen_keys': '60339', 'follows': False})
+    with pytest.raises(ValueError, match=r'source\.json: seen_keys: '):
         store.load(key, SOURCE.read)
-    store.save(key, {'source': 'pairs', 'considered': ['60339']})
+    store.save(key, {'row_source': 'pairs', 'seen_keys': ['60339']})
     with pytest.raises(ValueError, match=r'source\.json: follows: Field required'):
         store.load(key, SOURCE.read)
 
 
 def test_a_folder_gets_the_format_with_its_first_definitions(folder: Path) -> None:
     store = FolderDefinitions(folder)
-    store.save(ROWS.key('a'), {})
+    store.save(TABLE.key('a'), {})
 
     format_file = folder / 'definitions' / 'format.json'
     assert json.loads(format_file.read_text()) == {'format': FORMAT}
@@ -396,7 +398,7 @@ def test_a_folder_gets_the_format_with_its_first_definitions(folder: Path) -> No
 def test_a_folder_of_definitions_of_another_format_is_refused(
     folder: Path, kept: int | None, said: object
 ) -> None:
-    FolderDefinitions(folder).save(ROWS.key('a'), {})
+    FolderDefinitions(folder).save(TABLE.key('a'), {})
     format_file = folder / 'definitions' / 'format.json'
     if kept is None:
         format_file.unlink()

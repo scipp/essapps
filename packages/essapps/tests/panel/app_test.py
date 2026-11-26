@@ -87,7 +87,7 @@ def test_a_computed_record_is_listed_and_offered_by_the_forms(
     label = Listing(client).labels[record.id]
     assert app.message.object == f'Computed {label}.'
     assert app.records.table.widget.value['Record'].tolist() == [label]
-    assert app.forms['Reduce'].ways('beam_centre') == ['Given', 'From a record']
+    assert app.forms['Reduce'].alternatives('beam_centre') == ['Given', 'From a record']
 
 
 def test_a_record_of_another_client_appears_on_a_poll(

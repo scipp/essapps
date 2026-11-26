@@ -9,13 +9,13 @@ from typing import Any
 import pytest
 from ess.batch import (
     RowState,
-    earlier_settings,
     left_to_reduce,
     not_reduced,
     ready,
     to_reduce,
+    with_changed_settings,
 )
-from ess.batch.state import Which, differs, results, row_states
+from ess.batch.state import Which, changed_names, results, row_states
 from pydantic import BaseModel
 
 from ess.apps import Record, Request, SpecId, Status
@@ -32,7 +32,7 @@ class Model(BaseModel):
 
 
 COLUMNS = ('sample', 'thickness')
-OWN: defaultdict[str, frozenset[str]] = defaultdict(lambda: frozenset(COLUMNS))
+OVERRIDES: defaultdict[str, frozenset[str]] = defaultdict(lambda: frozenset(COLUMNS))
 """Each row gives every column itself, in its cell."""
 
 
@@ -59,14 +59,16 @@ def row(**cells: Any) -> dict[str, Any]:
 def states(
     cells: dict[str, dict[str, Any]], *found: Record, **status: Status
 ) -> dict[str, RowState]:
-    return row_states(cells, COLUMNS, {r.member: r for r in found}, status, own=OWN)
+    return row_states(
+        cells, COLUMNS, {r.member: r for r in found}, status, overrides=OVERRIDES
+    )
 
 
 def test_a_row_with_an_empty_required_cell_is_not_ready() -> None:
     found = states({'a': row(sample='x'), 'b': row()})
 
     assert ready(found) == ['a']
-    assert [(e.entry, e.loc) for e in found['b'].problems] == [('b', ('sample',))]
+    assert [(e.request_key, e.loc) for e in found['b'].problems] == [('b', ('sample',))]
 
 
 def test_a_cell_reading_a_failed_record_is_a_problem() -> None:
@@ -114,11 +116,11 @@ def test_an_outdated_row_is_left_to_do_and_shown_as_outdated(
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         **outdated,
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
     assert left_to_reduce(found) == ['a']
-    assert found['a'].text == 'outdated'
+    assert found['a'].status == 'outdated'
 
 
 @pytest.mark.parametrize('status', [Status.FAILED, Status.CANCELLED])
@@ -134,15 +136,15 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
         {'a': record('1', 'a')},
         {'1': status},
         **outdated,
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
     assert left_to_reduce(found) == ['a']
-    assert found['a'].text == str(status)
+    assert found['a'].status == str(status)
 
 
 @pytest.mark.parametrize(
-    ('status', 'changed', 'other', 'earlier', 'left'),
+    ('status', 'changed', 'other', 'settings_changed', 'left'),
     [
         (Status.COMPLETED, {'shared'}, {}, True, False),
         (Status.COMPLETED, {'shared', 'thickness'}, {}, False, True),
@@ -156,7 +158,7 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
     status: Status,
     changed: set[str],
     other: dict[str, Any],
-    earlier: bool,
+    settings_changed: bool,
     left: bool,
 ) -> None:
     found = row_states(
@@ -166,42 +168,45 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
         {'1': status},
         changed={'a': frozenset(changed)},
         **other,
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
-    assert found['a'].earlier is earlier
-    assert earlier_settings(found) == (['a'] if earlier else [])
+    assert found['a'].settings_changed is settings_changed
+    assert with_changed_settings(found) == (['a'] if settings_changed else [])
     assert left_to_reduce(found) == (['a'] if left else [])
 
 
-def test_a_change_at_a_column_where_the_cell_is_empty_is_of_earlier_settings() -> None:
+def test_a_change_at_a_column_where_the_cell_is_empty_reads_settings_changed() -> None:
     found = row_states(
         {'a': row(sample='x'), 'b': row(sample='y')},
         COLUMNS,
         {'a': record('1', 'a'), 'b': record('2', 'b')},
         {'1': Status.COMPLETED, '2': Status.COMPLETED},
         changed={'a': frozenset({'thickness'}), 'b': frozenset({'thickness'})},
-        own={'a': {'sample'}, 'b': {'sample', 'thickness'}},
+        overrides={'a': {'sample'}, 'b': {'sample', 'thickness'}},
     )
 
-    assert {k: s.text for k, s in found.items()} == {'a': 'earlier', 'b': 'outdated'}
+    assert {k: s.status for k, s in found.items()} == {
+        'a': 'settings changed',
+        'b': 'outdated',
+    }
 
 
-def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
+def test_a_row_that_cannot_run_does_not_read_settings_changed() -> None:
     found = row_states(
         {'a': row()},
         COLUMNS,
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         changed={'a': frozenset({'shared'})},
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
     assert found['a'].problems
-    assert earlier_settings(found) == []
+    assert with_changed_settings(found) == []
 
 
-def earlier_and_new() -> dict[str, RowState]:
+def settings_changed_and_new() -> dict[str, RowState]:
     """Row ``a`` reduced with earlier settings, ``b`` without a result."""
     return row_states(
         {'a': row(sample='x'), 'b': row(sample='y')},
@@ -209,14 +214,17 @@ def earlier_and_new() -> dict[str, RowState]:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         changed={'a': frozenset({'shared'}), 'b': frozenset()},
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
 
-def test_a_row_of_earlier_settings_reads_earlier() -> None:
-    found = earlier_and_new()
+def test_a_row_reduced_with_earlier_settings_reads_settings_changed() -> None:
+    found = settings_changed_and_new()
 
-    assert {k: s.text for k, s in found.items()} == {'a': 'earlier', 'b': 'ready'}
+    assert {k: s.status for k, s in found.items()} == {
+        'a': 'settings changed',
+        'b': 'ready',
+    }
 
 
 @pytest.mark.parametrize(
@@ -238,16 +246,16 @@ def test_a_row_reads_its_status_in_the_words_of_the_page(
         **({} if status is None else {'1': status}),
     )
 
-    assert found['a'].text == text
-    assert found['b'].text == 'incomplete'
+    assert found['a'].status == text
+    assert found['b'].status == 'incomplete'
 
 
 @pytest.mark.parametrize(
     ('which', 'keys'),
-    [('remaining', ['b']), ('earlier', ['a']), ('all', ['a', 'b'])],
+    [('remaining', ['b']), ('settings changed', ['a']), ('all', ['a', 'b'])],
 )
 def test_the_rows_to_reduce_of_each_choice(which: Which, keys: list[str]) -> None:
-    assert to_reduce(earlier_and_new(), which) == keys
+    assert to_reduce(settings_changed_and_new(), which) == keys
 
 
 def test_a_row_without_a_result_is_left_to_reduce() -> None:
@@ -277,7 +285,7 @@ def test_a_row_with_a_result_is_not_reduced_by_a_step(
         {'a': record('1', 'a')},
         {'1': status},
         **other,
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
     assert not_reduced(found) == []
@@ -288,7 +296,12 @@ def test_a_ready_row_without_a_result_is_reduced_by_a_step(
     changed: dict[str, frozenset[str]] | None,
 ) -> None:
     found = row_states(
-        {'a': row(sample='x'), 'b': row()}, COLUMNS, {}, {}, changed=changed, own=OWN
+        {'a': row(sample='x'), 'b': row()},
+        COLUMNS,
+        {},
+        {},
+        changed=changed,
+        overrides=OVERRIDES,
     )
 
     assert not_reduced(found) == ['a']
@@ -302,7 +315,7 @@ def test_a_refused_value_is_a_problem_of_its_row() -> None:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         refused={'a': (reason,)},
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
     assert found['a'].problems == (reason,)
@@ -320,16 +333,18 @@ def test_the_result_of_a_row_is_its_newest_record_of_any_spec() -> None:
 def test_a_value_differs_if_either_side_lacks_it() -> None:
     was = {'sample': 'x', 'thickness': 1.0, 'shared': 0}
 
-    assert differs({'sample': 'x', 'thickness': 1.0}, was, Model.model_fields) == [
-        'shared'
-    ]
-    assert differs({'sample': 'y', 'shared': 0}, was, ['sample', 'shared']) == [
+    assert changed_names(
+        {'sample': 'x', 'thickness': 1.0}, was, Model.model_fields
+    ) == ['shared']
+    assert changed_names({'sample': 'y', 'shared': 0}, was, ['sample', 'shared']) == [
         'sample'
     ]
 
 
 def test_a_list_in_another_order_differs() -> None:
-    assert differs({'runs': ['b', 'a']}, {'runs': ['a', 'b']}, ['runs']) == ['runs']
+    assert changed_names({'runs': ['b', 'a']}, {'runs': ['a', 'b']}, ['runs']) == [
+        'runs'
+    ]
 
 
 def not_compared() -> dict[str, RowState]:
@@ -339,16 +354,16 @@ def not_compared() -> dict[str, RowState]:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         changed=None,
-        own=OWN,
+        overrides=OVERRIDES,
     )
 
 
 def test_a_completed_row_not_compared_reads_outdated() -> None:
-    assert not_compared()['a'].text == 'outdated'
+    assert not_compared()['a'].status == 'outdated'
 
 
-def test_a_completed_row_not_compared_is_neither_earlier_nor_left_to_reduce() -> None:
+def test_a_completed_row_not_compared_is_not_reduced_again_by_either_rule() -> None:
     found = not_compared()
 
-    assert earlier_settings(found) == []
+    assert with_changed_settings(found) == []
     assert left_to_reduce(found) == []

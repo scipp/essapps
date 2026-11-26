@@ -4,7 +4,7 @@
 
 import pytest
 from ess.batch import Batch, BatchManager, FolderDefinitions
-from ess.batch.definition import Form, published
+from ess.batch.definition import OutputOptions, published
 from ess.batch.publish import Publisher, UploadFailed
 from ess.batch.writing import Writing
 from scitacean import model
@@ -18,7 +18,7 @@ from ess.apps.writers import Person
 
 from . import toys
 
-FORM = Form(
+FORM = OutputOptions(
     format='scipp-hdf5',
     outputs=('total',),
     owner='Anna',
@@ -57,7 +57,7 @@ def publisher(manager: BatchManager, catalogue: Catalogue) -> Publisher:
 @pytest.fixture
 def batch(publisher: Publisher, done_batch: Batch) -> Batch:
     """The batch of ``done_batch``, with :data:`FORM`."""
-    publisher.writing.set_form(done_batch.label, FORM)
+    publisher.writing.set_options(done_batch.label, FORM)
     return done_batch
 
 
@@ -104,10 +104,10 @@ def test_a_result_is_published_once(
     assert len(scicat.datasets) == 1
 
 
-def test_a_form_without_owner_or_contact_is_refused_before_any_upload(
+def test_output_options_without_owner_or_contact_are_refused_before_any_upload(
     publisher: Publisher, batch: Batch, scicat: FakeClient
 ) -> None:
-    publisher.writing.set_form(
+    publisher.writing.set_options(
         batch.label, FORM.model_copy(update={'owner': '', 'contact_email': ''})
     )
 
@@ -121,7 +121,7 @@ def test_a_row_without_a_result_is_refused(
 ) -> None:
     fake.measure(3, 3.0, role='sample', sample='B')
     fake.measure(1003, 1.0, role='transmission', sample='B')
-    batch.put(toys.rows(client))
+    batch.set_table(toys.rows(client))
 
     with pytest.raises(ValueError, match='not outdated: 3'):
         publisher.publish(batch.label, ['1', '3'])

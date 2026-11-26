@@ -18,7 +18,7 @@ from pydantic import (
 
 from ess.apps import Client, Record, Status, SubmitError, Template, Workspace
 from ess.apps import file as file_ref
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
+from ess.apps.testing import FakeFiles, StagedFunction, list_driver, read_file
 from ess.spec import (
     MaskFile,
     OutputRef,
@@ -315,7 +315,7 @@ def client(tmp_path: Path) -> Iterator[Client]:
             function_binding(
                 EITHER_SHIFT, lambda p: Named(name=type(p.shift).__name__)
             ),
-            kept_rows(SUM, total),
+            list_driver(SUM, total),
             StagedFunction(STAGED_SUM, total),
             function_binding(
                 SHIFTS, lambda p: Value(value=sum(s.offset for s in p.shifts))
@@ -459,7 +459,7 @@ def test_a_refusal_names_the_field_of_a_row_by_its_place(client: Client) -> None
     with pytest.raises(SubmitError) as raised:
         client.submit(RUNS, params={'runs': rows})
     (error,) = raised.value.errors
-    assert (error.entry, error.loc) == (None, ('runs', 1, 'offset'))
+    assert (error.request_key, error.loc) == (None, ('runs', 1, 'offset'))
     assert str(raised.value) == f'runs[1].offset: {error.msg}'
 
     rows[1] = {'@ref': 'run'}

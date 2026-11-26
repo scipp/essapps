@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""A batch on a folder whose records are of another spec than the one bound."""
+"""A batch on a folder whose records are of an unbound spec."""
 
 from collections.abc import Callable
 from pathlib import Path
@@ -75,7 +75,7 @@ def batch_of(tmp_path: Path) -> Callable[[list[Binding]], Batch]:
     def make(bindings: list[Binding]) -> Batch:
         client: Client = open_folder(tmp_path, bindings)
         rows = pd.DataFrame({'bins': [5]}, index=['5'])
-        return Batch(client, bindings[0].spec, label='c', rows=rows)
+        return Batch(client, bindings[0].spec, label='c', table=rows)
 
     with open_folder(tmp_path, WRITTEN) as client:
         client.submit(CENTRE, params={'bins': 5}, label='c', member='5', persist=True)
@@ -83,7 +83,7 @@ def batch_of(tmp_path: Path) -> Callable[[list[Binding]], Batch]:
 
 
 @pytest.mark.parametrize('another', sorted(OTHERS))
-def test_a_batch_shows_a_row_whose_result_is_of_another_spec_as_outdated(
+def test_a_batch_shows_a_row_whose_result_is_of_an_unbound_spec_as_outdated(
     batch_of: Callable[[list[Binding]], Batch], another: str
 ) -> None:
     batch = batch_of(OTHERS[another])
@@ -92,6 +92,6 @@ def test_a_batch_shows_a_row_whose_result_is_of_another_spec_as_outdated(
         state = batch.state()['5']
         assert state.record is not None
         assert state.spec_changed
-        assert state.text == 'outdated'
+        assert state.status == 'outdated'
     finally:
         batch.client.close()

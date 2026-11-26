@@ -38,7 +38,7 @@ from ess.apps.log import (
     Started,
     Submitted,
 )
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows, read_file
+from ess.apps.testing import FakeFiles, StagedFunction, list_driver, read_file
 from ess.spec import (
     FileRef,
     OutputRef,
@@ -176,8 +176,8 @@ def start(
     def start(path: Path) -> Client:
         bind = [
             StagedFunction(LOAD, load),
-            kept_rows(TOTAL, total),
-            kept_rows(RUNS, runs),
+            list_driver(TOTAL, total),
+            list_driver(RUNS, runs),
         ]
         workspaces.append(
             Workspace(proposal='p1', files=files, bind=bind, log=Log(path))
@@ -423,7 +423,7 @@ def test_outputs_are_not_in_the_log(
     again = restart(tmp_path / 'log')
 
     assert again.wait(load) == Status.COMPLETED
-    with pytest.raises(NotReadable, match='is not kept'):
+    with pytest.raises(NotReadable, match='is neither in memory nor persisted'):
         again.output(load, 'value')
 
 
@@ -437,7 +437,7 @@ def test_a_record_whose_output_is_not_kept_is_refused_at_the_push(
     again = restart(tmp_path / 'log')
 
     total = _total(again)
-    with pytest.raises(SubmitError, match='is not kept'):
+    with pytest.raises(SubmitError, match='is neither in memory nor persisted'):
         total.push(part=[load.ref('value')])
 
 

@@ -5,7 +5,7 @@ The command ``essbatch``: an application of the batch layer, as the page is.
 Its help, :data:`_HELP` and the description of each command, is the
 documentation for a person who operates batches (ADR 0014).
 
-A command is a function of :class:`_Given` that gives a :data:`_Result`, and
+A command is a function of :class:`_Context` that gives a :data:`_Result`, and
 an item of :data:`_COMMANDS` that names it with its arguments and checks.
 The commands are thin: the rules are those of ``BatchManager``, ``Intake``
 and ``Batch``, as the page applies them, so a label is one batch whoever
@@ -42,7 +42,7 @@ import numpy as np
 import pandas as pd
 
 from ess.apps.client import Client
-from ess.apps.errors import Stopped, SubmitError, said
+from ess.apps.errors import Stopped, SubmitError, error_text
 from ess.apps.files import replace_at_once
 from ess.apps.folder import described, folder_files, scan_folder
 from ess.apps.records import Record, Status
@@ -51,7 +51,7 @@ from ess.spec import Binding
 
 from . import frames
 from .corrections import open_workspace
-from .definition import FolderDefinitions, NotKept
+from .definition import DefinitionWriteError, FolderDefinitions
 from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
 from .manager import BatchManager
@@ -59,7 +59,7 @@ from .reduction import Batch
 from .source import Range, RowSource
 from .table import KEY, SUFFIXES, read_table, read_text, write_table
 from .templates import checked_settings, load_template, settings_text, template_to_fill
-from .writing import Writing, load_form
+from .writing import Writing, load_options
 
 if TYPE_CHECKING:
     from ess.apps.scicat import Catalogue
@@ -102,14 +102,16 @@ A first session, in this order; each command has its own --help:
     $B show -l water              # the batch table of water, with each row's status
     $B reduce -l water --remaining       # reduce the rows that are not done
     $B template -l water -o now.yaml     # the settings of water, as a template
-    $B form -l water -o form.yaml # how the results of water are written: the
+    $B output-options -l water -o options.yaml
+                                  # how the results of water are written: the
                                   # format, and what is said of them
-    $B form -l water form.yaml    # keep the form edited
+    $B output-options -l water options.yaml
+                                  # keep the output options edited
     $B export -l water results    # write the results of the rows of water
     $B -c package.module:CATALOGUE publish -l water KEY...
                                   # publish the results of KEY... to SciCat
-    $B offered -l water           # the rows of the row source that water lacks
-    $B take -l water KEY...       # put those rows into water; reduces nothing
+    $B available -l water         # the rows of the row source that water lacks
+    $B add -l water KEY...        # put those rows into water; reduces nothing
     $B follow -l water --steps 3  # add and reduce the rows that arrive: 3 steps,
                                   # or until Ctrl-C without --steps
     $B stop                       # no batch follows
@@ -150,30 +152,30 @@ every row that can be, or with --remaining the rows not done. A refused reduce
 makes no batch, but a batch keeps the template and table file given to it.
 
 The status of a row:
-    ready       no result yet; it can be reduced, unless the settings are refused
-    incomplete  it cannot be reduced: a value is missing, such as an empty cell,
-                or refused, or a record that it reads failed or was cancelled
-    running     submitted, not finished
-    done        reduced with the cells and settings it has now
-    earlier     reduced, but a setting it takes changed since; --remaining
-                leaves it, --earlier-settings adds it
-    outdated    reduced, but a cell changed since, or the spec bound is of
-                another version, or the settings are refused, so not compared
-    failed      the reduction failed; the column failure says why
-    cancelled   the reduction was cancelled
+    ready             no result yet; it can be reduced, unless the settings are refused
+    incomplete        it cannot be reduced: a value is missing, such as an empty cell,
+                      or refused, or a record that it reads failed or was cancelled
+    running           submitted, not finished
+    done              reduced with the cells and settings it has now
+    settings changed  reduced, but a setting it takes changed since; --remaining
+                      leaves it, --settings-changed adds it
+    outdated          reduced, but a cell changed since, or the spec bound is of
+                      another version, or the settings are refused, so not compared
+    failed            the reduction failed; the column failure says why
+    cancelled         the reduction was cancelled
 
 follow -l water: water follows its row source, with a step every --interval
-seconds (5). A step adds the rows of the source that are filled and not
-considered (not one that a person removed or left out), and reduces each row
+seconds (5). A step adds the rows of the source that are complete and not
+seen (not one that a person removed or left out), and reduces each row
 that is ready and has no result. It never changes a row of the batch table: a
 row added with the transmission run that was newest then keeps it when a newer
 one arrives (compare rows SOURCE with show). It reduces no failed row again
 (reduce --remaining does). A step that did something writes a line, or with
 --json an object, with "error" why the step raised (null if it did not):
 
-    14:03:05 added 70011 | reducing 70011 | done 70009 | waiting 70013
+    14:03:05 added 70011 | reducing 70011 | done 70009 | incomplete 70013
     {"time": "2026-11-23T14:03:05+01:00", "added": ["70011"], "reducing": ["70011"],
-     "ended": {"70009": "done"}, "failure": {}, "refused": {}, "waiting": ["70013"],
+     "ended": {"70009": "done"}, "failure": {}, "refused": {}, "incomplete": ["70013"],
      "error": null}
 
 ended: the status of each row whose reduction ended; failure, refused: why. A
@@ -200,11 +202,11 @@ another process holds, such as a page or a follow. Messages go to stderr.
 """The description of ``essbatch --help``."""
 
 
-class _Wrong(Exception):
+class _UsageError(Exception):
     """A wrong command line, said as argparse says one: exit status 2."""
 
 
-class _Failed(Exception):
+class _CommandError(Exception):
     """
     An error said in one line, such as a folder that another process holds:
     exit status 1.
@@ -212,28 +214,28 @@ class _Failed(Exception):
 
 
 def _named(name: str) -> Any:
-    """The object that ``package.module:NAME`` names; ``_Wrong`` if none."""
+    """The object that ``package.module:NAME`` names; ``_UsageError`` if none."""
     module, colon, attribute = name.partition(':')
     if not (module and colon and attribute):
-        raise _Wrong(f'{name}: name it as package.module:NAME')
+        raise _UsageError(f'{name}: name it as package.module:NAME')
     try:
         found = import_module(module)
     except Exception as error:  # any error of the module's code, too
-        raise _Wrong(
+        raise _UsageError(
             f'{name}: cannot import {module}: {type(error).__name__}: {error}'
         ) from None
     if not hasattr(found, attribute):
-        raise _Wrong(f'{name}: the module {module} has no {attribute}')
+        raise _UsageError(f'{name}: the module {module} has no {attribute}')
     return getattr(found, attribute)
 
 
 def _bindings(name: str) -> list[Binding[Any, Any]]:
-    """The bindings that ``name`` names; ``_Wrong`` if it names something else."""
+    """The bindings that ``name`` names; ``_UsageError`` if it names something else."""
     bind = _named(name)
     if isinstance(bind, str | bytes) or not (
         isinstance(bind, Sequence) and all(isinstance(b, Binding) for b in bind)
     ):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(bind).__name__}, not a list of bindings '
             '(ess.spec.Binding), such as package.module:BINDINGS'
         )
@@ -241,12 +243,12 @@ def _bindings(name: str) -> list[Binding[Any, Any]]:
 
 
 def _sources(name: str) -> Mapping[str, RowSource]:
-    """The sources by name that ``name`` names; ``_Wrong`` if other things."""
+    """The sources by name that ``name`` names; ``_UsageError`` if other things."""
     sources = _named(name)
     if not isinstance(sources, Mapping) or not all(
         isinstance(source, RowSource) for source in sources.values()
     ):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(sources).__name__}, not a mapping of names to '
             'row sources (ess.batch.RowSource), such as package.module:SOURCES'
         )
@@ -254,13 +256,13 @@ def _sources(name: str) -> Mapping[str, RowSource]:
 
 
 def _writers(name: str) -> Mapping[str, Sequence[Writer]]:
-    """The writers by spec that ``name`` names; ``_Wrong`` if other things."""
+    """The writers by spec that ``name`` names; ``_UsageError`` if other things."""
     writers = _named(name)
     if not isinstance(writers, Mapping) or not all(
         isinstance(given, Sequence) and all(isinstance(w, Writer) for w in given)
         for given in writers.values()
     ):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(writers).__name__}, not a mapping of spec names '
             'to lists of writers (ess.apps.writers.Writer), such as '
             'package.module:WRITERS'
@@ -271,21 +273,21 @@ def _writers(name: str) -> Mapping[str, Sequence[Writer]]:
 def _catalogue(name: str) -> Callable[[str], Any]:
     """
     The function that ``name`` names, such as
-    :func:`ess.batch.web.demo.fake_catalogue`; ``_Wrong`` if something else.
+    :func:`ess.batch.web.demo.fake_catalogue`; ``_UsageError`` if something else.
     """
     make = _named(name)
     if not callable(make):
-        raise _Wrong(
+        raise _UsageError(
             f'{name} is a {type(make).__name__}, not a function from '
             'a proposal to its catalogue (ess.apps.scicat.Catalogue)'
         )
     return make
 
 
-def _the_catalogue(given: _Given) -> Catalogue | None:
+def _the_catalogue(given: _Context) -> Catalogue | None:
     """
     The catalogue that the function of ``--catalogue`` gives for the
-    proposal, ``None`` without one; ``_Wrong`` if it gives another thing.
+    proposal, ``None`` without one; ``_UsageError`` if it gives another thing.
     """
     args = given.args
     if args.catalogue is None:
@@ -295,20 +297,20 @@ def _the_catalogue(given: _Given) -> Catalogue | None:
     try:
         catalogue = _catalogue(args.catalogue)(args.proposal)
     except Exception as error:  # a real catalogue logs in, and may fail to
-        raise _Failed(f'{args.catalogue}: {said(error)}') from None
+        raise _CommandError(f'{args.catalogue}: {error_text(error)}') from None
     if not isinstance(catalogue, Catalogue):
-        raise _Wrong(
+        raise _UsageError(
             f'{args.catalogue} gave a {type(catalogue).__name__}, not a catalogue '
             '(ess.apps.scicat.Catalogue)'
         )
     return catalogue
 
 
-def _writing(given: _Given, catalogue: Catalogue | None) -> Writing:
+def _writing(given: _Context, catalogue: Catalogue | None) -> Writing:
     """
     The writing of the folder, with the writers of ``-W``; the owner and
-    contact of a form not set are the principal investigator of the
-    proposal, as ``catalogue`` says, if given.
+    contact of output options not set are the principal investigator of
+    the proposal, as ``catalogue`` says, if given.
     """
     contact = None
     if catalogue is not None:
@@ -318,13 +320,13 @@ def _writing(given: _Given, catalogue: Catalogue | None) -> Writing:
     return Writing(given.manager, given.writers, contact)
 
 
-def _publisher(given: _Given) -> Publisher:
+def _publisher(given: _Context) -> Publisher:
     """The publisher of the folder, to the catalogue of ``--catalogue``."""
     from .publish import Publisher
 
     catalogue = _the_catalogue(given)
     if catalogue is None:
-        raise _Wrong('publish needs -c/--catalogue')
+        raise _UsageError('publish needs -c/--catalogue')
     return Publisher(_writing(given, catalogue), catalogue)
 
 
@@ -337,7 +339,7 @@ def _existing(text: str) -> Path:
 
 
 @dataclass(frozen=True)
-class _Given:
+class _Context:
     """
     What a command runs with: its arguments, the row sources by name, the
     writers by spec name, and the client and definitions of the folder, if
@@ -395,7 +397,7 @@ status of a command that said what it did as it ran.
 """
 
 
-def _files(given: _Given) -> pd.DataFrame:
+def _files(given: _Context) -> pd.DataFrame:
     """
     The files table of the folder (``files.csv``): of the files of the folder
     that READ knows, or, without READ, of the raw files of the proposal in the
@@ -403,13 +405,13 @@ def _files(given: _Given) -> pd.DataFrame:
     """
     args = given.args
     if args.run_table is None and args.output is not None and args.output.exists():
-        raise _Wrong(f'{args.output} exists, and may hold what a person added')
+        raise _UsageError(f'{args.output} exists, and may hold what a person added')
     if args.read is None:
         rows = _catalogue_files(given)
     else:
         read = _named(args.read)
         if not callable(read):
-            raise _Wrong(
+            raise _UsageError(
                 f'{args.read} is a {type(read).__name__}, not a function from the '
                 'path of a file to its metadata'
             )
@@ -420,28 +422,28 @@ def _files(given: _Given) -> pd.DataFrame:
     return described(files, read_text(args.run_table))
 
 
-def _catalogue_files(given: _Given) -> list[dict[str, Any]]:
+def _catalogue_files(given: _Context) -> list[dict[str, Any]]:
     """The rows of the raw files of ``--proposal`` in the catalogue of ``-c``."""
     args = given.args
     if args.catalogue is None:
-        raise _Wrong('give READ, or the catalogue with -c to list its files')
+        raise _UsageError('give READ, or the catalogue with -c to list its files')
     if args.proposal == 'local':
-        raise _Wrong('give --proposal, whose files the catalogue lists')
+        raise _UsageError('give --proposal, whose files the catalogue lists')
     catalogue = _the_catalogue(given)
     from ess.apps.scicat import ScicatFiles, scan_catalogue  # the extra scicat
 
     try:
         return scan_catalogue(ScicatFiles(catalogue.client, args.proposal))
     except OSError as error:
-        raise _Failed(f'{args.catalogue}: {said(error)}') from None
+        raise _CommandError(f'{args.catalogue}: {error_text(error)}') from None
 
 
-def _names(given: _Given, names: Iterable[str]) -> list[str] | str:
+def _names(given: _Context, names: Iterable[str]) -> list[str] | str:
     """``names`` as a list for JSON, else as text, separated by a space."""
     return list(names) if given.args.json else ' '.join(names)
 
 
-def _specs(given: _Given) -> pd.DataFrame:
+def _specs(given: _Context) -> pd.DataFrame:
     """A row per spec bound: name, version, title, and the names of its outputs."""
     specs = [
         [spec.name, spec.version, spec.title, _names(given, spec.outputs.model_fields)]
@@ -450,7 +452,7 @@ def _specs(given: _Given) -> pd.DataFrame:
     return pd.DataFrame(specs, columns=['name', 'version', 'title', 'outputs'])
 
 
-def _template(given: _Given) -> str:
+def _template(given: _Context) -> str:
     """A template of a spec to fill in, or the settings of a batch."""
     args = given.args
     if args.label is not None:
@@ -462,21 +464,21 @@ def _template(given: _Given) -> str:
     return template_to_fill(spec, given.client.specs(), given.sources)
 
 
-def _row_sources(given: _Given) -> pd.DataFrame:
+def _row_sources(given: _Context) -> pd.DataFrame:
     """A row per row source: its name, what it fills, and its description."""
     sources = [
-        [name, _names(given, source.fills), source.description]
+        [name, _names(given, source.source_columns), source.description]
         for name, source in given.sources.items()
     ]
-    return pd.DataFrame(sources, columns=['name', 'fills', 'description'])
+    return pd.DataFrame(sources, columns=['name', 'source_columns', 'description'])
 
 
-def _rows(given: _Given) -> pd.DataFrame:
+def _rows(given: _Context) -> pd.DataFrame:
     """The rows that the row source of the name given makes now."""
     return given.intake().rows_of(given.args.source)
 
 
-def _batches(given: _Given) -> pd.DataFrame:
+def _batches(given: _Context) -> pd.DataFrame:
     """
     A row per batch: its label, title, spec, number of rows, how many have a
     completed result, the name of its row source, and whether it follows. The
@@ -496,8 +498,8 @@ def _batches(given: _Given) -> pd.DataFrame:
             row |= {
                 'spec': batch.spec.name,
                 'rows': len(states),
-                'reduced': sum(s.status is Status.COMPLETED for s in states),
-                'source': intake.source(label),
+                'reduced': sum(s.record_status is Status.COMPLETED for s in states),
+                'source': intake.row_source(label),
             }
         except ValueError as error:
             sys.stderr.write(f'{label}: {error}\n')
@@ -519,12 +521,12 @@ def _table(batch: Batch, keys: list[str] | None = None) -> pd.DataFrame:
     return frames.with_results(batch, states, keys)
 
 
-def _show(given: _Given) -> pd.DataFrame:
+def _show(given: _Context) -> pd.DataFrame:
     """The batch table of the label, with what came of each row."""
     return _table(given.batch(given.args.label))
 
 
-def _reduce(given: _Given) -> pd.DataFrame:
+def _reduce(given: _Context) -> pd.DataFrame:
     """
     Reduce the batch of the label, and return its batch table with what came
     of each row (:func:`.frames.reduce_batch`).
@@ -533,10 +535,10 @@ def _reduce(given: _Given) -> pd.DataFrame:
     (:meth:`~.manager.BatchManager.create`) of the template's spec, with the
     label as title; with ``--source``, the intake makes it
     (:meth:`~.intake.Intake.create`). Its batch table is the table file given
-    (:func:`.table.read_table`), or the rows that the source ``--source`` has
-    filled now, those that ``--first``, ``--last`` and ``--later`` pick
+    (:func:`.table.read_table`), or the rows of the source ``--source`` that are
+    complete now, those that ``--first``, ``--last`` and ``--later`` pick
     (:class:`~.source.Range`), not both; without either, one row keyed by the
-    label. With ``--source``, the batch keeps its source, so that ``offered``
+    label. With ``--source``, the batch keeps its source, so that ``available``
     and its page offer the rows of the source that its batch table lacks; it
     follows only after ``follow``. ``create`` refuses a label that
     has definitions or records. If the reduction is then refused, the batch
@@ -544,7 +546,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
     once the template is right.
 
     For a label with a batch, the template becomes its settings and the table
-    file replaces its batch table (:meth:`.reduction.Batch.put`); ``--source``
+    file replaces its batch table (:meth:`.reduction.Batch.set_table`); ``--source``
     is refused.
 
     A template must be of the batch's spec and its version, as the page's
@@ -554,7 +556,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
     but at a column that the batch's source fills, where it is left out
     (:meth:`.reduction.Batch.settable`). With ``--remaining`` it reduces the
     rows that the page's "Reduce" does (:func:`.state.left_to_reduce`);
-    ``--earlier-settings`` adds those reduced with earlier settings.
+    ``--settings-changed`` adds those reduced with earlier settings.
     """
     args, client = given.args, given.client
     label = args.label
@@ -572,7 +574,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
     if args.table is not None:
         rows = read_table(args.table, spec.params)
     elif batch is not None:
-        rows = batch.frame()
+        rows = batch.table()
     elif args.source is None:
         rows = pd.DataFrame(index=pd.Index([label], name=KEY))
     else:
@@ -586,7 +588,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
             raise ValueError(f'{args.template}: {error}') from None
     made = batch is None
     if batch is not None:
-        batch.put(rows)
+        batch.set_table(rows)
         if settings is not None:
             batch.settings = batch.settable(settings)
     elif args.source is not None:
@@ -601,17 +603,17 @@ def _reduce(given: _Given) -> pd.DataFrame:
         )
     else:
         batch = manager.create(
-            spec.name, title=label, rows=rows, settings=settings, label=label
+            spec.name, title=label, table=rows, settings=settings, label=label
         )
     try:
         return frames.reduce_batch(
-            batch, remaining=args.remaining, earlier_settings=args.earlier_settings
+            batch, remaining=args.remaining, settings_changed=args.settings_changed
         )
     except (SubmitError, ValueError):
         # A refusal submits nothing, so the label is free again, unless a
         # record has the label after all.
         if made and not client.records(label=label):
-            with suppress(NotKept):  # the refusal is what to say
+            with suppress(DefinitionWriteError):  # the refusal is what to say
                 manager.remove(label)
         raise
 
@@ -623,24 +625,24 @@ def _count(number: int, noun: str) -> str:
 
 def _reduced(result: pd.DataFrame) -> int:
     """The exit status of reduce: 3 if a row is not done, saying why if earlier."""
-    # Only --remaining without --earlier-settings leaves such rows.
-    if left := int((result['status'] == 'earlier').sum()):
+    # Only --remaining without --settings-changed leaves such rows.
+    if left := int((result['status'] == 'settings changed').sum()):
         sys.stderr.write(
             f'left {_count(left, "row")} reduced with earlier '
-            'settings: add --earlier-settings to reduce them\n'
+            'settings: add --settings-changed to reduce them\n'
         )
     return 0 if all(result['status'] == 'done') else 3
 
 
-def _export(given: _Given) -> pd.DataFrame:
+def _export(given: _Context) -> pd.DataFrame:
     """
     Write the results of the rows of a table as scipp HDF5, or of a batch as
-    it stands by its form; the table.
+    it stands by its output options; the table.
     """
     args = given.args
     if args.label is not None:
         table = _show(given)
-        write, _ = Writing(given.manager, given.writers).by_form(args.label)
+        write, _ = Writing(given.manager, given.writers).by_options(args.label)
     else:
         table = read_text(args.table)
         if KEY not in table.columns:
@@ -653,17 +655,17 @@ def _export(given: _Given) -> pd.DataFrame:
     return table
 
 
-def _form(given: _Given) -> str:
-    """Keep the form of a file, if given; the form of a batch, as YAML."""
+def _output_options(given: _Context) -> str:
+    """Keep the output options of a file, if given; a batch's, as YAML."""
     args = given.args
     writing = _writing(given, _the_catalogue(given))
     label = _known(writing.manager, args.label)
     if args.file is not None:
-        writing.set_form(label, load_form(args.file))
-    return writing.form_text(label)
+        writing.set_options(label, load_options(args.file))
+    return writing.options_text(label)
 
 
-def _publish(given: _Given) -> pd.DataFrame:
+def _publish(given: _Context) -> pd.DataFrame:
     """Publish the rows of the keys given; those rows, as ``show`` writes them."""
     from .publish import UploadFailed
 
@@ -674,25 +676,25 @@ def _publish(given: _Given) -> pd.DataFrame:
     try:
         publisher.publish(label, args.keys)
     except UploadFailed as error:
-        raise _Failed(f'not published: {error}') from None
+        raise _CommandError(f'not published: {error}') from None
     return _table(manager.batch(label), args.keys)
 
 
-def _offered(given: _Given) -> pd.DataFrame:
-    """The rows of the source of a batch that its batch table lacks, with ``waits``."""
+def _available(given: _Context) -> pd.DataFrame:
+    """The rows of the source of a batch that its batch table lacks."""
     intake = given.intake()
-    return intake.offered(_known(intake.manager, given.args.label))
+    return intake.available_rows(_known(intake.manager, given.args.label))
 
 
-def _take(given: _Given) -> pd.DataFrame:
+def _add(given: _Context) -> pd.DataFrame:
     """Put rows of its source into a batch; those rows, as ``show`` writes them."""
     args = given.args
     intake = given.intake()
-    intake.take(_known(intake.manager, args.label), args.keys)
+    intake.add_rows(_known(intake.manager, args.label), args.keys)
     return _table(intake.manager.batch(args.label), args.keys)
 
 
-def _remove(given: _Given) -> int:
+def _remove(given: _Context) -> int:
     """Remove a batch, saying that its records stay; a removal cut off too."""
     label = given.args.label
     try:
@@ -714,7 +716,7 @@ def _remove(given: _Given) -> int:
     return 0
 
 
-def _stop(given: _Given) -> int:
+def _stop(given: _Context) -> int:
     """End Follow, saying on which batch."""
     intake = given.intake()
     label = intake.following
@@ -725,7 +727,7 @@ def _stop(given: _Given) -> int:
     return 0
 
 
-def _follow(given: _Given) -> int:
+def _follow(given: _Context) -> int:
     """
     Let a batch follow, and run :func:`follow` on it until Ctrl-C or SIGTERM,
     or for ``--steps``; 0 if every row of the batch is then done, else 3.
@@ -740,10 +742,10 @@ def _follow(given: _Given) -> int:
     )
     stop = threading.Event()
 
-    def say(line: Mapping[str, Any]) -> None:
+    def write_line(line: Mapping[str, Any]) -> None:
         now = datetime.now(UTC).astimezone()  # local time, with its offset
         line = {'time': now.isoformat(timespec='seconds'), **line}
-        text = json.dumps(line, ensure_ascii=False) if args.json else _said(line)
+        text = json.dumps(line, ensure_ascii=False) if args.json else _line_text(line)
         if text is not None:
             sys.stdout.write(f'{text}\n')
             sys.stdout.flush()
@@ -751,13 +753,13 @@ def _follow(given: _Given) -> int:
     with _stopped_by_signals(stop):
         follow(
             intake,
-            say=say,
+            write_line=write_line,
             pause=lambda: stop.wait(args.interval),
             stopped=stop.is_set,
             steps=args.steps,
         )
     states, _ = intake.manager.batch(label).shown()
-    if left := sum(s.text != 'done' for s in states.values()):
+    if left := sum(s.status != 'done' for s in states.values()):
         sys.stderr.write(
             f'{_count(left, "row")} of {label} not done: show -l {label} says why\n'
         )
@@ -793,7 +795,7 @@ def _stopped_by_signals(stop: threading.Event) -> Iterator[None]:
 def follow(
     intake: Intake,
     *,
-    say: Callable[[Mapping[str, Any]], None],
+    write_line: Callable[[Mapping[str, Any]], None],
     pause: Callable[[], object],
     stopped: Callable[[], bool],
     steps: int | None = None,
@@ -803,24 +805,24 @@ def follow(
     with ``pause()`` between two, until ``stopped()`` or after ``steps``
     steps; then wait for the reductions that run, and return.
 
-    After a step that did something, ``say`` is given what, as a mapping of
+    After a step that did something, ``write_line`` is given what, as a mapping of
     names to keys::
 
         added       the rows that the step added, a list of keys
         reducing    the rows that it submitted
         ended       the status of each row whose reduction ended since
-                    (RowState.text), by key; the reductions that ran at the
+                    (RowState.status), by key; the reductions that ran at the
                     first step count too
         failure     why each of those failed or was cancelled, by key
         refused     why each row could not be submitted, by key
-        waiting     the rows of the source that are not filled yet
+        incomplete  the rows of the source that are not complete yet
 
         error       why the step raised, ``None`` if it did not
 
-    A step did something if it added or submitted rows, if a reduction
-    ended, if what is refused or waits changed since ``say`` was last called,
-    or if it raised something else than the step before. After the wait,
-    ``say`` is given the reductions that ended in it.
+    A step did something if it added or submitted rows, if a reduction ended,
+    if what is refused or incomplete changed since ``write_line`` was last
+    called, or if it raised something else than the step before. After the
+    wait, ``write_line`` is given the reductions that ended in it.
 
     A step may raise anything, as the code of the source may
     (:meth:`.intake.Intake.step`). It is said on stderr as the page says it
@@ -833,7 +835,7 @@ def follow(
     ----------
     intake:
         The intake, whose batch follows; ``ValueError`` if none does.
-    say:
+    write_line:
         Called with what a step did.
     pause:
         Waits between two steps, such as ``event.wait(seconds)``.
@@ -848,9 +850,9 @@ def follow(
     running = {
         key: state.record
         for key, state in batch.state(compare=False).items()
-        if state.record is not None and state.status is Status.PENDING
+        if state.record is not None and state.record_status is Status.PENDING
     }
-    shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, waiting
+    shown: tuple[Mapping[str, str], list[str]] = ({}, [])  # refused, incomplete
     failed: str | None = None  # what the step before raised, as said
     done = 0
     while steps is None or done < steps:
@@ -868,26 +870,32 @@ def follow(
         except Stopped:
             raise
         except Exception as raised:  # code of the application, as on the page
-            stepped, error, told = None, said(raised), step_failure(raised)
+            stepped, error, told = None, error_text(raised), step_failure(raised)
         if fresh := error is not None and error != failed:
             sys.stderr.write(f'{told}\n')
         failed = error
         if stepped is None:
             added: list[str] = []
             reducing: list[str] = []
-            refused, waiting = shown
+            refused, incomplete = shown
         else:
             added = list(stepped.added)
             reducing = list(stepped.records)
-            refused, waiting = dict(stepped.refused), list(stepped.waiting)
+            refused, incomplete = dict(stepped.submit_errors), list(stepped.incomplete)
             running |= stepped.records
         line = _ended(batch, running)
-        if added or reducing or line['ended'] or (refused, waiting) != shown or fresh:
-            say(_line(added, reducing, line, refused, waiting, error))
-            shown = (refused, waiting)
+        if (
+            added
+            or reducing
+            or line['ended']
+            or (refused, incomplete) != shown
+            or fresh
+        ):
+            write_line(_line(added, reducing, line, refused, incomplete, error))
+            shown = (refused, incomplete)
     if running:
         batch.client.wait(list(running.values()))
-        say(_line([], [], _ended(batch, running), *shown, None))
+        write_line(_line([], [], _ended(batch, running), *shown, None))
 
 
 def _line(
@@ -895,7 +903,7 @@ def _line(
     reducing: list[str],
     ended: Mapping[str, Mapping[str, str]],
     refused: Mapping[str, str],
-    waiting: list[str],
+    incomplete: list[str],
     error: str | None,
 ) -> dict[str, Any]:
     """A line of :func:`follow`, in its order."""
@@ -904,7 +912,7 @@ def _line(
         'reducing': reducing,
         **ended,
         'refused': refused,
-        'waiting': waiting,
+        'incomplete': incomplete,
         'error': error,
     }
 
@@ -929,12 +937,12 @@ def _ended(batch: Batch, running: dict[str, Record]) -> dict[str, dict[str, str]
     states, _ = batch.shown(list(ended))
     why = batch.client.failure(list(ended.values()))
     return {
-        'ended': {key: states[key].text for key in ended},
+        'ended': {key: states[key].status for key in ended},
         'failure': {key: w for key, w in zip(ended, why, strict=True) if w},
     }
 
 
-def _said(line: Mapping[str, Any]) -> str | None:
+def _line_text(line: Mapping[str, Any]) -> str | None:
     """
     A line of :func:`follow` as a person reads it: its parts that are not
     empty, but the error, which stderr says; ``None`` if none is left.
@@ -954,7 +962,7 @@ def _said(line: Mapping[str, Any]) -> str | None:
             for status in dict.fromkeys(ended.values())
         ),
         ('refused', list(line['refused']), line['refused']),
-        ('waiting', line['waiting'], {}),
+        ('incomplete', line['incomplete'], {}),
     ]
     text = ' | '.join(f'{name} {keys(k, why)}' for name, k, why in parts if k)
     return f'{line["time"][11:19]} {text}' if text else None
@@ -989,7 +997,7 @@ def _template_arguments(command: argparse.ArgumentParser) -> None:
 
 def _rows_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
-        'source', metavar='NAME', help='the name of a row source in -s/--sources'
+        'source', metavar='NAME', help='the name of a row source in -s/--row-sources'
     )
 
 
@@ -1019,8 +1027,8 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         '--source',
         metavar='NAME',
-        help='make a new batch of the rows that the row source NAME in '
-        '-s/--sources has filled now; not with a table file',
+        help='make a new batch of the rows of the row source NAME in '
+        '-s/--row-sources that are complete now; not with a table file',
     )
     command.add_argument(
         '--first', metavar='KEY', help='with --source, the rows from the row KEY on'
@@ -1031,8 +1039,8 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         '--later',
         action='store_true',
-        help='with --source, no rows now: follow adds the rows filled from now '
-        'on, take any',
+        help='with --source, no rows now: follow adds the rows that are '
+        'complete from now on, take any',
     )
     command.add_argument(
         '--staged',
@@ -1042,12 +1050,15 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         '--remaining',
         action='store_true',
-        help='reduce only the rows that are not done: not those that read earlier',
+        help=(
+            'reduce only the rows that are not done: not those with status '
+            'settings changed'
+        ),
     )
     command.add_argument(
-        '--earlier-settings',
+        '--settings-changed',
         action='store_true',
-        help='with --remaining, reduce the rows that read earlier too',
+        help='with --remaining, reduce the rows with status settings changed too',
     )
 
 
@@ -1069,21 +1080,21 @@ def _export_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
-def _take_arguments(command: argparse.ArgumentParser) -> None:
+def _add_arguments(command: argparse.ArgumentParser) -> None:
     _label(command, required=True, help='the label of the batch')
     command.add_argument(
-        'keys', metavar='KEY', nargs='+', help='the key of a row that offered lists'
+        'keys', metavar='KEY', nargs='+', help='the key of a row that available lists'
     )
 
 
-def _form_arguments(command: argparse.ArgumentParser) -> None:
+def _output_options_arguments(command: argparse.ArgumentParser) -> None:
     _label(command, required=True, help='the label of the batch')
     command.add_argument(
         'file',
         metavar='FILE',
         type=_existing,
         nargs='?',
-        help='a form, YAML, as the command writes it, to keep for the batch',
+        help='output options, YAML, as the command writes them, to keep for the batch',
     )
 
 
@@ -1093,7 +1104,7 @@ def _publish_arguments(command: argparse.ArgumentParser) -> None:
         'keys',
         metavar='KEY',
         nargs='+',
-        help='the key of a row whose result to publish: done, or earlier',
+        help='the key of a row whose result to publish: done, or settings changed',
     )
 
 
@@ -1131,8 +1142,8 @@ def _follow_arguments(command: argparse.ArgumentParser) -> None:
 
 
 def _with_sources(name: str) -> Callable[[argparse.Namespace], str | None]:
-    """A check that -s/--sources is given to the command ``name``."""
-    return lambda args: None if args.sources else f'{name} needs -s/--sources'
+    """A check that -s/--row-sources is given to the command ``name``."""
+    return lambda args: None if args.row_sources else f'{name} needs -s/--row-sources'
 
 
 def _one_of(first: str, second: str) -> Callable[[argparse.Namespace], str | None]:
@@ -1153,14 +1164,14 @@ def _with_catalogue(name: str) -> Callable[[argparse.Namespace], str | None]:
 
 
 def _reduce_check(args: argparse.Namespace) -> str | None:
-    if args.earlier_settings and not args.remaining:
-        return '--earlier-settings needs --remaining'
+    if args.settings_changed and not args.remaining:
+        return '--settings-changed needs --remaining'
     if args.table is not None and args.source:
         return 'give a table file or --source, not both'
     if args.source is None and (args.first or args.last or args.later):
         return '--first, --last and --later pick rows of --source'
-    if args.source is not None and not args.sources:
-        return '--source needs -s/--sources'
+    if args.source is not None and not args.row_sources:
+        return '--source needs -s/--row-sources'
     return None
 
 
@@ -1176,7 +1187,7 @@ class _Command:
     was written.
     """
 
-    run: Callable[[_Given], _Result]
+    run: Callable[[_Context], _Result]
     description: str
     arguments: Callable[[argparse.ArgumentParser], None] = lambda _: None
     check: Callable[[argparse.Namespace], str | None] = lambda _: None
@@ -1217,7 +1228,7 @@ _COMMANDS = {
     ),
     'sources': _Command(
         _row_sources,
-        description='List the row sources of -s/--sources by name, with the '
+        description='List the row sources of -s/--row-sources by name, with the '
         'parameters that each fills for each row, and what a row is.',
         check=_with_sources('sources'),
         folder=False,
@@ -1254,24 +1265,24 @@ _COMMANDS = {
         check=_reduce_check,
         status=_reduced,
     ),
-    'form': _Command(
-        _form,
-        description='Keep the form FILE for the batch of LABEL, if given; then '
-        'write the form of the batch as YAML, to edit and give back: the format '
-        'that export -l, publish and the page write the results as, the outputs '
-        'that a format which writes those chosen writes, and the name, '
-        'description, keywords, owner and contact email of the results. Until a '
-        'form is kept, the format is the first that -W gives for the spec, else '
-        'scipp HDF5, and with -c the owner and contact are the principal '
-        'investigator of the proposal, as the catalogue says.',
-        arguments=_form_arguments,
+    'output-options': _Command(
+        _output_options,
+        description='Keep the output options FILE for the batch of LABEL, if '
+        'given; then write the output options of the batch as YAML, to edit and give '
+        'back: the format that export -l, publish and the page write the results as, '
+        'the outputs that a format which writes those chosen writes, and the name, '
+        'description, keywords, owner and contact email of the results. Until output '
+        'options are kept, the format is the first that -W gives for the spec, else '
+        'scipp HDF5, and with -c the owner and contact are the principal investigator '
+        'of the proposal, as the catalogue says.',
+        arguments=_output_options_arguments,
         output='text',
     ),
     'export': _Command(
         _export,
         description='Write the result of each done row of the table file '
-        'TABLE, each output as scipp HDF5, or of the batch of LABEL as it '
-        'stands, as its form says, to a folder of its key in DIRECTORY, which it '
+        'TABLE, each output as scipp HDF5, or of the batch of LABEL as it stands, as '
+        'its output options say, to a folder of its key in DIRECTORY, which it '
         'replaces whole, with the record as _record.json; and write the rows.',
         arguments=_export_arguments,
         check=_one_of('table', 'label'),
@@ -1280,7 +1291,7 @@ _COMMANDS = {
         _publish,
         description='Publish the result of the row of each KEY of the batch of '
         'LABEL to the catalogue as one derived dataset, with the files that '
-        'its form says, and write those rows as show does, '
+        'its output options say, and write those rows as show does, '
         'with the catalogue identifier in the column published. A result is '
         'published once; '
         'a new result of the row is a new dataset. If an upload fails, the '
@@ -1288,34 +1299,34 @@ _COMMANDS = {
         arguments=_publish_arguments,
         check=_with_catalogue('publish'),
     ),
-    'offered': _Command(
-        _offered,
+    'available': _Command(
+        _available,
         description='List the rows that the row source of the batch of LABEL '
-        'makes now and its batch table lacks, with a column waits: whether a '
+        'makes now and its batch table lacks, with a column incomplete: whether a '
         'parameter that the source fills is empty. follow adds a row once it '
-        'is filled, unless the batch left it out when made or a person '
-        'removed it; take adds any.',
+        'is complete, unless the batch left it out when made or a person '
+        'removed it; add adds any.',
         arguments=_show_arguments,
-        check=_with_sources('offered'),
+        check=_with_sources('available'),
     ),
-    'take': _Command(
-        _take,
+    'add': _Command(
+        _add,
         description='Put the rows of KEY, as the row source of the batch of '
         'LABEL makes them now, into its batch table, and write them as show '
         'does. '
         'It reduces nothing. A row that waits for a file goes in with its cell '
         'empty, and stays incomplete until a person fills it: follow changes '
         'no row of the batch table.',
-        arguments=_take_arguments,
-        check=_with_sources('take'),
+        arguments=_add_arguments,
+        check=_with_sources('add'),
     ),
     'follow': _Command(
         _follow,
         description='Let the batch of LABEL follow its row source, in place '
         'of the batch that followed, and do a step every SECONDS until Ctrl-C '
         'or SIGTERM, or for N steps; then wait for the reductions that run. '
-        'A step adds the rows of the source that are filled and not '
-        'considered, and reduces the rows that are ready and have no result. '
+        'A step adds the rows of the source that are complete and not '
+        'seen, and reduces the rows that are ready and have no result. '
         'It writes a line per step that did something, an object with --json. '
         'The batch still follows when it exits: stop ends that.',
         arguments=_follow_arguments,
@@ -1361,9 +1372,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         '-s',
-        '--sources',
+        '--row-sources',
         metavar='MODULE:NAME',
-        help='the row sources by name, for sources, rows, offered, take, '
+        help='the row sources by name, for sources, rows, available, add, '
         'follow, reduce --source and template',
     )
     parser.add_argument(
@@ -1371,15 +1382,15 @@ def _parser() -> argparse.ArgumentParser:
         '--catalogue',
         metavar='MODULE:NAME',
         help='a function from the proposal to the catalogue to publish to '
-        '(ess.apps.scicat.Catalogue), for publish; form takes the owner and '
-        'contact of a form not set from it',
+        '(ess.apps.scicat.Catalogue), for publish; output-options takes the '
+        'owner and contact of output options not set from it',
     )
     parser.add_argument(
         '-W',
         '--writers',
         metavar='MODULE:NAME',
         help='the writers of the specs: a mapping of spec name to a list of '
-        'writers (ess.apps.writers.Writer), for form, export -l and publish',
+        'writers (ess.apps.writers.Writer), for output-options, export -l and publish',
     )
     parser.add_argument(
         '--json',
@@ -1443,15 +1454,17 @@ def _write(result: pd.DataFrame | str, args: argparse.Namespace) -> None:
         replace_at_once(args.output, lambda path: path.write_text(result))
 
 
-def _opened(given: _Given, command: _Command) -> _Result:
+def _opened(given: _Context, command: _Command) -> _Result:
     """Run ``command`` on the folder, which it opens and closes."""
     args = given.args
     if args.bind is None:
         # a workspace goes on with pending records, which need their bindings
-        raise _Wrong('--bind is required: the bindings of the workspace')
+        raise _UsageError('--bind is required: the bindings of the workspace')
     bind = _bindings(args.bind)
     if not (args.workspace / 'files.csv').is_file():
-        raise _Wrong(f'{args.workspace}: no files.csv; the command files writes it')
+        raise _UsageError(
+            f'{args.workspace}: no files.csv; the command files writes it'
+        )
     try:  # as read once, so that a files table in error is refused
         folder_files(args.workspace)
     except FileNotFoundError as error:
@@ -1465,10 +1478,10 @@ def _opened(given: _Given, command: _Command) -> _Result:
             args.workspace, bind, proposal=args.proposal
         )
     except RuntimeError as error:  # another process holds the folder
-        raise _Failed(str(error)) from None
+        raise _CommandError(str(error)) from None
     with client:
         return command.run(
-            _Given(args, given.sources, given.writers, (client, definitions))
+            _Context(args, given.sources, given.writers, (client, definitions))
         )
 
 
@@ -1481,33 +1494,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         if command.output == 'table' and args.output is not None:
             suffixes = ('.json',) if args.json else SUFFIXES
             if args.output.suffix not in suffixes:
-                raise _Wrong(f'{args.output}: write a file of {", ".join(suffixes)}')
-        sources = {} if args.sources is None else _sources(args.sources)
+                raise _UsageError(
+                    f'{args.output}: write a file of {", ".join(suffixes)}'
+                )
+        sources = {} if args.row_sources is None else _sources(args.row_sources)
         writers = {} if args.writers is None else _writers(args.writers)
         if (wrong := command.check(args)) is not None:
-            raise _Wrong(wrong)
+            raise _UsageError(wrong)
         if args.catalogue is not None:
             _catalogue(args.catalogue)  # refused before the folder is opened
         # A name of the command line, so refused before the folder is opened,
         # also while another process holds it.
         source = getattr(args, 'source', None)
         if source is not None and source not in sources:
-            raise _Wrong(not_registered(source, sources))
-        given = _Given(args, sources, writers)
+            raise _UsageError(not_registered(source, sources))
+        given = _Context(args, sources, writers)
         result = _opened(given, command) if command.folder else command.run(given)
-    except _Wrong as error:
+    except _UsageError as error:
         parser.error(str(error))
-    except _Failed as error:
+    except _CommandError as error:
         sys.stderr.write(f'{error}\n')
         return 1
-    except NotKept as error:
+    except DefinitionWriteError as error:
         sys.stderr.write(f'not kept: {error}\n')
         return 1
     except Stopped as error:
         sys.stderr.write(f'{error}\n')
         return 1
     except (SubmitError, ValueError) as error:  # also definitions of another format
-        sys.stderr.write(f'{said(error)}\n')  # a ValidationError of the source too
+        sys.stderr.write(
+            f'{error_text(error)}\n'
+        )  # a ValidationError of the source too
         return 2
     if isinstance(result, int):
         return result

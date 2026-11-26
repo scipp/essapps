@@ -22,7 +22,7 @@ class LastStep:
     """
     What Follow said at its last step: what the step raised
     (:attr:`failure`), and the label and the last step that did not raise,
-    whose refusals :meth:`applied` empties. What it says of a batch is
+    whose refusals :meth:`clear_submit_errors` empties. What it says of a batch is
     about the batch that follows now (:attr:`~ess.batch.Intake.following`),
     and nothing of another. Its callers hold the lock of all pages.
 
@@ -45,7 +45,7 @@ class LastStep:
         self.failure: str | None = None
         self._last: tuple[str, Step] | None = None
 
-    def stepped(self, label: str, step: Step) -> None:
+    def record_step(self, label: str, step: Step) -> None:
         """Keep ``step`` on the batch of ``label``, which did not raise."""
         self._last = (label, step)
         self.failure = None
@@ -66,23 +66,23 @@ class LastStep:
         if self._intake.following != label:
             return None
         step = self._step(label)
-        shown = None if step is None else (len(step.waiting), step.refused)
+        shown = None if step is None else (len(step.incomplete), step.submit_errors)
         return self.failure, shown
 
     def shown(self, label: str) -> Following:
         """
         Follow, as the page of the batch of ``label`` shows it: whether the
         batch follows, and while it does, what the last step raised and how
-        many rows wait.
+        many rows are incomplete.
         """
         on = self._intake.following == label
         step = self._step(label)
         return Following(
             on=on,
-            source=self._intake.source(label),
+            row_source=self._intake.row_source(label),
             interval=self._interval,
             failure=self.failure if on else None,
-            waiting=0 if step is None else len(step.waiting),
+            incomplete=0 if step is None else len(step.incomplete),
         )
 
     def unsubmitted(self, label: str, states: Mapping[str, RowState]) -> dict[str, str]:
@@ -93,15 +93,15 @@ class LastStep:
         if (step := self._step(label)) is None:
             return {}
         return {
-            key: f'Follow could not reduce it: {forms.message(step.refused[key])}'
+            key: f'Follow could not reduce it: {forms.message(step.submit_errors[key])}'
             for key in not_reduced(states)
-            if key in step.refused
+            if key in step.submit_errors
         }
 
-    def applied(self, label: str) -> None:
+    def clear_submit_errors(self, label: str) -> None:
         """
         Forget why Follow could not submit rows of the batch of ``label``,
         whose page applied settings: its next step tries them with these.
         """
         if (step := self._step(label)) is not None:
-            self._last = (label, replace(step, refused={}))
+            self._last = (label, replace(step, submit_errors={}))

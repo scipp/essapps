@@ -7,7 +7,7 @@
 // a batch serves the page at its root without one, and the page of a batch
 // that cannot be shown is shown so too (see `showWorkspace`).
 import {h, get, post, query, save} from './dom.js';
-import {Grid, cellColumns, statusColumn} from './tables.js';
+import {Grid, cellColumns, statusClass, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
 
 const $ = (id) => document.getElementById(id);
@@ -40,7 +40,7 @@ const view = {
   colors: {}, // the colour of each curve drawn, by key
   detail: '', // what the row tab shows, to draw it again only on a change
   dismissed: '', // the refusal whose message was closed
-  runs: 0, // the version of the runs shown
+  runs: 0, // the revision of the runs shown
   runData: null, // the runs last loaded, with their columns
   batchData: null, // the list of batches last shown
   counts: null, // the counts of the rows of each batch, once counted
@@ -152,7 +152,7 @@ class Unshown extends Error {}
 // shown before is dropped.
 async function refresh() {
   const at = changes;
-  const after = view.state ? {after: view.state.version, start: view.state.start} : {};
+  const after = view.state ? {after: view.state.revision, start: view.state.start} : {};
   const response = await get(`state?${query(after)}`, here).catch(() => null);
   if (at !== changes) return;
   if (!response) throw new Offline('The server does not answer.');
@@ -227,7 +227,7 @@ function toast(text) {
 function render(state) {
   const old = view.state;
   if (old && state.start !== old.start) return location.reload();
-  if (old && state.version < old.version) return;
+  if (old && state.revision < old.revision) return;
   view.state = state;
   const built = !rows;
   if (built) build(state);
@@ -245,10 +245,10 @@ function render(state) {
   $('title').textContent = named.reverse().join(' · ');
   $('folder').textContent = state.folder;
   $('n-rows').textContent = state.counts.all;
-  renderAction(state.action, state.counts.earlier);
+  renderAction(state.action, state.counts['settings changed']);
   renderChips(state.counts);
   if (old?.action.running && !state.action.running) {
-    const ended = ['done', 'earlier', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
+    const ended = ['done', 'settings changed', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
     toast(`Reducing ended: ${ended.join(', ')}.`);
   }
   showColumns(state);
@@ -256,7 +256,7 @@ function render(state) {
   rows.update(state.rows, old ? undefined : {selected: view.selected, filter: view.filter, sort: view.sort});
   if (state.runs !== null && state.runs !== view.runs) loadRuns();
   showBatches({application: state.application, runs: state.runs, rows: state.batches});
-  renderRefused(state.refused);
+  renderSubmitErrors(state.submit_errors);
   renderFollow(state.follow);
   $('files-problem').hidden = !state.files_problem;
   $('files-problem').textContent = $('files-problem').title = state.files_problem ?? '';
@@ -283,7 +283,7 @@ function gridColumns(state) {
     current: () => view.state.columns,
     say: showMessage,
     // A column that the source fills stays a column: its rows wait for their runs.
-    menu: (column) => (column.waits ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
+    menu: (column) => (column.from_source ? [] : [{label: 'Make this a setting', action: () => makeSetting(column)}]),
   });
   return {
     columns: [named, ...notes, ...cells, statusColumn, ...(state.output.catalogue ? [publishedColumn] : [])],
@@ -295,7 +295,7 @@ function gridColumns(state) {
 // file loaded changes them.
 function showColumns(state) {
   // The options of a pick are read when its editor opens (`current`).
-  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.waits])]);
+  const shown = JSON.stringify([state.notes, state.columns.map((c) => [c.name, c.title, c.editor?.type, c.default, c.from_source])]);
   if (shown === view.columns) return;
   const first = view.columns === '';
   view.columns = shown;
@@ -338,7 +338,7 @@ function downloadResults(rows, name) {
 async function loadRuns() {
   const shown = await request('runs', {kind: 'runs'});
   if (!shown) return;
-  view.runs = shown.version;
+  view.runs = shown.revision;
   view.runData = shown;
   $('n-runs').textContent = shown.rows.length;
   if (view.page === 'runs') drawRuns();
@@ -415,7 +415,7 @@ function drawRuns() {
 }
 
 // Correct runs, an action of the workspace; whether it was done. The page of
-// a batch then asks for its state at once, whose version of the runs has
+// a batch then asks for its state at once, whose revision of the runs has
 // moved, so that it loads the runs; a page without a batch asks for the runs.
 function correctRuns(url, body) {
   return queued(async () => {
@@ -508,7 +508,7 @@ function drawBatches() {
     status.className = failed ? 'bad' : '';
     status.replaceChildren(
       failed ?? '',
-      ...(n ? CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill st-${s}`, text: `${n[s]} ${s}`})) : []),
+      ...(n ? CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill ${statusClass(s)}`, text: `${n[s]} ${s}`})) : []),
     );
   }
 }
@@ -574,7 +574,7 @@ async function show(url, page, how) {
 
 // The form "New batch". The server says what a batch can be made with
 // (api/sources) and decides what can be made: a refusal shows at the form.
-// The rows come from a source, a range of those that it has filled now; from
+// The rows come from a source, a range of those complete now; from
 // a table file; or none. Opened on the page of a batch, the form starts at
 // that batch's source, workflow, columns and settings, so that the next batch
 // is this form with a range that starts later. A batch from a source may
@@ -599,7 +599,7 @@ async function openNewBatch() {
     h('option', {value: none, text: 'none: no rows'}),
   );
   if (view.state) {
-    const at = choices.findIndex((c) => c.name === view.state.follow.source);
+    const at = choices.findIndex((c) => c.name === view.state.follow.row_source);
     form.elements.source.value = at >= 0 ? at : none;
   }
   chooseSource();
@@ -687,13 +687,13 @@ function chooseFollow() {
 // columns, the others a person may make columns. On the page of a batch, its
 // columns are ticked, and its settings offered.
 function chooseSpec() {
-  const {name, fills} = chosenSource();
+  const {name, source_columns: sourceColumns} = chosenSource();
   const spec = chosenSpec();
   const batch = view.state;
   const ticked = batch ? batch.columns.map((c) => c.name) : [];
   $('new-columns').replaceChildren(
     ...(spec?.params ?? []).map((p) => {
-      const fixed = fills.includes(p.name);
+      const fixed = sourceColumns.includes(p.name);
       const box = h('input', {type: 'checkbox', name: 'column', value: p.name, checked: fixed || ticked.includes(p.name), disabled: fixed});
       return h('label', {title: fixed ? `Filled by ${name}` : null}, box, p.title);
     }),
@@ -703,7 +703,7 @@ function chooseSpec() {
 }
 
 // The rows that the source makes now, for the range; the first and the last
-// row are chosen among those that are filled.
+// row are chosen among those that are complete.
 async function loadSourceRows(name) {
   const {elements} = $('new-batch');
   sourceRows = null;
@@ -711,14 +711,14 @@ async function loadSourceRows(name) {
   drawRange();
   const loaded = await markRange(name);
   if (!loaded) return;
-  const filled = loaded.rows.filter((row) => row.mark !== 'waits');
+  const complete = loaded.rows.filter((row) => row.mark !== 'incomplete');
   const option = (row) => h('option', {value: row.key, text: row.name === row.key ? row.key : `${row.name} (${row.key})`});
   elements.first.replaceChildren(
     h('option', {value: '', text: 'the first'}),
-    ...filled.map(option),
+    ...complete.map(option),
     h('option', {value: '', 'data-later': true, text: 'no row now'}),
   );
-  elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...filled.map(option));
+  elements.last.replaceChildren(h('option', {value: '', text: 'the last'}), ...complete.map(option));
   chooseFollow();
 }
 
@@ -748,9 +748,9 @@ function drawRange(marked = true) {
   box.replaceChildren(sourceTable(sourceRows, (row) => (marked ? row.mark : '')));
   if (!marked) return;
   const n = (mark) => sourceRows.rows.filter((row) => row.mark === mark).length;
-  const waits = n('waits');
-  const waiting = waits ? `; ${count(waits)} ${waits === 1 ? 'waits' : 'wait'} for a run, which Follow adds once filled if the batch follows` : '';
-  $('new-rows').textContent = `The batch gets ${count(n('taken'))}${waiting}.`;
+  const incomplete = n('incomplete');
+  const later = incomplete ? `; ${count(incomplete)} incomplete, which Follow adds once complete if the batch follows` : '';
+  $('new-rows').textContent = `The batch gets ${count(n('taken'))}${later}.`;
   drawFollowChoice();
 }
 
@@ -760,7 +760,7 @@ function drawRange(marked = true) {
 function sourceTable({columns, rows: listed}, status, picked) {
   if (!listed.length) return h('div', {class: 'empty', text: 'No rows.'});
   const boxes = [];
-  const pills = {waits: 'st-incomplete', taken: 'st-done'};
+  const pills = {incomplete: 'st-incomplete', taken: 'st-done'};
   const body = listed.map((row) => {
     const said = status(row);
     const box = picked && h('input', {type: 'checkbox', value: row.key, 'aria-label': row.name});
@@ -818,13 +818,13 @@ async function makeBatch(event) {
 }
 
 // The dialog "Add rows from the runs": the rows of the source that the batch
-// table lacks, those that wait marked. The rows picked are added as the source makes
+// table lacks, those incomplete marked. The rows picked are added as the source makes
 // them now.
-async function openTake() {
-  const listed = await request('rows/offered', {kind: 'offered'});
+async function openAddRows() {
+  const listed = await request('rows/available', {kind: 'available-rows'});
   if (!listed) return;
-  const dialog = $('take');
-  const add = dialog.querySelector('[value=take]');
+  const dialog = $('add-rows');
+  const add = dialog.querySelector('[value=add]');
   let keys = [];
   const picked = (chosen) => {
     keys = chosen;
@@ -832,13 +832,13 @@ async function openTake() {
     add.textContent = keys.length ? `Add ${count(keys.length)}` : 'Add';
   };
   picked([]);
-  $('take-rows').replaceChildren(
+  $('add-rows-list').replaceChildren(
     listed.rows.length
       ? sourceTable(listed, (row) => row.mark, picked)
       : h('div', {class: 'empty', text: 'Every row of the source is in the batch.'}),
   );
   dialog.returnValue = '';
-  dialog.onclose = () => dialog.returnValue === 'take' && act('rows/take', {keys});
+  dialog.onclose = () => dialog.returnValue === 'add' && act('rows/add', {keys});
   dialog.showModal();
 }
 
@@ -865,9 +865,9 @@ async function makeSetting(column) {
   dialog.showModal();
 }
 
-// The reduce button and its menu, and the marks of the Settings tab; `earlier`
-// counts the rows reduced with earlier settings.
-function renderAction(action, earlier) {
+// The reduce button and its menu, and the marks of the Settings tab; `settingsChanged`
+// counts the rows with status `settings changed`.
+function renderAction(action, settingsChanged) {
   const button = $('reduce');
   const running = action.progress !== null;
   const [finished, started] = action.progress ?? [0, 0];
@@ -882,21 +882,21 @@ function renderAction(action, earlier) {
   $('cancel').classList.toggle('danger', action.running > 0);
   $('n-remaining').textContent = action.remaining;
   $('n-again').textContent = action.again;
-  $('n-earlier').textContent = earlier;
-  const counted = {remaining: action.remaining, earlier, all: action.again};
+  $('n-settings-changed').textContent = settingsChanged;
+  const counted = {remaining: action.remaining, 'settings changed': settingsChanged, all: action.again};
   for (const [which, n] of Object.entries(counted)) {
     document.querySelector(`[data-reduce="${which}"]`).disabled = Boolean(action.blocked) || n === 0;
   }
   $('reduce-more').disabled = Boolean(action.blocked);
-  for (const id of ['reduce-more', 'reduce-earlier']) $(id).title = action.blocked ?? '';
+  for (const id of ['reduce-more', 'reduce-settings-changed']) $(id).title = action.blocked ?? '';
   $('settings-badge').hidden = !action.blocked;
   $('settings-badge').title = action.blocked ?? '';
-  $('earlier-badge').hidden = earlier === 0;
-  $('earlier-badge').textContent = earlier;
-  $('earlier-badge').title = `${count(earlier)} reduced with earlier settings`;
+  $('settings-changed-badge').hidden = settingsChanged === 0;
+  $('settings-changed-badge').textContent = settingsChanged;
+  $('settings-changed-badge').title = `${count(settingsChanged)} reduced with earlier settings`;
 }
 
-const CHIPS = ['all', 'ready', 'running', 'done', 'earlier', 'outdated', 'failed', 'incomplete', 'cancelled'];
+const CHIPS = ['all', 'ready', 'running', 'done', 'settings changed', 'outdated', 'failed', 'incomplete', 'cancelled'];
 
 // The chip of each status is made once and updated in place, so that a chip
 // that has the keyboard focus keeps it.
@@ -910,7 +910,7 @@ function chip(status) {
         'button',
         {
           type: 'button',
-          class: `chip st-${status}`,
+          class: `chip ${statusClass(status)}`,
           onclick: () => {
             view.filter = view.filter === status ? 'all' : status;
             remember();
@@ -940,26 +940,26 @@ function renderChips(counts) {
 }
 
 // The reasons of a refused reduction, until closed or the next change.
-function renderRefused(refused) {
-  const key = JSON.stringify(refused);
-  if (!refused.length) {
+function renderSubmitErrors(errors) {
+  const key = JSON.stringify(errors);
+  if (!errors.length) {
     if (shownMessage) hideMessage();
     return;
   }
   if (key === view.dismissed || key === shownMessage) return;
-  showMessage('Nothing was reduced.', refused.map((e) => e.text), key);
+  showMessage('Nothing was reduced.', errors.map((e) => e.text), key);
 }
 
 // "Add rows from the runs", unless the batch has no source; and while the
 // batch follows, "Stop following" and why the last step failed, if it did,
-// else how many rows wait. A batch that does not follow has no Follow control.
+// else how many rows are incomplete. A batch that does not follow has no Follow control.
 function renderFollow(follow) {
-  $('take-open').hidden = follow.source === null;
+  $('add-rows-open').hidden = follow.row_source === null;
   $('follow-status').hidden = $('stop-follow').hidden = !follow.on;
   const status = $('follow-status');
   status.classList.toggle('bad', Boolean(follow.failure));
-  const waiting = follow.waiting ? `; ${count(follow.waiting)} of the source wait to be filled` : '';
-  status.textContent = follow.failure ?? `Following, every ${follow.interval} s${waiting}`;
+  const incomplete = follow.incomplete ? `; ${count(follow.incomplete)} of the source incomplete` : '';
+  status.textContent = follow.failure ?? `Following, every ${follow.interval} s${incomplete}`;
   status.title = status.textContent;
   rows.empty.textContent = follow.on ? 'No rows yet. Follow adds the rows of the runs that arrive.' : NO_ROWS;
 }
@@ -974,10 +974,10 @@ function stopFollowing() {
 // with earlier settings, which a person may reduce again. Apply and Discard
 // are never disabled: a click on them may send the value typed first.
 function renderSettings(state) {
-  const {action, counts, settings_changed: changed, settings_problem: problem} = state;
-  $('earlier').hidden = counts.earlier === 0;
-  $('earlier-state').textContent = `${count(counts.earlier)} reduced with earlier settings.`;
-  $('reduce-earlier').disabled = Boolean(action.blocked);
+  const {action, counts, settings_unapplied: changed, settings_problem: problem} = state;
+  $('settings-changed').hidden = counts['settings changed'] === 0;
+  $('settings-changed-state').textContent = `${count(counts['settings changed'])} reduced with earlier settings.`;
+  $('reduce-settings-changed').disabled = Boolean(action.blocked);
   renderDraft($('draft'), changed, problem ? `${problem}.` : '', 'These settings are in force.');
   // The file holds the batch's settings, so it waits for Apply or Discard.
   const download = document.querySelector('[data-file="settings.yaml"]');
@@ -1055,7 +1055,7 @@ async function removeBatch() {
 
 // Whether to replace the changes of the settings form that are not applied.
 function replaceChanges() {
-  return !view.state.settings_changed || confirm('The settings form holds changes that are not applied. Replace them?');
+  return !view.state.settings_unapplied || confirm('The settings form holds changes that are not applied. Replace them?');
 }
 
 function selectedRows() {
@@ -1116,13 +1116,13 @@ function renderOutput(state) {
     renderOutputDraft();
     return;
   }
-  const held = form.shown != null && outputChanged(JSON.parse(form.shown).form);
+  const held = form.shown != null && outputChanged(JSON.parse(form.shown).options);
   form.shown = shown;
   if (!held) fillOutput(state.output);
   else renderOutputDraft();
 }
 
-function fillOutput({form: given, formats, outputs}) {
+function fillOutput({options: given, formats, outputs}) {
   $('output-format').replaceChildren(...formats.map((f) => h('option', {value: f.name}, f.title)));
   $('output-outputs').replaceChildren(
     ...outputs.map((o) => h('label', {}, h('input', {type: 'checkbox', name: 'outputs', value: o.name, checked: given.outputs.includes(o.name)}), ` ${o.title}`)),
@@ -1167,9 +1167,9 @@ function normal(form) {
   ]);
 }
 
-// Whether the inputs hold a change of `form`, by default the form in force.
+// Whether the inputs hold a change of `form`, by default the output options in force.
 // A format that the select lacks reads as none picked, as the select shows it.
-function outputChanged(form = view.state?.output.form) {
+function outputChanged(form = view.state?.output.options) {
   if (!form) return false;
   const known = view.state.output.formats.some((f) => f.name === form.format);
   return normal(outputForm()) !== normal(known ? form : {...form, format: ''});
@@ -1208,7 +1208,7 @@ function publishBlocked() {
   if (outputChanged()) return 'Apply or discard the changes of the form first.';
   if (problem) return problem;
   if (unpublishable) return unpublishable;
-  if (!toPublish().length) return 'Select rows that are done or earlier and not published.';
+  if (!toPublish().length) return 'Select rows that are done or settings changed and not published.';
   return '';
 }
 
@@ -1218,7 +1218,7 @@ function renderPublishButton() {
   const blocked = publishBlocked();
   $('publish').disabled = Boolean(blocked);
   $('publish').textContent = n ? `Publish ${n} selected` : 'Publish';
-  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or earlier and not published, with the form in force.';
+  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or settings changed and not published, with the form in force.';
 }
 
 function sayOutput(text) {
@@ -1321,7 +1321,7 @@ function renderLegend() {
   const groups = Map.groupBy(shown.filter((row) => row.status !== 'done'), (row) => row.status);
   $('legend-summary').replaceChildren(
     ...[...groups].map(([status, group]) => {
-      const reasons = new Set(group.map((row) => (status === 'earlier' ? row.changed : row.reason)));
+      const reasons = new Set(group.map((row) => (status === 'settings changed' ? row.changed : row.reason)));
       const [reason] = reasons;
       const text = reasons.size === 1 && reason ? `${group.length} ${status}: ${reason}` : `${group.length} ${status}`;
       return h('span', {text});
@@ -1336,7 +1336,7 @@ function renderLegend() {
         {title: [row.name, row.reason].filter(Boolean).join(': ')},
         h('span', {class: `swatch${color ? dashed : ' none'}`, style: color ? `--color: ${color}` : null}),
         h('span', {class: 'name', text: row.name}),
-        row.status !== 'done' && h('span', {class: `pill st-${row.status}`, text: row.status}),
+        row.status !== 'done' && h('span', {class: `pill ${statusClass(row.status)}`, text: row.status}),
       );
     }),
   );
@@ -1367,11 +1367,11 @@ function renderRow(detail) {
   if (json === view.detail) return;
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
-  const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info', earlier: 'earlier'}[row.status];
+  const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info', 'settings changed': 'settings-changed'}[row.status];
   const useSettings = () => replaceChanges() && act('row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
   const settingsNames = Object.fromEntries([...view.state.columns.map((c) => [c.name, c.title]), ...view.state.settings.map((n) => [n.path[0], n.label])]);
   const parts = [
-    h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill st-${row.status}`, text: row.status})),
+    h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill ${statusClass(row.status)}`, text: row.status})),
     h(
       'dl',
       {class: 'summary'},
@@ -1448,10 +1448,10 @@ function showTab(tab) {
 
 // Reduce the rows of earlier settings, from the reduce menu or the Settings
 // tab, once the person confirms.
-function reduceEarlier() {
-  const n = view.state.counts.earlier;
+function reduceSettingsChanged() {
+  const n = view.state.counts['settings changed'];
   const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
-  if (confirm(question)) act('reduce', {which: 'earlier'});
+  if (confirm(question)) act('reduce', {which: 'settings changed'});
 }
 
 function wire() {
@@ -1464,7 +1464,7 @@ function wire() {
   document.querySelectorAll('[data-reduce]').forEach((item) => {
     item.onclick = () => {
       $('reduce-split').querySelector('.menu-items').hidden = true;
-      if (item.dataset.reduce === 'earlier') reduceEarlier();
+      if (item.dataset.reduce === 'settings changed') reduceSettingsChanged();
       else act('reduce', {which: item.dataset.reduce, keys: view.selected});
     };
   });
@@ -1472,7 +1472,7 @@ function wire() {
   $('stop-follow').onclick = stopFollowing;
   $('settings-apply').onclick = () => act('settings/apply');
   $('settings-discard').onclick = () => act('settings/discard');
-  $('reduce-earlier').onclick = reduceEarlier;
+  $('reduce-settings-changed').onclick = reduceSettingsChanged;
   $('relist').onclick = () => act('relist');
   const newBatch = $('new-batch');
   $('new-batch-open').onclick = openNewBatch;
@@ -1485,7 +1485,7 @@ function wire() {
   };
   newBatch.elements.last.onchange = () => markRange();
   newBatch.elements.follow.onchange = () => chooseFollow() && markRange();
-  $('take-open').onclick = openTake;
+  $('add-rows-open').onclick = openAddRows;
   newBatch.querySelector('[data-cancel]').onclick = closeNewBatch;
   newBatch.addEventListener('keydown', (event) => event.key === 'Escape' && closeNewBatch());
   $('batch-form').onsubmit = saveBatch;
@@ -1513,7 +1513,7 @@ function wire() {
   addForm.onsubmit = (event) => {
     event.preventDefault();
     const key = addForm.key.value.trim();
-    act('rows/add', {key}).then((done) => done && rows.reveal(key));
+    act('rows/add-empty', {key}).then((done) => done && rows.reveal(key));
     closeAdd();
   };
   addForm.querySelector('[data-cancel]').onclick = closeAdd;

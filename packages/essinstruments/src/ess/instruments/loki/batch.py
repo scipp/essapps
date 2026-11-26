@@ -17,7 +17,7 @@ read yet, have a row per raw run, with no role (:func:`per_run`).
 a :class:`~ess.batch.BatchManager`, the batches of I(Q). A batch without
 a manager keeps nothing::
 
-    Batch(client, IOFQ, label='iofq', rows=rows_of(client, SAMPLE_RUNS), staged=True)
+    Batch(client, IOFQ, label='iofq', table=rows_of(client, SAMPLE_RUNS), staged=True)
 
 The command takes the sources as ``essbatch -s
 ess.instruments.loki.batch:SOURCES``, and a source by its name, such as
@@ -116,7 +116,7 @@ def _measured(f: FileInfo) -> tuple[int, str]:
 
 SAMPLE_RUNS = RowSource(
     pair_by_sample,
-    fills=('sample', 'sample_transmission'),
+    source_columns=('sample', 'sample_transmission'),
     description='A row per run of role sample in files.csv, keyed by its run '
     'number. Its sample_transmission is the run of role transmission whose '
     'sample in files.csv is that of the sample run; of several, the one with '
@@ -126,7 +126,7 @@ SAMPLE_RUNS = RowSource(
 """A row per sample run, paired by :func:`pair_by_sample`."""
 RAW_RUNS = RowSource(
     per_run,
-    fills=('run',),
+    source_columns=('run',),
     description='A row per raw run, keyed by its run number, with no pairing '
     'and no role needed; for the bank histogram.',
 )

@@ -10,9 +10,9 @@ import scippnexus as snx
 from ess.instruments.loki.specs import IofQ
 from ess.instruments.loki.writers import NXCANSAS
 
-from ess.apps.writers import About
+from ess.apps.writers import DatasetMetadata
 
-ABOUT = About(name='sample')
+METADATA = DatasetMetadata(name='sample')
 
 
 def _iofq(run: str | None) -> IofQ:
@@ -30,7 +30,7 @@ def _iofq(run: str | None) -> IofQ:
 
 
 def test_nxcansas_writes_intensity_title_and_run(tmp_path: Path) -> None:
-    NXCANSAS.write({'iofq': _iofq('60339')}, ABOUT, tmp_path)
+    NXCANSAS.write({'iofq': _iofq('60339')}, METADATA, tmp_path)
     with snx.File(tmp_path / 'iofq.h5') as f:
         entry = f['sasentry']
         assert entry['title'][()] == 'My sample'
@@ -41,6 +41,6 @@ def test_nxcansas_writes_intensity_title_and_run(tmp_path: Path) -> None:
 
 
 def test_nxcansas_without_run_writes_an_empty_run(tmp_path: Path) -> None:
-    NXCANSAS.write({'iofq': _iofq(None)}, ABOUT, tmp_path)
+    NXCANSAS.write({'iofq': _iofq(None)}, METADATA, tmp_path)
     with snx.File(tmp_path / 'iofq.h5') as f:
         assert str(f['sasentry']['run'][()]) == ''

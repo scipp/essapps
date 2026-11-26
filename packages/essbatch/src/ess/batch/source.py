@@ -6,20 +6,20 @@ files.
 
 A row source is code of the application, registered by name with an
 :class:`~.intake.Intake`. Its :data:`RowFunction` takes the files with
-their metadata and returns a frame, the form that ``Batch.put`` takes::
+their metadata and returns a frame, the form that ``Batch.set_table`` takes::
 
     key     run    name         sample      sample_transmission
     60339   60339  D2O buffer   run:60339   run:60305
     60340   60340  sample A     run:60340   <NA>
 
 The key of each row as index, as text; a column per parameter that it fills,
-each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and
-notes, such as ``run`` and ``name``. :func:`rows_of` is what a source makes
-from the files now. A row is *filled* (:func:`filled`) once it has a value
-in each column that the source fills; until then it *waits*. A batch is made
-from the filled rows, or from a range of them (:class:`Range`), and Follow
-adds the rows that are new and filled (:mod:`~.auto`). A batch never asks
-its source again: how its batch table was made is not part of it.
+each file as its cell (``cell_of(f.ref)``, :func:`~.table.cell_of`); and notes,
+such as ``run`` and ``name``. :func:`rows_of` is what a source makes from the
+files now. A row is *complete* (:func:`complete`) once it has a value in each
+column that the source fills; until then it is *incomplete*. A batch is made
+from the complete rows, or from a range of them (:class:`Range`), and Follow
+adds the rows that are new and complete (:mod:`~.auto`). A batch never asks its
+source again: how its batch table was made is not part of it.
 """
 
 from __future__ import annotations
@@ -71,10 +71,10 @@ class RowSource:
     ----------
     rows:
         Makes the rows of the source from the files.
-    fills:
+    source_columns:
         The columns that ``rows`` fills, each named as a parameter of the
         specs it fits (:func:`~.intake.fits`). A batch made from the source
-        keeps them as parameter columns (:attr:`~.reduction.Batch.fills`),
+        keeps them as parameter columns (:attr:`~.reduction.Batch.source_columns`),
         and Follow adds a row once it has a value in each.
     selector:
         The files that ``rows`` is given; raw files if not given.
@@ -85,7 +85,7 @@ class RowSource:
     """
 
     rows: RowFunction
-    fills: tuple[str, ...]
+    source_columns: tuple[str, ...]
     selector: Selector | None = None
     description: str = ''
 
@@ -93,7 +93,7 @@ class RowSource:
 def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     """
     The rows that ``source`` makes from the files of ``client`` now, with an
-    empty column for each of :attr:`RowSource.fills` that it lacks, so that a
+    empty column for each of :attr:`RowSource.source_columns` that it lacks, so that a
     batch made from it has its columns also when no file is listed yet.
 
     Raises ``ValueError`` for a key that is not text, empty, or given twice,
@@ -102,24 +102,24 @@ def rows_of(client: Client, source: RowSource) -> pd.DataFrame:
     frame = source.rows(_file_infos(client, source.selector))
     empty = {
         c: pd.Series(pd.NA, index=frame.index, dtype='string')
-        for c in source.fills
+        for c in source.source_columns
         if c not in frame.columns
     }
     # Every column a note: the source knows no spec.
     return typed(frame.assign(**empty), BaseModel)
 
 
-def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
+def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     """
     Whether each row of ``given`` has a value in each of ``columns``, such as
-    the columns that a source fills: a row that has not waits. Raises
+    the columns that a source fills: a row that has not is incomplete. Raises
     ``ValueError`` if ``given`` lacks one of ``columns``, as when the code of
-    a source no longer fills a column that a batch keeps as filled by it.
+    a source no longer fills a column that a batch keeps as a source column.
     """
     if lacking := [c for c in columns if c not in given.columns]:
         raise ValueError(
             f'it no longer gives the column {", ".join(sorted(lacking))} that '
-            'the batch keeps as filled by it'
+            'the batch keeps as a source column'
         )
     return given[list(columns)].notna().all(axis=1)
 
@@ -127,10 +127,10 @@ def filled(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
 @dataclass(frozen=True)
 class Range:
     """
-    Which rows a new batch takes of those that its source has filled now, as
+    Which rows a new batch takes of the rows of its source complete now, as
     a person picks them, given as ``choose`` to
     :meth:`~.intake.Intake.create` and
-    :meth:`~.intake.Intake.marked`: called on the filled rows, it gives
+    :meth:`~.intake.Intake.marked`: called on the complete rows, it gives
     the rows from the row of key ``first`` to the row of key ``last``, both
     included, in their order; an end not given is open. With ``later``, it
     gives none, so that the batch gets only the rows added later, by Follow
@@ -139,11 +139,11 @@ class Range:
     Raises ``ValueError`` for ``later`` with an end; called, for an end that
     is not a key of the rows given, and for a ``first`` after the ``last``.
     ``create`` refuses a ``Range`` with a ``last`` and ``follow``: the rows
-    filled between the last row and the making would be considered, so
+    complete between the last row and the making would be seen, so
     Follow would never add them, but would add the rows that arrive later.
     A ``choose`` that is a function may pick any rows, also with
-    ``follow``: a person chose them in code, and the filled rows that it
-    leaves out are considered, so Follow adds only what arrives later.
+    ``follow``: a person chose them in code, and the complete rows that it
+    leaves out are seen, so Follow adds only what arrives later.
     """
 
     first: str | None = None
@@ -162,7 +162,7 @@ class Range:
         first, last = self.first, self.last
         for end in (first, last):
             if end is not None and end not in arrived.index:
-                raise ValueError(f'{end} is not a filled row')
+                raise ValueError(f'{end} is not a complete row')
         start = 0 if first is None else arrived.index.get_loc(first)
         stop = len(arrived) if last is None else arrived.index.get_loc(last) + 1
         if first is not None and last is not None and stop <= start:

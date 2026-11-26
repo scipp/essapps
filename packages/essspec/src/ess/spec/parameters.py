@@ -168,7 +168,7 @@ def not_its_source(value: Any, file: bool) -> PydanticCustomError:
     )
 
 
-class DataRefused(Exception):
+class ReferencedDataInvalid(Exception):
     """
     The data read for ``ref``, a reference to an output, fail a check of the
     ``T`` of ``Referenced[T]``, with ``errors``. It is not a ``ValueError``, so
@@ -190,7 +190,7 @@ class _Referenced:
     replaces a reference to an output with its data, ``read(ref)``,
     validated as ``T``, and refuses any other value. Data of ``T`` that fail
     a check of ``T``, such as an ``AfterValidator``, raise
-    :class:`DataRefused`. Validated without ``read``, as in direct use, it
+    :class:`ReferencedDataInvalid`. Validated without ``read``, as in direct use, it
     takes ``T`` as it is.
     """
 
@@ -226,7 +226,7 @@ def _read(
     try:
         return validate(data)
     except ValidationError as error:
-        raise DataRefused(ref, error.errors()) from None
+        raise ReferencedDataInvalid(ref, error.errors()) from None
 
 
 REFERENCED: Final = _Referenced()

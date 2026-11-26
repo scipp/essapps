@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
-"""The table of a batch as a frame: dtypes, cells, and rows.json."""
+"""The table of a batch as a frame: dtypes, cells, and table.json."""
 
 from collections.abc import Callable
 from datetime import UTC, date, datetime
@@ -16,8 +16,8 @@ from ess.batch.table import (
     cell_of,
     data_of,
     dtypes,
-    frame_of,
     read_table,
+    table_of,
     typed,
     write_table,
 )
@@ -203,7 +203,7 @@ def test_a_float_nan_in_a_column_of_numbers_is_an_empty_cell() -> None:
     table = typed(frame, Kinds)
 
     assert table['scale'].isna().tolist() == [True, False]
-    pd.testing.assert_frame_equal(frame_of(data_of(table)), table)
+    pd.testing.assert_frame_equal(table_of(data_of(table)), table)
 
 
 @pytest.fixture
@@ -224,7 +224,7 @@ def exact() -> pd.DataFrame:
 def test_the_data_of_a_table_read_back_as_json_give_the_table_exactly(
     exact: pd.DataFrame,
 ) -> None:
-    back = frame_of(from_json(to_json(data_of(exact))))
+    back = table_of(from_json(to_json(data_of(exact))))
 
     pd.testing.assert_frame_equal(back, exact)
     assert back.loc['a', 'x'] == 0.1 + 0.2
@@ -236,13 +236,13 @@ def test_the_data_of_a_table_without_rows_give_its_columns_and_dtypes(
 ) -> None:
     empty = exact.iloc[:0]
 
-    pd.testing.assert_frame_equal(frame_of(data_of(empty)), empty)
+    pd.testing.assert_frame_equal(table_of(data_of(empty)), empty)
 
 
 def test_the_data_of_a_table_without_columns_give_its_keys() -> None:
     table = typed(pd.DataFrame(index=['a', 'b']), Kinds)
 
-    pd.testing.assert_frame_equal(frame_of(data_of(table)), table)
+    pd.testing.assert_frame_equal(table_of(data_of(table)), table)
 
 
 @pytest.mark.parametrize(
@@ -266,7 +266,7 @@ def test_data_that_are_not_a_table_are_refused_by_entry(
     change(data)
 
     with pytest.raises(ValueError, match=message):
-        frame_of(data)
+        table_of(data)
 
 
 class Either(BaseModel):

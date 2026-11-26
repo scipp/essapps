@@ -117,11 +117,11 @@ def sample(fake: FakeFiles) -> toys.Measure:
 def batch(client: Client) -> Iterator[Batch]:
     """
     A staged batch of :data:`toys.COLUMNS` with the rows that ``toys.PAIRS``
-    makes before a file is measured: none. ``batch.put(toys.rows(client))``
+    makes before a file is measured: none. ``batch.set_table(toys.rows(client))``
     takes those measured since.
     """
     batch = Batch(
-        client, toys.STAGED, label='scan', rows=toys.rows(client), staged=True
+        client, toys.STAGED, label='scan', table=toys.rows(client), staged=True
     )
     yield batch
     batch.close()
@@ -134,7 +134,7 @@ def done_batch(fake: FakeFiles, client: Client, manager: BatchManager) -> Batch:
         fake.measure(run, float(run), role='sample', sample=name, pid=f'20.500/s{run}')
         fake.measure(run + 1000, 1.0, role='transmission', sample=name)
     batch = manager.create(
-        'plain', title='Morning', description='2 mm cells', rows=toys.rows(client)
+        'plain', title='Morning', description='2 mm cells', table=toys.rows(client)
     )
     client.wait(list(batch.reduce(['1', '2']).values()))
     return batch
@@ -167,7 +167,7 @@ def label(intake: Intake) -> str:
     """
     A batch of ``intake.manager`` with the spec, columns and label of
     ``batch``, made from the source ``pairs`` before a file is measured: it
-    has no rows, and Follow or ``intake.take`` adds those measured since.
+    has no rows, and Follow or ``intake.add_rows`` adds those measured since.
     """
     return toys.from_pairs(intake, toys.STAGED.name, title='Scan', label='scan')
 
@@ -370,8 +370,10 @@ def pair(files):
     return pd.DataFrame.from_records(rows, columns=columns).set_index('key')
 
 
-PAIRS = RowSource(pair, fills=('sample',), description='A row per sample run.')
-BROKEN = RowSource(lambda files: [f.metadata['nope'] for f in files], fills=('sample',))
+PAIRS = RowSource(pair, source_columns=('sample',), description='A row per sample run.')
+BROKEN = RowSource(
+    lambda files: [f.metadata['nope'] for f in files], source_columns=('sample',)
+)
 SOURCES = {'pairs': PAIRS, 'broken': BROKEN}
 
 
@@ -381,7 +383,8 @@ class Metadata(BaseModel):
 
 REFUSING = {
     'refusing': RowSource(
-        lambda files: Metadata.model_validate({'run': 'water'}), fills=('sample',)
+        lambda files: Metadata.model_validate({'run': 'water'}),
+        source_columns=('sample',),
     )
 }
 '''
@@ -421,9 +424,9 @@ def app(folder: Path, label: str = 'x') -> Iterator[Batch]:
 
 def edit(batch: Batch, key: str, sample: str) -> None:
     """Set the sample of the row of ``key``, as a page does."""
-    frame = batch.frame()
+    frame = batch.table()
     frame.loc[key, 'sample'] = sample
-    batch.put(frame)
+    batch.set_table(frame)
 
 
 @pytest.fixture

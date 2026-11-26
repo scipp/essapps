@@ -165,7 +165,7 @@ class Views:
         if new.persist:
             self.persisted[new.id] = new.persist
 
-    def unlogged(self, digests: Mapping[SpecId, str]) -> SpecDigests:
+    def new_digests(self, digests: Mapping[SpecId, str]) -> SpecDigests:
         """
         The ``digests`` of specs that an event naming them carries: those the
         log does not hold under the spec's name and version, or holds with

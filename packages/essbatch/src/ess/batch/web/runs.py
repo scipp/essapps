@@ -10,7 +10,7 @@ the files, with their metadata, and the records. A page asks to list again
 (:meth:`Runs.list_again`) when the records or its batch table changed, at a
 step of Follow, at "List runs again", and as it is made; the listing counts
 the changes of the files and of why they cannot be listed
-(:attr:`SafeListing.version`), which every page compares at its poll.
+(:attr:`SafeListing.revision`), which every page compares at its poll.
 The runs are the files, the same on every page (:meth:`Runs.shown`), and a
 person corrects them on any page, with or without a batch
 (:meth:`Runs.correct`). A correction changes no row of a batch: a batch
@@ -29,7 +29,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ess.apps.client import Client
-from ess.apps.errors import said
+from ess.apps.errors import error_text
 from ess.apps.fields import UNSET, Fields
 from ess.apps.files import Selector
 from ess.apps.listing import Listing
@@ -37,8 +37,8 @@ from ess.spec import File, FileRef
 
 from ..corrections import CorrectedFiles
 from . import forms, models, view
+from .errors import Rejected, reject_on_write_error
 from .models import CellEdit, Cells, Column, Notice, RunCell, RunRow
-from .refusals import Problem, kept
 
 
 class SafeListing(Listing):
@@ -46,7 +46,7 @@ class SafeListing(Listing):
     What the client lists now, as :class:`Listing` gives it, but without files
     if the file source raises: a picker then offers none, the Runs view lists
     none, and :attr:`failure` says why. It lists every file with its metadata
-    as it is made (:attr:`files_listed`), and :attr:`version` counts, from
+    as it is made (:attr:`files_listed`), and :attr:`revision` counts, from
     the first listing, each listing whose files or failure differ from those
     of the listing ``previous``.
     """
@@ -60,9 +60,9 @@ class SafeListing(Listing):
         # The files and why they cannot be listed, as made: a picker may
         # list files later, and set :attr:`error`.
         self._said = (self.files_listed, self.failure)
-        self.version = 1
+        self.revision = 1
         if previous is not None:
-            self.version = previous.version + (self._said != previous._said)
+            self.revision = previous.revision + (self._said != previous._said)
 
     @property
     def failure(self) -> str | None:
@@ -75,14 +75,14 @@ class SafeListing(Listing):
         try:
             return super().files(marker)
         except Exception as error:  # the file source is code of the application
-            self.error = said(error)
+            self.error = error_text(error)
             return {}
 
     def listed(self, selector: Selector) -> dict[FileRef, dict[str, Any]]:
         try:
             return super().listed(selector)
         except Exception as error:  # the file source is code of the application
-            self.error = said(error)
+            self.error = error_text(error)
             return {}
 
 
@@ -129,13 +129,13 @@ class Runs:
         return self._listing
 
     @property
-    def version(self) -> int | None:
+    def revision(self) -> int | None:
         """
-        :attr:`SafeListing.version`, which the Runs view of each page compares
+        :attr:`SafeListing.revision`, which the Runs view of each page compares
         to ask for the runs again; ``None`` if the application corrects no
         runs, so that the pages have no Runs view.
         """
-        return self._listing.version if self.corrects else None
+        return self._listing.revision if self.corrects else None
 
     @property
     def corrects(self) -> bool:
@@ -154,10 +154,10 @@ class Runs:
     def _marks(self) -> tuple[Fields, CorrectedFiles]:
         """
         The form of what a person corrects of a run, and the files to
-        correct; :class:`~.refusals.Problem` if the application corrects no runs.
+        correct; :class:`~.errors.Rejected` if the application corrects no runs.
         """
         if self._marking is None:
-            raise Problem('This application corrects no runs.')
+            raise Rejected('This application corrects no runs.')
         marks, corrected = self._marking
         return Fields(marks, self._listing), corrected
 
@@ -166,14 +166,14 @@ class Runs:
         The runs, listed again, with what a person corrected of each, as the
         Runs view of every page shows them, and that of the page without a
         batch; none, with why, if the file source raises. Raises
-        :class:`~.refusals.Problem` if the application corrects no runs.
+        :class:`~.errors.Rejected` if the application corrects no runs.
         """
         with self._lock:
             marks, corrected = self._marks()
             self.list_again()
             listing = self._listing
             return models.Runs(
-                version=listing.version,
+                revision=listing.revision,
                 columns=[
                     Column(name=n, title=marks.titles[n], editor=forms.editor(f))
                     for n, f in marks.fields.items()
@@ -215,14 +215,14 @@ class Runs:
     def _kept(self, correction: Callable[[], None]) -> None:
         """
         Make ``correction``, then list again, so that the pages show the runs
-        again. Raises :class:`~.refusals.Problem` if the definitions do not keep
+        again. Raises :class:`~.errors.Rejected` if the definitions do not keep
         it, or if the runs cannot be listed after it.
         """
-        with kept():
+        with reject_on_write_error():
             correction()
         self.list_again()
         if (error := self._listing.error) is not None:
-            raise Problem(f'Corrected, but the runs cannot be listed: {error}')
+            raise Rejected(f'Corrected, but the runs cannot be listed: {error}')
 
 
 def _run(

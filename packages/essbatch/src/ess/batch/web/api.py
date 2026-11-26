@@ -8,7 +8,7 @@ uses it, at ``/batches/<label>/``.
 Each action of a page is a ``POST`` that answers with the
 :class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
 reasons of a refused reduction are in the state. ``GET api/state`` with the
-``after`` version and the ``start`` the page has answers 204 while nothing
+``after`` revision and the ``start`` the page has answers 204 while nothing
 changed. The API of a label that is no batch answers 404, and of a batch
 that cannot be made 422; the page is served for any label, and shows the
 batches with that message instead. The
@@ -43,6 +43,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 
+from .errors import NotFound, Rejected
 from .models import (
     BatchCounts,
     Batches,
@@ -68,7 +69,6 @@ from .models import (
 )
 from .page import Page
 from .pages import Pages
-from .refusals import Missing, Problem
 
 STATIC = Path(__file__).parent / 'static'
 _XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -146,12 +146,12 @@ def create_app(pages: Pages) -> FastAPI:
     # The state is about 0.6 kB per row and repeats much.
     app.add_middleware(GZipMiddleware)
 
-    @app.exception_handler(Problem)
-    def problem(_: Request, error: Problem) -> JSONResponse:
+    @app.exception_handler(Rejected)
+    def problem(_: Request, error: Rejected) -> JSONResponse:
         return JSONResponse({'message': str(error)}, status_code=422)
 
-    @app.exception_handler(Missing)
-    def missing(_: Request, error: Missing) -> JSONResponse:
+    @app.exception_handler(NotFound)
+    def missing(_: Request, error: NotFound) -> JSONResponse:
         return JSONResponse({'message': str(error)}, status_code=404)
 
     @app.get('/', include_in_schema=False)
@@ -177,7 +177,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.get('/api/state', responses={204: {'description': 'Nothing changed.'}})
     def state(page: PageOfLabel, after: int = 0, start: str = '') -> Any:
-        """The state, or 204 if it is that of version ``after`` of ``start``."""
+        """The state, or 204 if it is that of revision ``after`` of ``start``."""
         current = page.poll(after, start)
         return Response(status_code=204) if current is None else current
 
@@ -196,19 +196,19 @@ def create_app(pages: Pages) -> FastAPI:
     def remove(page: PageOfLabel, body: Keys) -> State:
         return page.remove(body.keys)
 
-    @batch.post('/api/rows/add')
-    def add(page: PageOfLabel, body: Key) -> State:
-        return page.add(body.key)
+    @batch.post('/api/rows/add-empty')
+    def add_empty_row(page: PageOfLabel, body: Key) -> State:
+        return page.add_empty_row(body.key)
 
-    @batch.get('/api/rows/offered')
-    def offered(page: PageOfLabel) -> SourceRows:
+    @batch.get('/api/rows/available')
+    def available_rows(page: PageOfLabel) -> SourceRows:
         """The rows of the source of the batch that its batch table lacks."""
-        return page.offered()
+        return page.available_rows()
 
-    @batch.post('/api/rows/take')
-    def take(page: PageOfLabel, body: Keys) -> State:
+    @batch.post('/api/rows/add')
+    def add_rows(page: PageOfLabel, body: Keys) -> State:
         """Add rows of the source, as it makes them now."""
-        return page.take(body.keys)
+        return page.add_rows(body.keys)
 
     @batch.post('/api/settings/column')
     def make_column(page: PageOfLabel, body: MakeColumn) -> State:
@@ -298,7 +298,7 @@ def create_app(pages: Pages) -> FastAPI:
     ) -> State:
         """
         Keep the form of the tab "Output": the fields of
-        :class:`~ess.batch.definition.Form`, which the page checks, so
+        :class:`~ess.batch.definition.OutputOptions`, which the page checks, so
         that a refusal is said as each other is.
         """
         return page.set_output_form(body)

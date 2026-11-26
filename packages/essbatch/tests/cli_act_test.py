@@ -44,7 +44,7 @@ def test_reduce_with_a_source_makes_a_batch_of_the_rows_picked(
 @pytest.mark.parametrize(
     ('pick', 'said'),
     [
-        (['--first', '9'], '9 is not a filled row'),
+        (['--first', '9'], '9 is not a complete row'),
         (['--first', '3', '--last', '2'], 'the row 3 comes after the row 2'),
         (['--later', '--first', '2'], 'arrive later has no first or last'),
     ],
@@ -74,25 +74,25 @@ def test_rows_picked_without_a_source_are_refused_on_the_command_line(
     assert '--later pick rows of --source' in capsys.readouterr().err
 
 
-def test_take_puts_offered_rows_into_the_batch_and_reduces_nothing(
+def test_add_puts_available_rows_into_the_batch_and_reduces_nothing(
     command: list[str], folder: Path
 ) -> None:
     with intake_on(folder) as intake:
         label = later(intake)
-    offered, taken = folder / 'offered.csv', folder / 'taken.csv'
+    available, added = folder / 'available.csv', folder / 'added.csv'
     act = [*command, *SOURCES]
 
-    assert main([*act, 'offered', '-l', label, '-o', str(offered)]) == 0
-    assert main([*act, 'take', '-l', label, '1', '-o', str(taken)]) == 0
+    assert main([*act, 'available', '-l', label, '-o', str(available)]) == 0
+    assert main([*act, 'add', '-l', label, '1', '-o', str(added)]) == 0
 
-    assert read_text(offered)[['key', 'waits']].to_dict('records') == [
-        {'key': '1', 'waits': 'False'}
+    assert read_text(available)[['key', 'incomplete']].to_dict('records') == [
+        {'key': '1', 'incomplete': 'False'}
     ]
-    assert read_text(taken)[['key', 'status']].to_dict('records') == [
+    assert read_text(added)[['key', 'status']].to_dict('records') == [
         {'key': '1', 'status': 'ready'}
     ]
     with intake_on(folder) as intake:
-        assert list(intake.manager.batch(label).frame().index) == ['2', '3', '1']
+        assert list(intake.manager.batch(label).table().index) == ['2', '3', '1']
         assert intake.manager.client.records(label=label) == []
 
 
@@ -160,7 +160,7 @@ def test_follow_writes_an_object_per_line_with_json(
         'ended',
         'failure',
         'refused',
-        'waiting',
+        'incomplete',
         'error',
     }
     assert [line['error'] for line in lines] == [None] * len(lines)

@@ -9,7 +9,7 @@ import pytest
 
 from ess.apps import Client, Record, Request, Workspace, file
 from ess.apps.log import Log
-from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, kept_rows
+from ess.apps.testing import FakeFiles, FakeStore, StagedFunction, list_driver
 from ess.spec import (
     Binding,
     DriverBinding,
@@ -125,18 +125,18 @@ def bindings(
         folding(TOTAL, add_amounts),
         folding(DIGITS, append_digit),
         DriverBinding(SUM, scaled_sum),
-        kept_rows(WEIGHTED, weighted),
+        list_driver(WEIGHTED, weighted),
         DriverBinding(SPREAD, Averaging),
-        kept_rows(STITCH, stitch),
+        list_driver(STITCH, stitch),
         DriverBinding(WALK, Walking),
         DriverBinding(UNTYPED, lambda fixed: Untyped()),
         function_binding(NOTHING, lambda params: Value.model_construct(value=None)),
         function_binding(SPLIT, split),
-        kept_rows(SPLIT_TOTAL, split_total),
+        list_driver(SPLIT_TOTAL, split_total),
         function_binding(LOKI_MASKED, read_mask),
         function_binding(SAMPLE_RUN, read_sample),
         StagedFunction(TERMS, terms),
-        kept_rows(TERMS_ROWS, terms),
+        list_driver(TERMS_ROWS, terms),
     ]
 
 

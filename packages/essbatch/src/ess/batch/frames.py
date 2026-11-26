@@ -40,7 +40,7 @@ def reduce_table(
     staged: bool = False,
     persist: bool | Sequence[str] = False,
     remaining: bool = False,
-    earlier_settings: bool = False,
+    settings_changed: bool = False,
 ) -> pd.DataFrame:
     """
     Reduce each row of ``table`` with the settings of ``template``, wait, and
@@ -62,7 +62,7 @@ def reduce_table(
         cell is empty. A file in it may be named as in a cell
         (:func:`~.table.as_request`), and a record by ``@latest``.
     table:
-        The rows, as :meth:`~.reduction.Batch.put` takes them.
+        The rows, as :meth:`~.reduction.Batch.set_table` takes them.
     label:
         The label of the records. A batch is found again by it, so each batch
         has its own.
@@ -70,7 +70,7 @@ def reduce_table(
         Run the rows through a stage.
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
-    remaining, earlier_settings:
+    remaining, settings_changed:
         As :func:`reduce_batch` takes them.
 
     Raises
@@ -87,11 +87,11 @@ def reduce_table(
         spec,
         label=label,
         settings=checked_settings(client, spec, template),
-        rows=table,
+        table=table,
         staged=staged,
         persist=persist,
     )
-    return reduce_batch(batch, remaining=remaining, earlier_settings=earlier_settings)
+    return reduce_batch(batch, remaining=remaining, settings_changed=settings_changed)
 
 
 def reduce_batch(
@@ -99,7 +99,7 @@ def reduce_batch(
     keys: Sequence[str] | None = None,
     *,
     remaining: bool = False,
-    earlier_settings: bool = False,
+    settings_changed: bool = False,
 ) -> pd.DataFrame:
     """
     Reduce the rows of ``keys`` of ``batch``, or all of its rows, wait, close
@@ -118,10 +118,10 @@ def reduce_batch(
         since the row's cells or its spec changed, or since the settings
         changed for a row that has no result of them yet. A row reduced with
         earlier settings is left, as it is by the page's "Reduce".
-    earlier_settings:
+    settings_changed:
         Together with ``remaining``, reduce also the rows reduced with earlier
-        settings (:func:`~.state.earlier_settings`), as the page's "Reduce them
-        again" does. The rows of both are chosen by
+        settings (:func:`~.state.with_changed_settings`), as the page's
+        "Reduce them again" does. The rows of both are chosen by
         :func:`~.state.to_reduce`, as the page chooses them.
 
     Raises
@@ -136,8 +136,8 @@ def reduce_batch(
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
     client = batch.client
     which: list[Which] = ['remaining'] if remaining else ['all']
-    if remaining and earlier_settings:
-        which.append('earlier')
+    if remaining and settings_changed:
+        which.append('settings changed')
     try:
         # Records that a workspace went on with after a restart finish first.
         found = batch.state(keys, compare=False).values()
@@ -164,7 +164,7 @@ def with_results(
     The rows of ``keys`` of the table of ``batch``, or all, with the columns
     of :data:`RESULT`, replaced if it has them: what ``states`` say of the
     row of each key. ``status`` is the row's status in the words of the page
-    (:attr:`~.state.RowState.text`), ``record`` the ID of its result,
+    (:attr:`~.state.RowState.status`), ``record`` the ID of its result,
     ``failure`` why that failed, and ``published`` its catalogue identifier
     (:func:`~.definition.published`); each text is empty where there is
     nothing to say.
@@ -172,7 +172,7 @@ def with_results(
     client = batch.client
     kept = batch.definitions
     published = {} if kept is None else definition.published(kept, batch.label)
-    frame = batch.frame()
+    frame = batch.table()
     if keys is not None:
         frame = frame.loc[list(keys)]
     keys = list(frame.index)
@@ -180,7 +180,7 @@ def with_results(
     found = [r for r in records if r is not None]
     failure = dict(zip((r.id for r in found), client.failure(found), strict=True))
     return frame.drop(columns=list(RESULT), errors='ignore').assign(
-        status=[states[key].text for key in keys],
+        status=[states[key].status for key in keys],
         record=['' if r is None else r.id for r in records],
         failure=['' if r is None else failure[r.id] or '' for r in records],
         published=['' if r is None else published.get(r.id, '') for r in records],

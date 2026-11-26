@@ -11,8 +11,8 @@ What the client raises, beyond Python's own errors for a wrong call.
 - :class:`RecordFailed`: a read of a record that failed or was cancelled.
 - :class:`Stopped`: any call of a workspace that stopped or is closed.
 
-:func:`said` says what code of an application raised, as a person reads it,
-and :func:`said_at` a reason at a field.
+:func:`error_text` says what code of an application raised, as a person reads it,
+and :func:`field_error_text` a reason at a field.
 
 Each holds only strings, integers, and tuples of these, so that a wire
 format can carry it as it is::
@@ -21,7 +21,7 @@ format can carry it as it is::
         client.submit(batch)
     except SubmitError as error:
         for e in error.errors:
-            form.mark(e.entry, e.loc, e.msg)
+            form.mark(e.request_key, e.loc, e.msg)
 """
 
 from __future__ import annotations
@@ -46,20 +46,24 @@ class FieldError:
     :data:`ess.spec.refs.Loc`), and ``msg``, why.
 
     ``loc`` is empty for a reason that names no field, such as an unknown
-    spec. ``entry`` is the request's key, or its index, among the requests of
+    spec. ``request_key`` is the request's key, or its index, among the requests of
     one call, or ``None`` for a call with one request. It prints as::
 
         typo: reduction.bins: Input should be greater than 0
     """
 
-    entry: str | int | None
+    request_key: str | int | None
     loc: Loc
     msg: str
 
     def __str__(self) -> str:
-        entry = f'[{self.entry}]' if isinstance(self.entry, int) else self.entry
+        key = (
+            f'[{self.request_key}]'
+            if isinstance(self.request_key, int)
+            else self.request_key
+        )
         at = loc_text(self.loc) if self.loc else None
-        return ': '.join(p for p in (entry, at, self.msg) if p is not None)
+        return ': '.join(p for p in (key, at, self.msg) if p is not None)
 
 
 class SubmitError(ValueError):
@@ -74,12 +78,12 @@ class SubmitError(ValueError):
 
     @classmethod
     def at(cls, loc: Loc, msg: str) -> SubmitError:
-        """One reason, at the position ``loc``, with no entry."""
+        """One reason, at the position ``loc``, with no request key."""
         return cls([FieldError(None, loc, msg)])
 
     @classmethod
     def of(cls, error: ParamsError) -> SubmitError:
-        """The reasons of params that :mod:`ess.spec` refuses, with no entry."""
+        """The reasons of params that :mod:`ess.spec` refuses, with no request key."""
         return cls(FieldError(None, loc, msg) for loc, msg in error.errors)
 
     def __str__(self) -> str:
@@ -89,11 +93,11 @@ class SubmitError(ValueError):
 class NotReadable(LookupError):
     """
     A record, an output, or an accumulator that exists, but that cannot be
-    read: an output that the workspace does not keep and that is not persisted;
-    an output that the store no longer holds or that the workflow did not
-    return; an accumulator released, that stopped, or that is read through the
-    record of its freeze; a state whose plain request would be refused or whose
-    driver fails to give outputs. One that does not exist raises ``KeyError``.
+    read: an output that the workspace does not hold in memory and that is not
+    persisted; an output that the store no longer holds or that the workflow did
+    not return; an accumulator released, that stopped, or that is read through
+    the record of its freeze; a state whose plain request would be refused or
+    whose driver fails to give outputs. One that does not exist raises ``KeyError``.
     """
 
 
@@ -121,19 +125,21 @@ class Stopped(RuntimeError):
     """
 
 
-def said(error: Exception) -> str:
+def error_text(error: Exception) -> str:
     """
     What code of an application raised, such as a row source, the file
     source or a drawing, as a person reads it: a pydantic ``ValidationError``,
     such as of metadata that the code validates, as each reason at its field
-    (:func:`said_at`), such as ``run must be a valid integer``; another
+    (:func:`field_error_text`), such as ``run must be a valid integer``; another
     refusal (``ValueError``, ``OSError``) as its text; a defect with the name
     of its type, such as ``RuntimeError: boom`` or ``KeyError: 'run'``.
     """
     name = type(error).__name__
     if isinstance(error, ValidationError):
         return '; '.join(
-            said_at('.'.join(map(str, e['loc'])), e['msg']) if e['loc'] else e['msg']
+            field_error_text('.'.join(map(str, e['loc'])), e['msg'])
+            if e['loc']
+            else e['msg']
             for e in error.errors()
         )
     if isinstance(error, ValueError | OSError):
@@ -141,7 +147,7 @@ def said(error: Exception) -> str:
     return f'{name}: {error}' if str(error) else name
 
 
-def said_at(field: str, message: str) -> str:
+def field_error_text(field: str, message: str) -> str:
     """
     A reason at ``field``, as a sentence: ``run is missing`` for a value
     missing, ``run must be ...`` for pydantic's ``Input should be ...``,

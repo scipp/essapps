@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Results of a batch into the catalogue: :class:`Publisher` publishes the result
-of each row as one derived dataset (:func:`ess.apps.scicat.publish`), with the
-files that :class:`~.writing.Writing` writes by the form of the batch. It needs
-the extra ``scicat``.
+Results of a batch into the catalogue: :class:`Publisher` publishes the result of each
+row as one derived dataset (:func:`ess.apps.scicat.publish`), with the files that
+:class:`~.writing.Writing` writes by the output options of the batch. It needs the extra
+``scicat``.
 
 A batch keeps one entry of the definitions for this, ``publish``, which only
 the publisher writes (:class:`~.definition.Publishing`): each upload::
 
     {'published': [{'key': '60339', 'record': '7f3a...', 'pid': 'pid:...'}]}
 
-A result is published if its row reads ``done`` or ``earlier``: completed,
+A result is published if its row reads ``done`` or ``settings changed``: completed,
 and not outdated (:func:`~.state.publishable`). A record is published at
 most once; a newer result of the row is published as a new dataset. Each
 upload is kept as soon as it succeeds, so that one that fails after others
@@ -28,12 +28,12 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from ess.apps.errors import said
+from ess.apps.errors import error_text
 from ess.apps.records import Record
 from ess.apps.scicat import Catalogue, publish
-from ess.apps.writers import About
+from ess.apps.writers import DatasetMetadata
 
-from .definition import PUBLISH, NotKept, Published, Publishing, published
+from .definition import PUBLISH, DefinitionWriteError, Published, Publishing, published
 from .export import RowWriter
 from .state import publishable
 from .writing import Writing
@@ -57,32 +57,34 @@ class Publisher:
 
     def publish(self, label: str, keys: Sequence[str]) -> dict[str, str]:
         """
-        Publish the result of the row of each of ``keys`` as the form of
-        ``label`` says, and return the catalogue identifier of each, by key.
+        Publish the result of the row of each of ``keys`` as the output options
+        of ``label`` say, and return the catalogue identifier of each, by key.
 
-        Raises ``ValueError``, before any upload, if the form names no owner
-        or no contact email, or a format that this process lacks, or a row is
+        Raises ``ValueError``, before any upload, if the output options name no
+        owner or no contact email, or a format that this process lacks, or a row is
         not in the batch, has no result to publish, or one published already.
         If an upload fails, raises :class:`UploadFailed` that names the rows
         published before it, which are kept.
         """
-        write, abouts = self.writing.by_form(label)
-        form = self.writing.form(label)
+        write, metadata = self.writing.by_options(label)
+        options = self.writing.options(label)
         records = self._results(label, keys)
-        if missing := form.lacking:
-            raise ValueError(f'the form names no {", no ".join(missing)}')
+        if missing := options.lacking:
+            raise ValueError(f'the output options name no {", no ".join(missing)}')
         pids: dict[str, str] = {}
         for key, record in records.items():
             try:
                 pids[key] = self._publish(
-                    label, key, record, write, abouts[key], form.format
+                    label, key, record, write, metadata[key], options.format
                 )
-            except NotKept:  # noqa: PERF203
+            except DefinitionWriteError:  # noqa: PERF203
                 raise
             except Exception as error:  # the catalogue's client may raise anything
                 done = ', '.join(f'{k} as {p}' for k, p in pids.items())
                 before = f'published {done}; then ' if pids else ''
-                raise UploadFailed(f'{before}{key} failed: {said(error)}') from error
+                raise UploadFailed(
+                    f'{before}{key} failed: {error_text(error)}'
+                ) from error
         return pids
 
     def _results(self, label: str, keys: Sequence[str]) -> dict[str, Record]:
@@ -91,7 +93,7 @@ class Publisher:
         else ``ValueError``.
         """
         batch = self.writing.manager.batch(label)
-        if unknown := sorted(set(keys) - set(batch.frame().index)):
+        if unknown := sorted(set(keys) - set(batch.table().index)):
             raise ValueError(f'the batch has no row {", ".join(unknown)}')
         states, _ = batch.shown(list(keys))
         may = set(publishable(states))
@@ -111,7 +113,7 @@ class Publisher:
         key: str,
         record: Record,
         write: RowWriter,
-        about: About,
+        metadata: DatasetMetadata,
         format: str,
     ) -> str:
         """Upload one result and keep that it was; its catalogue identifier."""
@@ -120,22 +122,25 @@ class Publisher:
             written = Path(folder) / key
             write(key, record, written)
             files = sorted(written.iterdir())
-            pid = publish(self.catalogue, client, record, files, about, format)
-        kept = self._kept(label)
+            pid = publish(self.catalogue, client, record, files, metadata, format)
+        publishing = self._load_publishing(label)
         upload = Published(key=key, record=record.id, pid=pid)
         try:
-            self._keep(
-                label, kept.model_copy(update={'published': (*kept.published, upload)})
+            self._save_publishing(
+                label,
+                publishing.model_copy(
+                    update={'published': (*publishing.published, upload)}
+                ),
             )
-        except NotKept as error:
-            raise NotKept(
+        except DefinitionWriteError as error:
+            raise DefinitionWriteError(
                 f'{key} was published as {pid}, but that is not kept: {error}'
             ) from error
         return pid
 
-    def _kept(self, label: str) -> Publishing:
+    def _load_publishing(self, label: str) -> Publishing:
         kept = PUBLISH.load(self.writing.manager.definitions, label)
         return Publishing() if kept is None else kept
 
-    def _keep(self, label: str, publishing: Publishing) -> None:
+    def _save_publishing(self, label: str, publishing: Publishing) -> None:
         PUBLISH.save(self.writing.manager.definitions, label, publishing)

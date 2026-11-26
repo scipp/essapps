@@ -19,7 +19,7 @@ records pending and where a failure started.
 The output selected is shown with its plot, a plot a workflow package
 configured for its spec, or its provenance graph, as picked; the pick stays as
 other outputs are selected, unless the record's spec has no plot of that name.
-A record of another spec than the one bound (:meth:`~ess.apps.Client.bound`)
+A record of an unbound spec (:meth:`~ess.apps.Client.bound`)
 is listed by its outputs' names, offers no configured plot, and its outputs
 are read and drawn as stored scipp data.
 The plot has a figure per array field of an output, drawn with plopp, once its

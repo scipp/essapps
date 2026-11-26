@@ -156,14 +156,14 @@ def test_main_with_remaining_leaves_the_rows_reduced_with_earlier_settings(
     )
 
     table = read_text(settings_changed)
-    assert list(table['status']) == ['earlier'] * 2
+    assert list(table['status']) == ['settings changed'] * 2
     assert code == 3
     assert 'left 2 rows' in capsys.readouterr().err
     with app(folder) as batch:
         assert len(batch.client.records(label='x')) == 2
 
 
-def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
+def test_main_with_remaining_and_settings_changed_reduces_those_rows_too(
     command: list[str], cli_template: Path, folder: Path, settings_changed: Path
 ) -> None:
     runs = folder / 'runs.csv'
@@ -173,7 +173,7 @@ def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
         '-l',
         'x',
         '--remaining',
-        '--earlier-settings',
+        '--settings-changed',
     ]
 
     code = main([*command, 'reduce', *args, '-o', str(settings_changed)])
@@ -185,7 +185,7 @@ def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
         assert len(batch.client.records(label='x')) == 4
 
 
-def test_main_refuses_earlier_settings_without_remaining(
+def test_main_refuses_settings_changed_without_remaining(
     command: list[str],
     cli_template: Path,
     folder: Path,
@@ -198,7 +198,7 @@ def test_main_refuses_earlier_settings_without_remaining(
             [
                 *command,
                 *('reduce', str(cli_template), str(runs), '-l', 'x'),
-                '--earlier-settings',
+                '--settings-changed',
             ]
         )
 
@@ -211,7 +211,7 @@ def test_a_batch_on_the_label_reduced_has_the_settings_and_rows_of_the_files(
 ) -> None:
     with app(reduced_once) as batch:
         assert batch.settings == {'offset': {'value': 0.5}}
-        assert batch.frame()['sample'].to_dict() == {
+        assert batch.table()['sample'].to_dict() == {
             'row-0': 'run:1',
             'row-1': 'run:2',
         }
@@ -248,7 +248,7 @@ def test_a_table_given_to_the_command_takes_the_place_of_an_edit_of_an_app(
     assert main([*command, 'reduce', str(template), str(runs), '-l', 'x']) == 0
 
     with app(reduced_once) as batch:
-        assert batch.frame().loc['row-1', 'sample'] == 'run:2'
+        assert batch.table().loc['row-1', 'sample'] == 'run:2'
 
 
 def test_a_value_of_the_template_at_a_column_is_that_of_each_empty_cell(
@@ -268,7 +268,7 @@ def test_a_value_of_the_template_at_a_column_is_that_of_each_empty_cell(
 
     assert totals == {'row-0': 2.0, 'row-1': 1.0}
     with app(folder) as batch:
-        assert batch.frame()['sample'].isna().tolist() == [False, True]
+        assert batch.table()['sample'].isna().tolist() == [False, True]
         state = batch.state()
         totals = {k: batch.client.output(s.record, 'total') for k, s in state.items()}
     assert totals == {'row-0': 2.0, 'row-1': 3.0}
@@ -282,7 +282,7 @@ def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
         label = later(intake)
         batch = intake.manager.batch(label)
         waits = pd.DataFrame({'sample': [None]}, index=pd.Index(['9'], name=KEY))
-        batch.put(pd.concat([batch.frame(), waits]))
+        batch.set_table(pd.concat([batch.table(), waits]))
     template = folder / 'one.yaml'
     template.write_text(
         'spec: {name: cli-toy, version: 1}\n'
@@ -294,7 +294,7 @@ def test_a_template_leaves_out_a_value_at_a_column_that_the_source_fills(
     with intake_on(folder) as intake:
         batch = intake.manager.batch(label)
         assert batch.settings == {'offset': {'value': 0.5}}
-        assert batch.state()['9'].text == 'incomplete'
+        assert batch.state()['9'].status == 'incomplete'
         assert '9' not in {r.member for r in intake.manager.client.records(label=label)}
 
 
@@ -335,7 +335,7 @@ def test_reduce_with_a_source_and_no_table_makes_a_batch_of_every_row_of_the_sou
 
     assert list(read_text(out)['key']) == ['1', '2', '3']
     with intake_on(folder) as intake:
-        assert intake.offered('x').empty
+        assert intake.available_rows('x').empty
 
 
 def test_reduce_refuses_a_label_that_has_definitions_but_no_batch(
@@ -683,8 +683,8 @@ def test_main_reduces_a_template_without_a_table_as_one_row_keyed_by_the_label(
             [*SOURCES, 'reduce', '--source', 'p', '-l', 'x'],
             'the source p is not registered; registered: pairs, broken',
         ),
-        (['rows', 'pairs'], 'rows needs -s/--sources'),
-        (['reduce', '--source', 'pairs', '-l', 'x'], '--source needs -s/--sources'),
+        (['rows', 'pairs'], 'rows needs -s/--row-sources'),
+        (['reduce', '--source', 'pairs', '-l', 'x'], '--source needs -s/--row-sources'),
     ],
 )
 def test_main_refuses_a_wrong_name_in_a_line_before_the_folder_is_opened(

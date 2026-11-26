@@ -56,7 +56,11 @@ def test_a_push_is_refused_as_the_request_over_it_alone(client: Client) -> None:
     summed = client.accumulator(Template(toys.SUM, blanks=('runs',)))
     pushes: list[tuple[Accumulator, Any, dict[str, Any]]] = [
         (total, toys.TOTAL, {'parts': [{'value': 'x'}]}),  # request_types refuses it
-        (total, toys.TOTAL, {'parts': [released.ref('value')]}),  # a record not kept
+        (
+            total,
+            toys.TOTAL,
+            {'parts': [released.ref('value')]},
+        ),  # a record neither in memory nor persisted
         (summed, toys.SUM, {'runs': [file(run=9)]}),  # an unknown file
     ]
     for accumulator, spec, rows in pushes:

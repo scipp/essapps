@@ -9,9 +9,9 @@ import pandas as pd
 import pytest
 from ess.batch import (
     BatchManager,
+    DefinitionWriteError,
     FolderDefinitions,
     Intake,
-    NotKept,
     Range,
     RowSource,
 )
@@ -57,14 +57,14 @@ def made(intake: Intake, sample: Measure) -> Intake:
     return intake
 
 
-def test_a_batch_made_from_a_source_takes_and_considers_its_filled_rows(
+def test_a_batch_made_from_a_source_takes_and_sees_its_complete_rows(
     made: Intake, definitions: FolderDefinitions
 ) -> None:
     kept = SOURCE.load(definitions, 'a')
 
-    assert list(made.manager.batch('a').frame().index) == ['3', '4', 'mine']
-    assert made.source('a') == 'pairs'
-    assert kept.considered == {'1', '2', '3', '4'}  # not 5, which waits
+    assert list(made.manager.batch('a').table().index) == ['3', '4', 'mine']
+    assert made.row_source('a') == 'pairs'
+    assert kept.seen_keys == {'1', '2', '3', '4'}  # not 5, which is incomplete
 
 
 def test_a_batch_made_from_a_source_keeps_its_fills_when_read_again(
@@ -74,7 +74,7 @@ def test_a_batch_made_from_a_source_keeps_its_fills_when_read_again(
 
     again = BatchManager(client, definitions=definitions).batch('a')
 
-    assert again.fills == {'sample', 'transmission'}
+    assert again.source_columns == {'sample', 'transmission'}
 
 
 def test_a_source_json_with_fills_is_refused_when_read(
@@ -85,7 +85,7 @@ def test_a_source_json_with_fills_is_refused_when_read(
     definitions.save(SOURCE.key('a'), {**kept, 'fills': ['sample']})
 
     with pytest.raises(ValueError, match=r'source\.json: fills: Unexpected'):
-        _again(client, definitions).source('a')
+        _again(client, definitions).row_source('a')
 
 
 def test_choose_may_give_columns_that_the_source_does_not(
@@ -100,7 +100,7 @@ def test_choose_may_give_columns_that_the_source_does_not(
         choose=lambda given: given.assign(thickness=2.0),
     )
 
-    assert batch.frame()['thickness'].tolist() == [2.0]
+    assert batch.table()['thickness'].tolist() == [2.0]
 
 
 def test_columns_given_are_empty_and_a_column_of_the_table_keeps_its_cells(
@@ -115,7 +115,7 @@ def test_columns_given_are_empty_and_a_column_of_the_table_keeps_its_cells(
         parameter_columns=['sample', 'thickness'],
     )
 
-    frame = batch.frame()
+    frame = batch.table()
     assert frame['sample'].tolist() == ['uuid:run-1']
     assert frame['thickness'].isna().tolist() == [True]
 
@@ -139,7 +139,7 @@ def four(intake: Intake, sample: Measure) -> Intake:
     ],
     ids=['from', 'to', 'one', 'later'],
 )
-def test_a_range_takes_the_filled_rows_between_its_ends_and_considers_all(
+def test_a_range_takes_the_complete_rows_between_its_ends_and_sees_all(
     four: Intake,
     definitions: FolderDefinitions,
     chosen: Range,
@@ -147,18 +147,18 @@ def test_a_range_takes_the_filled_rows_between_its_ends_and_considers_all(
 ) -> None:
     batch = four.create(PLAIN.name, title='A', source='pairs', choose=chosen)
 
-    assert list(batch.frame().index) == taken
-    considered = SOURCE.load(definitions, batch.label).considered
-    assert considered == {'1', '2', '4'}  # not 3, which waits
+    assert list(batch.table().index) == taken
+    seen_keys = SOURCE.load(definitions, batch.label).seen_keys
+    assert seen_keys == {'1', '2', '4'}  # not 3, which is incomplete
 
 
 @pytest.mark.parametrize(
     ('chosen', 'said'),
     [
-        (Range(first='3'), '3 is not a filled row'),
+        (Range(first='3'), '3 is not a complete row'),
         (Range('2', '1'), 'the row 2 comes after the row 1'),
     ],
-    ids=['waits', 'reversed'],
+    ids=['incomplete', 'reversed'],
 )
 def test_a_range_that_takes_no_row_of_its_ends_is_refused_and_nothing_is_kept(
     four: Intake, definitions: FolderDefinitions, chosen: Range, said: str
@@ -185,10 +185,10 @@ def test_a_batch_of_the_rows_that_arrive_later_that_follows_gets_only_those(
 
     four.step()
 
-    assert list(batch.frame().index) == ['3', '5']
+    assert list(batch.table().index) == ['3', '5']
 
 
-def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_filled(
+def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_complete(
     intake: Intake, fake: FakeFiles, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -198,13 +198,13 @@ def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_filled(
 
     intake.step()
 
-    assert list(batch.frame().index) == ['1', '2']
+    assert list(batch.table().index) == ['1', '2']
 
 
 def test_a_batch_made_without_a_source_has_none(intake: Intake) -> None:
     intake.manager.create('plain', title='A', label='a')
 
-    assert intake.source('a') is None
+    assert intake.row_source('a') is None
 
 
 def _not_registered(name: str, registered: str) -> str:
@@ -239,12 +239,12 @@ def test_a_row_chosen_that_the_source_does_not_give_is_refused_and_nothing_is_ke
 @pytest.mark.parametrize(
     'call',
     [
-        lambda i: i.source('b'),
-        lambda i: i.offered('b'),
-        lambda i: i.take('b', []),
+        lambda i: i.row_source('b'),
+        lambda i: i.available_rows('b'),
+        lambda i: i.add_rows('b', []),
         lambda i: i.follow('b'),
     ],
-    ids=['source', 'offered', 'take', 'follow'],
+    ids=['source', 'available_rows', 'add_rows', 'follow'],
 )
 def test_a_label_that_is_no_batch_is_refused(
     intake: Intake, call: Callable[[Intake], Any]
@@ -253,34 +253,34 @@ def test_a_label_that_is_no_batch_is_refused(
         call(intake)
 
 
-def test_the_rows_offered_are_those_of_the_source_that_the_table_lacks(
+def test_the_available_rows_are_those_of_the_source_that_the_table_lacks(
     made: Intake,
 ) -> None:
     batch = made.manager.batch('a')
-    batch.put(batch.frame().drop('4'))
+    batch.set_table(batch.table().drop('4'))
 
-    offered = made.offered('a')
+    available = made.available_rows('a')
 
-    assert offered['waits'].to_dict() == {
+    assert available['incomplete'].to_dict() == {
         '1': False,
         '2': False,
         '4': False,
         '5': True,
     }
-    assert list(offered.columns) == [*made.rows_of('pairs').columns, 'waits']
+    assert list(available.columns) == [*made.rows_of('pairs').columns, 'incomplete']
 
 
-def test_a_row_of_the_source_that_waits_is_offered_as_waiting(
+def test_an_incomplete_row_of_the_source_is_available_as_incomplete(
     intake: Intake, sample: Measure
 ) -> None:
     sample(1, 'water')
     intake.create('plain', title='A', source='pairs', label='a')
     sample(2, 'oil', partner=False)
 
-    assert intake.offered('a')['waits'].to_dict() == {'2': True}
+    assert intake.available_rows('a')['incomplete'].to_dict() == {'2': True}
 
 
-def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
+def test_rows_added_are_put_as_the_source_makes_them_and_seen(
     intake: Intake,
     fake: FakeFiles,
     sample: Measure,
@@ -290,28 +290,28 @@ def test_rows_taken_are_put_as_the_source_makes_them_and_considered(
     batch = intake.create('plain', title='A', source='pairs', label='a', follow=True)
     sample(2, 'oil', partner=False)
 
-    intake.take('a', ['2'])
-    taken = batch.frame().loc['2']
-    batch.put(batch.frame().drop('2'))
+    intake.add_rows('a', ['2'])
+    taken = batch.table().loc['2']
+    batch.set_table(batch.table().drop('2'))
     fake.measure(1002, 1.0, role='transmission', sample='oil')
     intake.step()
 
     assert taken['sample'] == 'uuid:run-2'
     assert pd.isna(taken['transmission'])
-    assert list(batch.frame().index) == ['1']
-    assert SOURCE.load(definitions, 'a').considered == {'1', '2'}
+    assert list(batch.table().index) == ['1']
+    assert SOURCE.load(definitions, 'a').seen_keys == {'1', '2'}
 
 
-def test_a_row_that_a_person_removed_is_taken_again(made: Intake) -> None:
+def test_a_row_that_a_person_removed_is_added_again(made: Intake) -> None:
     batch = made.manager.batch('a')
-    batch.put(batch.frame().drop('4'))
+    batch.set_table(batch.table().drop('4'))
 
-    made.take('a', ['4'])
+    made.add_rows('a', ['4'])
 
-    assert list(batch.frame().index) == ['3', 'mine', '4']
+    assert list(batch.table().index) == ['3', 'mine', '4']
 
 
-@pytest.mark.parametrize('added_by', ['step', 'take'])
+@pytest.mark.parametrize('added_by', ['step', 'add_rows'])
 def test_a_row_added_after_make_column_takes_the_setting(
     intake: Intake, client: Client, sample: Measure, added_by: str
 ) -> None:
@@ -327,15 +327,15 @@ def test_a_row_added_after_make_column_takes_the_setting(
     if added_by == 'step':
         client.wait(list(intake.step().records.values()))
     else:
-        intake.take('a', ['2'])
+        intake.add_rows('a', ['2'])
         client.wait(batch.reduce(['2']))
 
-    assert pd.isna(batch.frame().loc['2', 'thickness'])
+    assert pd.isna(batch.table().loc['2', 'thickness'])
     assert batch.state()['2'].record.request.params['thickness'] == 2.0
-    assert batch.state()['1'].text == 'done'
+    assert batch.state()['1'].status == 'done'
 
 
-def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
+def test_an_incomplete_row_added_or_stepped_stays_incomplete_whatever_the_settings_kept(
     intake: Intake,
     client: Client,
     sample: Measure,
@@ -349,11 +349,11 @@ def test_a_waiting_row_taken_or_stepped_waits_whatever_the_settings_kept(
     definitions.save(SETTINGS.key('a'), {**kept, 'params': stale})
     again = _again(client, definitions)  # as after a restart
 
-    again.take('a', ['2'])
+    again.add_rows('a', ['2'])
     done = again.step()
     state = again.manager.batch('a').state()['2']
 
-    assert again.manager.batch('a').state()['1'].text != 'incomplete'
+    assert again.manager.batch('a').state()['1'].status != 'incomplete'
     assert done is not None
     assert '2' not in done.records
     assert [(e.loc, e.msg) for e in state.problems] == [(('transmission',), 'empty')]
@@ -368,7 +368,7 @@ def test_a_source_that_no_longer_gives_a_column_of_the_fills_kept_is_named(
     said = 'the source pairs: it no longer gives the column transmission'
 
     with pytest.raises(ValueError, match=said):
-        again.offered('a')
+        again.available_rows('a')
     with pytest.raises(ValueError, match=said):
         again.step()
 
@@ -380,15 +380,15 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
     sources = dict(SOURCES)
     intake = Intake(BatchManager(client, definitions=definitions), sources=sources)
     batch = intake.create('plain', title='A', source='pairs', label='a', follow=True)
-    typed = batch.frame().rename(index={'1': 'typed'})
-    batch.put(pd.concat([batch.frame(), typed]))
+    typed = batch.table().rename(index={'1': 'typed'})
+    batch.set_table(pd.concat([batch.table(), typed]))
     del sources['pairs']
 
     with pytest.raises(ValueError, match=_not_registered('pairs', 'none')):
         intake.step()
 
-    # A key typed by hand is considered only by a step that reads the source.
-    assert SOURCE.load(definitions, 'a').considered == {'1'}
+    # A key typed by hand is seen only by a step that reads the source.
+    assert SOURCE.load(definitions, 'a').seen_keys == {'1'}
 
 
 @pytest.mark.parametrize(
@@ -398,15 +398,15 @@ def test_a_step_whose_source_is_not_registered_is_refused_and_keeps_nothing(
         (['3'], r"rows \['3'\] are in the batch already"),
     ],
 )
-def test_rows_that_cannot_be_taken_are_refused_and_nothing_changes(
+def test_rows_that_cannot_be_added_are_refused_and_nothing_changes(
     made: Intake, keys: list[str], said: str
 ) -> None:
-    before = made.manager.batch('a').frame()
+    before = made.manager.batch('a').table()
 
     with pytest.raises(ValueError, match=said):
-        made.take('a', keys)
+        made.add_rows('a', keys)
 
-    pd.testing.assert_frame_equal(made.manager.batch('a').frame(), before)
+    pd.testing.assert_frame_equal(made.manager.batch('a').table(), before)
 
 
 def test_a_batch_made_without_a_source_offers_and_takes_no_rows_and_cannot_follow(
@@ -415,9 +415,9 @@ def test_a_batch_made_without_a_source_offers_and_takes_no_rows_and_cannot_follo
     intake.manager.create('plain', title='A', label='a')
 
     with pytest.raises(ValueError, match='a was not made from a row source'):
-        intake.offered('a')
+        intake.available_rows('a')
     with pytest.raises(ValueError, match='a was not made from a row source'):
-        intake.take('a', ['1'])
+        intake.add_rows('a', ['1'])
     with pytest.raises(ValueError, match='a was not made from a row source'):
         intake.follow('a')
     assert intake.following is None
@@ -428,7 +428,7 @@ class _SourceRefused(Refusing):
 
     def save(self, key: Key, data: Any) -> None:
         if key[-1] == 'source':
-            raise NotKept(f'{key}: refused')
+            raise DefinitionWriteError(f'{key}: refused')
         super().save(key, data)
 
 
@@ -439,7 +439,7 @@ def test_a_batch_whose_source_is_refused_is_removed_again(
     refusing = _SourceRefused(definitions)
     intake = Intake(BatchManager(client, definitions=refusing), sources=SOURCES)
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         intake.create('plain', title='A', source='pairs', label='a', follow=True)
 
     assert intake.manager.headers() == {}
@@ -462,7 +462,7 @@ def _broken(files: Any) -> pd.DataFrame:
 def test_a_spec_title_or_label_is_refused_before_the_source_is_looked_up(
     manager: BatchManager, spec: str, title: str, label: str | None, said: str
 ) -> None:
-    intake = Intake(manager, sources={'broken': RowSource(_broken, fills=())})
+    intake = Intake(manager, sources={'broken': RowSource(_broken, source_columns=())})
 
     for source in ('broken', 'nope'):
         with pytest.raises(ValueError, match=said):
@@ -514,13 +514,13 @@ def test_a_source_json_that_cannot_be_read_hides_neither_follow_nor_other_batche
     two: Intake, client: Client, definitions: FolderDefinitions
 ) -> None:
     two.create('plain', title='C', source='pairs', label='c', follow=True)
-    definitions.save(SOURCE.key('a'), {'source': 'pairs'})
+    definitions.save(SOURCE.key('a'), {'row_source': 'pairs'})
     again = _again(client, definitions)
 
     assert again.following == 'c'
-    assert again.source('b') == 'pairs'
-    with pytest.raises(ValueError, match=r'source\.json: considered: '):
-        again.source('a')
+    assert again.row_source('b') == 'pairs'
+    with pytest.raises(ValueError, match=r'source\.json: seen_keys: '):
+        again.row_source('a')
 
 
 def test_a_batch_made_to_follow_ends_follow_on_the_one_before_then_writes_its_own(
@@ -548,7 +548,7 @@ def test_a_refused_batch_made_to_follow_is_removed_and_the_one_before_follows(
 ) -> None:
     refusing.part = SOURCE.key('c')
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.create('plain', title='C', source='pairs', label='c', follow=True)
 
     assert (list(two.manager.headers()), two.following) == (['a', 'b'], 'a')
@@ -598,11 +598,11 @@ def test_a_stopped_batch_gets_no_rows_at_a_step(
 
     intake.step()
 
-    assert list(batch.frame().index) == ['1']
-    assert intake.offered('a')['waits'].to_dict() == {'2': False}
+    assert list(batch.table().index) == ['1']
+    assert intake.available_rows('a')['incomplete'].to_dict() == {'2': False}
 
 
-def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_filled_since(
+def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_complete_since(
     intake: Intake, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -617,7 +617,7 @@ def test_a_stopped_batch_follows_again_and_its_step_adds_the_rows_filled_since(
     intake.step()
 
     assert intake.following == 'a'
-    assert list(batch.frame().index) == ['2', '3']  # 1 was left out at making
+    assert list(batch.table().index) == ['2', '3']  # 1 was left out at making
 
 
 def test_a_batch_that_follows_again_adds_the_rows_that_another_took_meanwhile(
@@ -630,8 +630,8 @@ def test_a_batch_that_follows_again_adds_the_rows_that_another_took_meanwhile(
     two.follow('a')
     two.step()
 
-    assert list(two.manager.batch('a').frame().index) == ['1']
-    assert list(two.manager.batch('b').frame().index) == ['1']
+    assert list(two.manager.batch('a').table().index) == ['1']
+    assert list(two.manager.batch('b').table().index) == ['1']
 
 
 def test_a_batch_told_to_follow_ends_follow_on_the_one_before_then_writes_its_own(
@@ -679,7 +679,7 @@ def test_a_batch_refused_to_follow_leaves_the_one_before_following(
 ) -> None:
     refusing.part = SOURCE.key('b')
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.follow('b')
 
     assert two.following == 'a'
@@ -758,9 +758,9 @@ def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
 ) -> None:
     refusing.part = SOURCE.key('a')
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.create('plain', title='C', source='pairs', label='c', follow=True)
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.stop()
     assert (list(two.manager.headers()), two.following) == (['a', 'b'], 'a')
     assert 'c' not in refusing.labels()

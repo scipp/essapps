@@ -14,9 +14,9 @@ import pandas as pd
 from ess.batch import (
     Batch,
     DefinitionStore,
+    DefinitionWriteError,
     FileInfo,
     Intake,
-    NotKept,
     RowSource,
     rows_of,
 )
@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ess.apps import Client
 from ess.apps.testing import FakeFiles
-from ess.apps.writers import About, Writer
+from ess.apps.writers import DatasetMetadata, Writer
 from ess.spec import FileRef, Referenced, RunFile, WorkflowSpec
 
 
@@ -78,8 +78,10 @@ STAGED = WorkflowSpec(
 )
 
 
-def _text(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
-    (directory / 'total.txt').write_text(f'{about.name}: {outputs["total"]}')
+def _text(
+    outputs: Mapping[str, Any], metadata: DatasetMetadata, directory: Path
+) -> None:
+    (directory / 'total.txt').write_text(f'{metadata.name}: {outputs["total"]}')
 
 
 TEXT = Writer(
@@ -215,7 +217,7 @@ class Refusing:
 
     def _check(self, key: Key) -> None:
         if self.part in (key[-1], key):
-            raise NotKept(f'{key}: refused')
+            raise DefinitionWriteError(f'{key}: refused')
 
 
 def pair(files: Sequence[FileInfo]) -> pd.DataFrame:
@@ -253,8 +255,8 @@ def samples(files: Sequence[FileInfo]) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows, columns=[KEY, 'sample']).set_index(KEY)
 
 
-PAIRS = RowSource(pair, fills=('sample', 'transmission'))
-SAMPLES = RowSource(samples, fills=('sample',))
+PAIRS = RowSource(pair, source_columns=('sample', 'transmission'))
+SAMPLES = RowSource(samples, source_columns=('sample',))
 SOURCES = {'pairs': PAIRS}
 STAGED_NAMES = frozenset({STAGED.name})
 """The specs whose batches run through a stage."""
@@ -272,10 +274,10 @@ def rows(client: Client) -> pd.DataFrame:
 
 def edit(batch: Batch, key: str, **cells: Any) -> None:
     """Set cells of the row of ``key``, ``pd.NA`` to empty one; a new key adds a row."""
-    frame = batch.frame()
+    frame = batch.table()
     for column, cell in cells.items():
         frame.loc[key, column] = cell
-    batch.put(frame)
+    batch.set_table(frame)
 
 
 def from_pairs(intake: Intake, spec: str, **options: Any) -> str:

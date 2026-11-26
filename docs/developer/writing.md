@@ -61,7 +61,7 @@ A guide section that is a copy of a module docstring, of `--help` or of an ADR i
 
 **A term is a code identifier in backticks or a distinctive compound.** Nothing else is a term.
 
-- `Batch.put`, `Step.considered`: the backticks mark it, and the code defines it.
+- `Batch.set_table`, `Step.seen_keys`: the backticks mark it, and the code defines it.
 - "batch table", "row source", "files table": cannot be mistaken for ordinary use.
 - "row", "column", "table", "key", "put", "take" keep their everyday meaning. If "row" meant a row of the batch table, we could not write about the rows of any other table.
 
@@ -96,7 +96,7 @@ One idea per sentence. A first sentence has at most 25 words. Then check for the
 | content in parentheses | "(`batch.empty()`, which `batch.cells()` and so the state read)" | its own sentence, or delete |
 | "but" for "except", "so" for "this way" | "each model in it, but a reference, as a dict" | "each model except a reference, as a dict" |
 | rule, then a clause that reverses it | "A role is never refused … At a file of another kind, a role is checked" | state the scope first; the exception gets its own sentence |
-| a function name as grammar | "`put` a frame with a column" | "call `batch.put(frame)`" |
+| a function name as grammar | "`set_table` a frame with a column" | "call `batch.set_table(frame)`" |
 | abstract subject | "A refused reduce makes no batch" | "If `reduce` fails, no batch is created" |
 
 ## 5. Shape

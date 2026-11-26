@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-The batch table as a frame: its dtypes, its cells, ``rows.json``, and table
+The batch table as a frame: its dtypes, its cells, ``table.json``, and table
 files.
 
 A batch table is one ``DataFrame``: the key of each row as index, named
@@ -44,7 +44,7 @@ lists and groups in its ``object`` cells: :func:`typed` copies them. An empty
 cell is
 ``None``, ``NaN`` or ``pd.NA`` as given; in the table it is ``pd.NA``, or
 ``None`` in an ``object`` column, and in a row read with ``to_dict('index')``
-and in ``rows.json`` it is ``None``.
+and in ``table.json`` it is ``None``.
 
 A cell is plain data. A file and an output are text, which a request does not
 take, so :func:`as_request` converts the cells of a row before
@@ -67,12 +67,12 @@ take, so :func:`as_request` converts the cells of a row before
 :func:`cell_of` gives the JSON form of anything else, such as a group, a time,
 or a file inside a group (``{'@ref': 'file', 'file': 'run:1'}``).
 
-``rows.json`` holds :func:`data_of` of the frame, and :func:`frame_of` reads it
+``table.json`` holds :func:`data_of` of the frame, and :func:`table_of` reads it
 back equal, dtypes included. Its shape is that of ``to_json(orient='table')``:
 a table schema, by ``build_table_schema``, and one record per row, of Python
 values. pandas' own ``to_json`` and ``read_json`` round floats, and integers
 above 2**53, so they neither write nor read the records. A JSON writer of
-Python values keeps each float and integer exact, and :func:`frame_of` builds
+Python values keeps each float and integer exact, and :func:`table_of` builds
 each column with ``pd.array(values, dtype=extDtype)``.
 A row is read as ``frame.to_dict('index')``, which gives Python values of each
 column's type, never a NumPy scalar or a ``Float64`` in place of an ``Int64``.
@@ -88,7 +88,7 @@ a cell of an ``object`` column that would read back as something else
     60340,run:60340,,,NA
 
 Empty is the only missing marker, so a note ``NA`` is text. A note has no
-type in a file of text, so it reads back as text; only ``rows.json`` keeps the
+type in a file of text, so it reads back as text; only ``table.json`` keeps the
 dtype of every column.
 """
 
@@ -124,7 +124,7 @@ NAME = 'name'
 is named; a row without one is named by its key."""
 
 
-def names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
+def row_names(frame: pd.DataFrame, columns: Collection[str]) -> dict[str, str]:
     """
     The name of each row of ``frame``, a table whose parameter columns are
     ``columns``, by key: its note :data:`NAME`, else its key.
@@ -430,7 +430,7 @@ def cell_of(value: Any) -> Any:
 def data_of(frame: pd.DataFrame) -> dict[str, Any]:
     """
     The plain data of ``frame``, a table as :func:`typed` gives it, as
-    ``rows.json`` holds it: ``{'schema': ..., 'data': [{'key': ..., ...}]}``,
+    ``table.json`` holds it: ``{'schema': ..., 'data': [{'key': ..., ...}]}``,
     with ``None`` in each empty cell. Written as JSON by a writer of Python
     values, it keeps each value exact.
     """
@@ -440,7 +440,7 @@ def data_of(frame: pd.DataFrame) -> dict[str, Any]:
     return {'schema': build_table_schema(frame, version=False), 'data': records}
 
 
-def frame_of(data: Any) -> pd.DataFrame:
+def table_of(data: Any) -> pd.DataFrame:
     """
     The table of the plain data of :func:`data_of`, equal to the frame it was
     made of. Raises ``ValueError``, naming the entry, row or column, for data
@@ -538,8 +538,8 @@ def read_table(path: Path, model: type[BaseModel]) -> pd.DataFrame:
     ``.tsv`` file is text, so ``0342`` stays ``'0342'``. A cell of a ``.xlsx``
     file has a type, so a note of one keeps the dtype of its cells if that is
     one of the five of a table, and is text otherwise, such as for dates or
-    for cells of several types. Only ``rows.json`` keeps the dtype of every
-    column (:func:`frame_of`). A ``.xlsx`` file keeps 15 significant digits
+    for cells of several types. Only ``table.json`` keeps the dtype of every
+    column (:func:`table_of`). A ``.xlsx`` file keeps 15 significant digits
     of a number, as Excel does: ``0.1 + 0.2`` reads back as ``0.3``.
 
     Raises ``ValueError``, naming the file, if the file has no column

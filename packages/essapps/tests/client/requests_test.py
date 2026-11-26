@@ -25,7 +25,7 @@ from ess.apps import (
     file,
     local,
 )
-from ess.apps.testing import FakeFiles, StagedFunction, kept_rows
+from ess.apps.testing import FakeFiles, StagedFunction, list_driver
 from ess.spec import Binding, File, OutputRef, Referenced, RunFile, function_binding
 
 from . import toys
@@ -80,7 +80,7 @@ def windows(files: FakeFiles) -> Iterator[Client]:
     bind = [
         function_binding(toys.LOAD, toys.load_run),
         StagedFunction(WINDOWS, widths),
-        kept_rows(WINDOWS_ROWS, widths),
+        list_driver(WINDOWS_ROWS, widths),
     ]
     with local(proposal='p1', files=files, bind=bind) as client:
         yield client
@@ -415,7 +415,7 @@ def test_a_refusal_lists_each_problem_of_a_value(client: Client) -> None:
 
     with pytest.raises(SubmitError) as raised:
         client.submit({'typo': typo})
-    assert [(e.entry, e.loc) for e in raised.value.errors] == [
+    assert [(e.request_key, e.loc) for e in raised.value.errors] == [
         ('typo', ('scaling', 'valeu')),
         ('typo', ('scaling', 'other')),
     ]
@@ -521,5 +521,5 @@ def test_every_refused_request_of_a_call_is_named(client: Client) -> None:
     with pytest.raises(SubmitError) as raised:
         client.submit({'good': good, 'a': bad, 'b': bad})
 
-    assert [e.entry for e in raised.value.errors] == ['a', 'b']
+    assert [e.request_key for e in raised.value.errors] == ['a', 'b']
     assert client.records() == []

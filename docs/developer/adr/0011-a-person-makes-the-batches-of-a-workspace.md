@@ -19,7 +19,7 @@ These are used here:
 
 One batch per workspace leaves three things a person cannot do:
 
-1. **End a series.** If the settings change after lunch, every row of the morning reads `earlier`, reduced with earlier settings, and "Reduce them again" offers to reduce it with the new settings. Nothing says that those rows are finished.
+1. **End a series.** If the settings change after lunch, every row of the morning reads `settings changed`, reduced with earlier settings, and "Reduce them again" offers to reduce it with the new settings. Nothing says that those rows are finished.
 2. **Work on two sets of runs.** A person wants to reduce yesterday's runs again while the runs measured now are reduced as they arrive, and to look at one without stopping the other.
 3. **Give each row the output of another workflow.** A beam centre per sample needs two batches and a source written for the pair. A cell can name an output of another record ([batch.md, "Chains"](../../../packages/essbatch/docs/batch.md#chains)), but the column is filled in code.
 
@@ -43,7 +43,7 @@ manager = BatchManager(client, definitions=FolderDefinitions(folder))
 intake = Intake(manager, sources={'sample-runs': SAMPLE_RUNS})
 label = intake.create('loki-iofq', title='Afternoon', source='sample-runs').label
 manager.headers()              # {label: Header(title, description)}, sorted by label
-manager.batch(label)           # the Batch: frame(), put(), state(), reduce(), cancel(), settings
+manager.batch(label)           # the Batch: table(), set_table(), state(), reduce(), cancel(), settings
 manager.change(label, title='Afternoon, 2 mm cells')
 manager.remove(label)
 ```
@@ -160,7 +160,7 @@ If it is built, the labels and the URL change: a label per workflow, such as `20
 
 ## Consequences
 
-- A person ends a series by making the next batch. The settings of the batch before stay as they are, so its rows do not read `earlier` when the next series gets other settings.
+- A person ends a series by making the next batch. The settings of the batch before stay as they are, so its rows do not read `settings changed` when the next series gets other settings.
 - A person looks at one batch while another runs. All batches share the workspace's queue, so a long reduction still delays the batch that follows (see Open).
 - Problem 3 stays as it is for batches made in code, and is not available for batches that a person makes.
 - Follow belongs to the application that serves all batches, or to the command `essbatch follow` while no application holds the folder. The application owns the timer, and steps the batch that follows under the lock of the pages.

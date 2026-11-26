@@ -113,4 +113,4 @@ def test_a_refused_request_is_named_by_its_index(workspace: Workspace) -> None:
     with pytest.raises(SubmitError) as raised:
         workspace.submit([Entry(accepted), Entry(Request(LOAD))], 'anna')
 
-    assert {error.entry for error in raised.value.errors} == {1}
+    assert {error.request_key for error in raised.value.errors} == {1}

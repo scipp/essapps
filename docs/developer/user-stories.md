@@ -112,12 +112,12 @@ Automatic reduction belongs to its sub-design ([automatic-reduction.md](automati
 The stories use these calls:
 
 ```python
-source = RowSource(rows_of_files, fills=(...))   # rows_of_files: the files -> a DataFrame of rows
-batch = Batch(client, SPEC, label=..., rows=rows_of(client, source), persist=True)
-done = step(batch, source, considered)   # reads batch.settings at each step
+source = RowSource(rows_of_files, source_columns=(...))   # rows_of_files: the files -> a DataFrame of rows
+batch = Batch(client, SPEC, label=..., table=rows_of(client, source), persist=True)
+done = step(batch, source, seen_keys)   # reads batch.settings at each step
 done.records      # the step added the new rows of the source, and reduced the ready rows without a result; their records by key
-done.refused      # why rows of the step were refused by submit, by key
-done.considered   # what the next step is given
+done.submit_errors # why rows of the step were refused by submit, by key
+done.seen_keys   # what the next step is given
 ```
 
 ## S. Small stories
@@ -648,10 +648,10 @@ def per_run(files):                                            # every raw file
     return pd.DataFrame({'sample': [f.ref.file for f in files]},
                         index=[str(f.metadata['run']) for f in files])
 
-PER_RUN = RowSource(per_run, fills=('sample',))
+PER_RUN = RowSource(per_run, source_columns=('sample',))
 
 def iofq_batch(client):
-    return Batch(client, IOFQ, label='iofq', rows=rows_of(client, PER_RUN),
+    return Batch(client, IOFQ, label='iofq', table=rows_of(client, PER_RUN),
                  persist=True, settings={'normalization': None})
 ```
 
@@ -674,15 +674,15 @@ def angles(files):                                             # a row per sampl
     return pd.DataFrame({'sample': list(runs),
                          'runs': [[f.ref.file for f in found] for found in runs.values()]}, index=keys)
 
-source = RowSource(angles, fills=('runs',))
-batch = Batch(client, STITCH, label='reflectivity', rows=rows_of(client, source),
+source = RowSource(angles, source_columns=('runs',))
+batch = Batch(client, STITCH, label='reflectivity', table=rows_of(client, source),
               persist=True, settings={'reference': reference})
 counts = {2: [1.0, 2.0], 3: [1.0, 1.0], 4: [4.0, 8.0]}
-considered, reduced = frozenset(), {}
+seen_keys, reduced = frozenset(), {}
 for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:   # 4 before 3; 2 listed again
     measure(run, counts[run], role='sample', sample='si')
-    done = step(batch, source, considered)
-    considered = done.considered
+    done = step(batch, source, seen_keys)
+    seen_keys = done.seen_keys
     reduced |= done.records
     assert list(done.records) == ([] if key is None else [key])  # the same list again is the same key: no row
     client.wait(done.records)
@@ -690,14 +690,14 @@ for run, key in [(2, 'si@2'), (4, 'si@2,4'), (3, 'si@2,3,4'), (2, None)]:   # 4 
 states = batch.state()
 user = connect()                                               # any client of the proposal
 newest = user.latest('reflectivity', member='si@2,3,4')
-assert list(batch.frame().index) == ['si@2', 'si@2,4', 'si@2,3,4']
+assert list(batch.table().index) == ['si@2', 'si@2,4', 'si@2,3,4']
 assert [len(r.request.params['runs']) for r in reduced.values()] == [1, 2, 3]
 assert user.output(newest, 'stitched').curve.values.tolist() == [1.0, 2.0, 2.0, 2.0, 2.0, 4.0]
 assert {k: s.record for k, s in states.items()} == reduced     # the earlier rows keep their results
 assert len(user.records(label='reflectivity')) == 3            # none is reduced again
 ```
 
-A person compares the curve with and without the last angle, or removes the earlier rows: `batch.put(frame.groupby('sample').tail(1))`, which is no part of Follow.
+A person compares the curve with and without the last angle, or removes the earlier rows: `batch.set_table(frame.groupby('sample').tail(1))`, which is no part of Follow.
 
 Each record is a plain request that stitches every angle so far, one row per angle. An accumulator over `STITCH` would give the same curves (C4); whether the automatic reduction pushes into an accumulator is open ([automatic-reduction.md](automatic-reduction.md)).
 
@@ -714,7 +714,7 @@ measure(1, [1.0, 1.0], role='sample')
 
 done = step(batch, PER_RUN, ())
 assert done.records == {}
-assert done.refused == {'1': 'unknown spec sans-iofq/v1'}
+assert done.submit_errors == {'1': 'unknown spec sans-iofq/v1'}
 ```
 
 ### E3. Reduction of our own output
@@ -729,7 +729,7 @@ first = step(batch, PER_RUN, ())
 pid = client.publish(reduced.ref('iofq'), 'scicat')
 files.add_published(scicat.entries[pid])
 
-assert step(batch, PER_RUN, first.considered).records == {}
+assert step(batch, PER_RUN, first.seen_keys).records == {}
 ```
 
 A published entry is a file of kind `'derived'`, and a batch's row source is given only raw files unless its selector names another kind.
@@ -747,7 +747,7 @@ done = step(following, PER_RUN, ())
 settings = {'reduction': Reduction(threshold=1.5), 'normalization': None}
 following.settings = settings                                   # read at the next step
 second = measure(2, [1.0, 2.0, 3.0, 4.0], role='sample')
-(after,) = step(following, PER_RUN, done.considered).records.values()
+(after,) = step(following, PER_RUN, done.seen_keys).records.values()
 
 user = connect()                                                # any client of the proposal
 assert after.request.files() == [second]                        # run 1 is not reduced again

@@ -17,12 +17,14 @@ from typing import Any
 from ess.sans.io import save_background_subtracted_iofq
 from ess.sans.types import Measurement, SampleRun
 
-from ess.apps.writers import About, Writer
+from ess.apps.writers import DatasetMetadata, Writer
 
 from .specs import IOFQ
 
 
-def _nxcansas(outputs: Mapping[str, Any], about: About, directory: Path) -> None:
+def _nxcansas(
+    outputs: Mapping[str, Any], metadata: DatasetMetadata, directory: Path
+) -> None:
     iofq = outputs['iofq']
     # NXcanSAS requires a run; a file without one, such as those of the LoKI
     # tutorial, gets an empty one. scippneutron's run_number_maybe_int raises

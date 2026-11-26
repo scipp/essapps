@@ -5,19 +5,20 @@ Where the definition of batches is kept: what a person makes of them, so that a
 batch made again, after a restart or in another process, has it.
 
 The definition is these entries, each with one writer. The settings and the
-rows of a batch are written by its ``Batch``, which the manager makes:
+batch table are written by its ``Batch``, which the manager makes:
 
-    corrections   metadata of a file set by hand, by file     CorrectedFiles
-    header        title, description                          BatchManager
-    settings      the template: spec, settings, fills         Batch.settings
-    rows          the batch table                             Batch.put
-    source        the row source a batch was made from, the  Intake
-                  keys of it that the batch has considered,
-                  and whether the batch follows
-    form          the format of the files that its results    Writing
-                  are written as, and what a person says of
-                  them
-    publish       the records published to the catalogue      Publisher
+    corrections     metadata of a file set by hand, by file    CorrectedFiles
+    header          title, description                         BatchManager
+    settings        the template: spec, settings, source       Batch.settings
+                    columns
+    table           the batch table                            Batch.set_table
+    source          the row source a batch was made from, the  Intake
+                    keys of it that the batch has seen,
+                    and whether the batch follows
+    output_options  the format of the files that its results   Writing
+                    are written as, and what a person says of
+                    them
+    publish         the records published to the catalogue     Publisher
 
 The corrections are about files, and every batch of a workspace reads the
 files through one :class:`~.corrections.CorrectedFiles`, so a workspace has
@@ -29,9 +30,9 @@ under a key::
     ('corrections',)
     ('labels', label, 'header')
     ('labels', label, 'settings')
-    ('labels', label, 'rows')
+    ('labels', label, 'table')
     ('labels', label, 'source')
-    ('labels', label, 'form')
+    ('labels', label, 'output_options')
     ('labels', label, 'publish')
 
 and its writer saves it whole at each change. It can forget an entry
@@ -43,21 +44,22 @@ The plain data of each entry, as its :class:`Entry` below writes and reads it
 (:data:`CORRECTIONS` with :func:`corrections_data` and
 :func:`corrections_of`)::
 
-    corrections   {'pid:20.500.12269/abc': {'role': 'sample'}}
-    header        {'title': 'Sample runs', 'description': ''}
-    settings      {'spec': ..., 'params': {...}, 'blanks': ['sample']}: a template
-    rows          {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
-    source        {'source': 'sample-runs', 'considered': ['60337', '60338'],
-                   'follows': True}
-    form          {'format': 'scipp-hdf5', 'outputs': ['iofq'],
-                   'name': '{title} {name}', ...}
-    publish       {'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
+    corrections     {'pid:20.500.12269/abc': {'role': 'sample'}}
+    header          {'title': 'Sample runs', 'description': ''}
+    settings        {'spec': ..., 'params': {...}, 'blanks': ['sample']}
+    table           {'schema': ..., 'data': [{'key': '60339', ...}, ...]}
+    source          {'row_source': 'sample-runs',
+                     'seen_keys': ['60337', '60338'],
+                     'follows': True}
+    output_options  {'format': 'scipp-hdf5', 'outputs': ['iofq'],
+                     'name': '{title} {name}', ...}
+    publish         {'published': [{'key': '60339', 'record': ..., 'pid': ...}]}
 
 The settings are a template in the format of the file that a person saves
 from a page: its params are the settings of the batch, also those at the
 columns, which each row with an empty cell takes; its blanks are the
 parameters that the row source of the batch fills
-(:attr:`~.reduction.Batch.fills`), which take no setting and which each row
+(:attr:`~.reduction.Batch.source_columns`), which take no setting and which each row
 must fill. The template that the rows fill has other blanks, all the
 parameter columns of the rows (:meth:`~.reduction.Batch.template`).
 The rows are :func:`~.table.data_of` of the batch table. Each entry is checked when
@@ -90,7 +92,7 @@ from pydantic_core import from_json, to_json
 from ess.apps.records import Template
 from ess.spec import FileRef
 
-from .table import data_of, frame_of
+from .table import data_of, table_of
 
 type Key = tuple[str, ...]
 """Names an entry: ``('corrections',)``, or ``('labels', label, part)``."""
@@ -98,7 +100,7 @@ type Key = tuple[str, ...]
 CORRECTIONS: Key = ('corrections',)
 
 
-class NotKept(OSError):
+class DefinitionWriteError(OSError):
     """A :class:`DefinitionStore` could not keep an entry; it holds what it did."""
 
 
@@ -107,9 +109,10 @@ class DefinitionStore(Protocol):
     Keeps each entry of the definition as plain data, under its :data:`Key`.
 
     ``save`` takes data that :func:`pydantic_core.to_json` writes, and raises
-    :class:`NotKept` if it cannot keep it. ``load`` gives what ``read`` makes
-    of the data in its JSON form, or ``None`` if nothing was saved under the
-    key; a ``ValueError`` of ``read`` is raised naming where the data is kept.
+    :class:`DefinitionWriteError` if it cannot keep it. ``load`` gives what
+    ``read`` makes of the data in its JSON form, or ``None`` if nothing was
+    saved under the key; a ``ValueError`` of ``read`` is raised naming where
+    the data is kept.
     """
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None: ...
@@ -128,10 +131,10 @@ class DefinitionStore(Protocol):
 _NAME_MAX = 255
 """The bytes of a file name, on the file systems of Linux and macOS."""
 
-# Moves with every change of what the kept files mean, such as where the fills
-# of a batch are kept, so that a folder of another format is refused, not read
+# Moves with every change of what the kept files mean, such as where the source
+# columns of a batch are kept, so that a folder of another format is refused, not read
 # wrong. No folder is migrated.
-FORMAT = 1
+FORMAT = 2
 """The format of the files of :class:`FolderDefinitions`, in ``format.json``."""
 
 _FORMAT_KEY: Key = ('format',)
@@ -153,7 +156,7 @@ class FolderDefinitions:
         definitions/corrections.json
         definitions/labels/auto%2Fiofq/header.json
         definitions/labels/auto%2Fiofq/settings.json
-        definitions/labels/auto%2Fiofq/rows.json
+        definitions/labels/auto%2Fiofq/table.json
         definitions/labels/auto%2Fiofq/source.json
 
     Each name of a key is a folder or a file, with ``/``, ``%`` and ``.``
@@ -222,7 +225,9 @@ class FolderDefinitions:
         self._write(self.path(key), data)
 
     def _write(self, path: Path, data: Any) -> None:
-        """Write ``data`` to ``path`` whole; :class:`NotKept` if refused."""
+        """
+        Write ``data`` to ``path`` whole; :class:`DefinitionWriteError` if refused.
+        """
         content = to_json(data, indent=1)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -238,7 +243,7 @@ class FolderDefinitions:
                     raise
             os.replace(f.name, path)
         except OSError as error:
-            raise NotKept(f'{path}: {error.strerror or error}') from error
+            raise DefinitionWriteError(f'{path}: {error.strerror or error}') from error
 
     def delete(self, key: Key) -> None:
         path = self.path(key)
@@ -247,7 +252,7 @@ class FolderDefinitions:
             for left in path.parent.glob(f'.{path.name}.*'):
                 left.unlink(missing_ok=True)
         except OSError as error:
-            raise NotKept(f'{path}: {error.strerror or error}') from error
+            raise DefinitionWriteError(f'{path}: {error.strerror or error}') from error
         if path.parent != self._root:
             with suppress(OSError):  # not empty: another part is kept
                 path.parent.rmdir()
@@ -298,10 +303,10 @@ class Header:
 
 
 @dataclass(frozen=True)
-class FromSource:
+class SourceEntry:
     """
     What a batch made from a row source keeps of it: the name of the source;
-    the keys of its rows that the batch has considered, those put into the
+    the keys of its rows that the batch has seen, those put into the
     batch from the source or left out when the batch was made; and whether
     the batch follows its source. Data with other fields, or without one of
     these, is refused when read.
@@ -309,12 +314,12 @@ class FromSource:
 
     __pydantic_config__ = ConfigDict(extra='forbid')
 
-    source: str
-    considered: frozenset[str]
+    row_source: str
+    seen_keys: frozenset[str]
     follows: bool
 
 
-class Form(BaseModel, frozen=True):
+class OutputOptions(BaseModel, frozen=True):
     """
     How the results of a batch are written, once for all its rows, and what a
     person says of them (see :mod:`.writing`).
@@ -326,7 +331,7 @@ class Form(BaseModel, frozen=True):
     batch, ``{name}``, the name of the row, and ``{key}``, its key, each
     without a format. Another field in braces, or a name of only spaces,
     raises ``ValueError``. The other fields are those of
-    :class:`ess.apps.writers.About`. It is also the body of
+    :class:`ess.apps.writers.DatasetMetadata`. It is also the body of
     ``POST api/output/form`` of the page.
     """
 
@@ -413,7 +418,10 @@ class Entry[T]:
         return definitions.load(self.key(label), self.read)
 
     def save(self, definitions: DefinitionStore, label: str, value: T) -> None:
-        """Keep ``value`` as the entry of ``label``; :class:`NotKept` if refused."""
+        """
+        Keep ``value`` as the entry of ``label``; :class:`DefinitionWriteError` if
+        refused.
+        """
         definitions.save(self.key(label), self.dump(value))
 
 
@@ -439,24 +447,24 @@ def template_of(data: Any) -> Template:
     return _checked(_TEMPLATE, data)
 
 
-def _source_data(made: FromSource) -> dict[str, Any]:
+def _source_data(made: SourceEntry) -> dict[str, Any]:
     """What a batch keeps of its source, as plain data; the keys sorted."""
     return {
-        'source': made.source,
-        'considered': sorted(made.considered),
+        'row_source': made.row_source,
+        'seen_keys': sorted(made.seen_keys),
         'follows': made.follows,
     }
 
 
 HEADER = _adapted('header', Header)
 SETTINGS = Entry('settings', template_data, template_of)
-ROWS = Entry('rows', data_of, frame_of)
+TABLE = Entry('table', data_of, table_of)
 """Read as the rows are kept; :meth:`.manager.BatchManager.batch` types them."""
-SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(FromSource)))
-FORM = _adapted('form', Form)
+SOURCE = Entry('source', _source_data, partial(_checked, TypeAdapter(SourceEntry)))
+OUTPUT_OPTIONS = _adapted('output_options', OutputOptions)
 PUBLISH = _adapted('publish', Publishing)
 
-LABEL_ENTRIES = (HEADER, SOURCE, ROWS, SETTINGS, FORM, PUBLISH)
+LABEL_ENTRIES = (HEADER, SOURCE, TABLE, SETTINGS, OUTPUT_OPTIONS, PUBLISH)
 """Every entry of a label: the header first, then the others."""
 
 

@@ -81,7 +81,7 @@ def _filled(template: Template, each: Any) -> Any:
         try:
             requests.append(template.fill(params=item))
         except SubmitError as error:  # noqa: PERF203
-            errors += [replace(e, entry=name) for e in error.errors]
+            errors += [replace(e, request_key=name) for e in error.errors]
     if errors:
         raise SubmitError(errors)
     return _reshape(each, requests)
@@ -138,8 +138,8 @@ def _typed_as[F](method: F) -> Callable[[Callable[..., Any]], F]:
 
 def _named(error: FieldError, names: list[str | int | None]) -> FieldError:
     """The reason with the index of its request replaced by what the caller named."""
-    if isinstance(error.entry, int):
-        return replace(error, entry=names[error.entry])
+    if isinstance(error.request_key, int):
+        return replace(error, request_key=names[error.request_key])
     return error
 
 

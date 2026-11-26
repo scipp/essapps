@@ -25,8 +25,9 @@ A field without a default starts unset, so that a value a correct reduction
 needs is never filled in for the user; so does a list, of rows or of scalars,
 until an element is added or removed, so that a table, which has no default, is
 never given without rows by mistake. A field is left out of the request only if
-it is a choice with no way chosen, which it is only without a default, so the
-workspace refuses it as required. A way chosen, or an input, with nothing given
+it is a choice with no alternative chosen, which it is only without a default,
+so the workspace refuses it as required. An alternative chosen, or an input,
+with nothing given
 is not left out, since the workspace would fill in the default: the params name
 it as missing (see :attr:`Fields.params`). An empty text is the value ``''``
 where the field has a default, and nothing given where it has none, since a
@@ -182,7 +183,8 @@ def _make(
     (:func:`ess.spec.request_types.sources`). A scalar is an input
     of its type, and a file field a picker of the files to offer. Anything with
     more than one way to give the value is a :class:`ChoiceField`: the alternatives
-    of a union of groups, a group (one way, ``Given``, whose selector is hidden), a
+    of a union of groups, a group (one alternative, ``Given``, whose selector is
+    hidden), a
     scalar or a file field with ``None`` or a ``Referenced[...]`` member
     (``Given``, ``A file``), ``From a record``, and ``None``. A list of scalars is
     :class:`ScalarsField`, and any other list :class:`RowsField`.
@@ -199,24 +201,24 @@ def _make(
                 return FileField(marker, listing, label)
             case Scalar(tp):
                 return ScalarField(label, tp, default, description)
-    ways: dict[str, Field] = {}
+    alternatives: dict[str, Field] = {}
     match inline:
         case Choice(tag, groups):
             for value, group in groups.items():
-                way = field_types.title(value, group.model_fields[tag])
-                ways[way] = GroupField(group, {tag: value}, listing)
+                title = field_types.title(value, group.model_fields[tag])
+                alternatives[title] = GroupField(group, {tag: value}, listing)
         case FileKind(marker):
-            ways[ChoiceField.FILE] = FileField(marker, listing)
+            alternatives[ChoiceField.FILE] = FileField(marker, listing)
         case Group(group):
-            ways[ChoiceField.GIVEN] = GroupField(group, {}, listing)
+            alternatives[ChoiceField.GIVEN] = GroupField(group, {}, listing)
         case Scalar(tp):
-            ways[ChoiceField.GIVEN] = ScalarField(label, tp, UNSET, description)
+            alternatives[ChoiceField.GIVEN] = ScalarField(label, tp, UNSET, description)
     if referenced:
-        ways[ChoiceField.RECORD] = RecordField(Union[referenced], listing)  # noqa: UP007
+        alternatives[ChoiceField.RECORD] = RecordField(Union[referenced], listing)  # noqa: UP007
     if field.none:
-        ways[ChoiceField.NONE] = NothingField()
+        alternatives[ChoiceField.NONE] = NothingField()
     tag = inline.tag if isinstance(inline, Choice) else None
-    return ChoiceField(ways, tag, default)
+    return ChoiceField(alternatives, tag, default)
 
 
 class FileField(Input):
@@ -487,14 +489,14 @@ class NothingField(Field):
 
 class ChoiceField(Field):
     """
-    The ways of giving a value, each a field: the alternatives of a union
+    The alternatives for a value, each a field: the members of a union
     of groups, whose tag field is ``tag``; a group, a file, or a scalar
     given; an output of a record; ``None``. ``chosen`` is the label of the
-    way, ``None`` for none. A selector of one way only is hidden.
+    alternative, ``None`` for none. A selector of one alternative only is hidden.
 
-    It starts at its default's way. Without a default, it starts unset,
-    unless it has one way only. Set, each way not chosen is as it starts, so
-    that it shows no value set before, such as a row shown before.
+    It starts at its default's alternative. Without a default, it starts unset,
+    unless it has one alternative only. Set, each alternative not chosen is as it
+    starts, so that it shows no value set before, such as a row shown before.
     """
 
     GIVEN = 'Given'
@@ -502,14 +504,16 @@ class ChoiceField(Field):
     FILE = 'A file'
     NONE = 'None'
 
-    def __init__(self, ways: dict[str, Field], tag: str | None, default: Any) -> None:
+    def __init__(
+        self, alternatives: dict[str, Field], tag: str | None, default: Any
+    ) -> None:
         super().__init__()
-        self.ways = ways
+        self.alternatives = alternatives
         self._tag = tag
         self._default = default
         self._chosen: str | None = None
-        for way in ways.values():
-            way.subscribe(self._notify)
+        for alternative in alternatives.values():
+            alternative.subscribe(self._notify)
         self.set(UNSET)
 
     @property
@@ -524,41 +528,45 @@ class ChoiceField(Field):
 
     @property
     def offered(self) -> list[str]:
-        return list(self.ways)
+        return list(self.alternatives)
 
     @property
     def selector_visible(self) -> bool:
-        return len(self.ways) > 1 or self._chosen is None
+        return len(self.alternatives) > 1 or self._chosen is None
 
     def refresh(self, listing: Listing) -> None:
-        for way in self.ways.values():
-            way.refresh(listing)
+        for alternative in self.alternatives.values():
+            alternative.refresh(listing)
 
     def collect(self, loc: Loc, missing: Missing) -> Any:
         chosen = self._chosen
-        return UNSET if chosen is None else self.ways[chosen].collect(loc, missing)
+        return (
+            UNSET if chosen is None else self.alternatives[chosen].collect(loc, missing)
+        )
 
     def set(self, value: Any) -> None:
         if value is UNSET:
             value = self._default
         label = self._label(value)
         self._chosen = label
-        for way_label, way in self.ways.items():
-            way.set(value if way_label == label else UNSET)
+        for title, alternative in self.alternatives.items():
+            alternative.set(value if title == label else UNSET)
         self._notify()
 
     def _label(self, value: Any) -> str | None:
         """
-        The label of the way that writes ``value``, or ``None`` if unset. Raises
-        ``ValueError`` if no way writes it.
+        The label of the alternative that writes ``value``, or ``None`` if unset.
+        Raises ``ValueError`` if no alternative writes it.
         """
         if value is UNSET:
-            return next(iter(self.ways)) if len(self.ways) == 1 else None
-        if (label := self._kind_of_way(value)) in self.ways:
+            return (
+                next(iter(self.alternatives)) if len(self.alternatives) == 1 else None
+            )
+        if (label := self._alternative_label(value)) in self.alternatives:
             return label
         raise ValueError(f'{value!r}: not one of {self.offered}')
 
-    def _kind_of_way(self, value: Any) -> str:
+    def _alternative_label(self, value: Any) -> str:
         if value is None:
             return self.NONE
         ref = as_ref(value)
@@ -572,8 +580,8 @@ class ChoiceField(Field):
         if self._tag not in given:
             raise ValueError(f'{value!r}: not one of {self.offered}')
         tag = {self._tag: given[self._tag]}
-        for label, way in self.ways.items():
-            if isinstance(way, GroupField) and way.tag == tag:
+        for label, alternative in self.alternatives.items():
+            if isinstance(alternative, GroupField) and alternative.tag == tag:
                 return label
         raise ValueError(f'{tag[self._tag]}: not an alternative')
 
@@ -717,8 +725,8 @@ class RowsField(Field):
 
     def _write(self, i: int | None) -> None:
         value, missing = self._held()
-        if value is UNSET and not missing:  # a choice with no way chosen
-            missing.append(FieldError(None, (), 'choose a way'))
+        if value is UNSET and not missing:  # a choice with no alternative chosen
+            missing.append(FieldError(None, (), 'choose an alternative'))
         self.message = '\n'.join(f'- {e}' for e in missing)
         if missing:
             self._notify()
@@ -864,12 +872,12 @@ class Fields:
         do not call it, whatever they change.
         """
         self._on_change = on_change
-        self._last = self.held()
+        self._last = self.params_and_missing()
 
     def _changed(self) -> None:
         if self._on_change is None or self._loading:
             return
-        if (held := self.held()) != self._last:
+        if (held := self.params_and_missing()) != self._last:
             self._last = held
             self._on_change()
 
@@ -881,26 +889,26 @@ class Fields:
         finally:
             self._loading = False
             if self._on_change is not None:
-                self._last = self.held()
+                self._last = self.params_and_missing()
 
     @property
     def params(self) -> dict[str, Any]:
         """
-        The params as a request gives them; a field with no way chosen is
-        left out. Raises :class:`~ess.apps.SubmitError` at each field
-        where a way is chosen, or an input or a list is, with nothing given::
+        The params as a request gives them; a field with no alternative chosen
+        is left out. Raises :class:`~ess.apps.SubmitError` at each field where
+        an alternative is chosen, or an input or a list is, with nothing given::
 
             beam_centre: choose a record
             reduction.bins: give a value
             sample: add a row, or remove for none
             sample[1]: the editor holds changes: add or update a row, or discard them
         """
-        given, missing = self.held()
+        given, missing = self.params_and_missing()
         if missing:
             raise SubmitError(missing)
         return given
 
-    def held(self) -> tuple[dict[str, Any], list[FieldError]]:
+    def params_and_missing(self) -> tuple[dict[str, Any], list[FieldError]]:
         """
         What the fields hold: the params given in full, leaving out each with
         anything missing, and what is missing, as :attr:`params` names it.
@@ -918,7 +926,7 @@ class Fields:
         ``record.request.params``, with what ``listing`` offers; a field left
         out is as it starts, at its default or unset, and a parameter that is
         not shown is ignored. A reference that the client may not
-        read now chooses the way of a record, with no record picked; a file
+        read now chooses the alternative of a record, with no record picked; a file
         that is not listed stays picked. Raises ``KeyError`` for a name that
         is not a parameter, and ``ValueError`` for a value that a field cannot
         show.
@@ -953,14 +961,14 @@ class Fields:
             for n, why in unfit.items()
         ]
 
-    def ways(self, name: str) -> list[str]:
+    def alternatives(self, name: str) -> list[str]:
         """
-        The ways offered at the parameter ``name``, a choice, such as
+        The alternatives offered at the parameter ``name``, a choice, such as
         ``['Given', 'From a record']``. Raises ``TypeError`` for a
         parameter of another type, such as a file or a list.
         """
         if not isinstance(field := self.fields[name], ChoiceField):
-            raise TypeError(f'{name}: not a choice of ways')
+            raise TypeError(f'{name}: not a choice of alternatives')
         return field.offered
 
     def refresh(self, listing: Listing) -> None:

@@ -3,7 +3,7 @@
 """
 One step of Follow on a batch.
 
-The caller keeps ``considered`` from one step to the next
+The caller keeps ``seen_keys`` from one step to the next
 (:class:`~.intake.Intake` in ``source.json``).
 
 How a step works: ``packages/essbatch/docs/batch.md``, "Follow".
@@ -18,11 +18,11 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from ess.apps.errors import SubmitError, said
+from ess.apps.errors import SubmitError, error_text
 from ess.apps.records import Record
 
 from .reduction import Batch
-from .source import RowSource, filled, rows_of
+from .source import RowSource, complete, rows_of
 from .state import not_reduced
 
 
@@ -36,19 +36,19 @@ class SourceError(ValueError):
 def added(
     table: pd.DataFrame,
     given: pd.DataFrame,
-    fills: Collection[str],
-    considered: Collection[str],
+    source_columns: Collection[str],
+    seen_keys: Collection[str],
 ) -> tuple[pd.DataFrame, pd.Index]:
     """
     The rows of ``given`` to add to ``table``, with the columns of ``table``,
-    and the keys of the rows that wait.
+    and the keys of the rows that are incomplete.
 
-    A row is added if its key is neither considered nor in ``table`` and it
-    is filled: it has a value in each of ``fills``. A row with such a key
-    that is not filled waits.
+    A row is added if its key is neither seen nor in ``table`` and it
+    is complete: it has a value in each of ``source_columns``. A row with such a key
+    that is not complete is incomplete.
     """
-    is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
-    is_ready = filled(given, fills)
+    is_new = ~given.index.isin(list(seen_keys)) & ~given.index.isin(table.index)
+    is_ready = complete(given, source_columns)
     new = given[is_new & is_ready].reindex(columns=table.columns)
     return new, given.index[is_new & ~is_ready]
 
@@ -63,33 +63,33 @@ class Step:
     added:
         The keys of the rows that the step added, in the order of the batch
         table.
-    considered:
-        The keys considered after the step: those given to it, those of the
+    seen_keys:
+        The keys seen after the step: those given to it, those of the
         rows it added, and those of the source that the batch table has.
-    refused:
+    submit_errors:
         Why the submission refused each row, by key: the rows submitted that
         a ``SubmitError`` names, or every row submitted if the reason names
         none. If the settings are refused, every row without a result that is
         ready as given, also a row whose cell would be refused, since no cell
         is resolved then.
-    waiting:
-        The keys of the new rows that are not filled yet.
+    incomplete:
+        The keys of the new rows that are not complete yet.
     records:
         The records of the rows reduced, by key.
     """
 
     added: tuple[str, ...]
-    considered: frozenset[str]
-    refused: Mapping[str, str]
-    waiting: tuple[str, ...]
+    seen_keys: frozenset[str]
+    submit_errors: Mapping[str, str]
+    incomplete: tuple[str, ...]
     records: Mapping[str, Record]
 
 
-def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
+def step(batch: Batch, source: RowSource, seen_keys: Collection[str]) -> Step:
     """
-    Add the rows of ``source`` that are new and filled to ``batch``, then
+    Add the rows of ``source`` that are new and complete to ``batch``, then
     reduce the rows of :func:`~.state.not_reduced`. A row whose request is
-    refused does not hold back the others: :attr:`Step.refused` says why.
+    refused does not hold back the others: :attr:`Step.submit_errors` says why.
 
     Parameters
     ----------
@@ -98,8 +98,8 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
         since nothing releases its records.
     source:
         The source that the rows are added from.
-    considered:
-        The keys of the source that the batch has considered.
+    seen_keys:
+        The keys of the source that the batch has seen.
 
     Raises
     ------
@@ -107,24 +107,24 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
         If the source raises ``ValueError``, or the batch refuses the rows it
         made; nothing is added.
     """
-    table = batch.frame()
+    table = batch.table()
     try:
         given = rows_of(batch.client, source)
-        new, waiting = added(table, given, batch.fills, considered)
+        new, incomplete = added(table, given, batch.source_columns, seen_keys)
         if len(new):
-            batch.put(pd.concat([table, new]))
+            batch.set_table(pd.concat([table, new]))
     except ValueError as error:
-        raise SourceError(said(error)) from error
-    now = frozenset(considered) | set(new.index) | (set(given.index) & set(table.index))
+        raise SourceError(error_text(error)) from error
+    now = frozenset(seen_keys) | set(new.index) | (set(given.index) & set(table.index))
     # Only the rows without a result are compared: a step reduces no other.
     candidates = not_reduced(batch.state(compare=False))
     try:
         state = batch.state(candidates)
     except SubmitError as error:
-        refused = dict.fromkeys(candidates, str(error))
-        return Step(tuple(new.index), now, refused, tuple(waiting), {})
-    records, refused = _reduce(batch, not_reduced(state))
-    return Step(tuple(new.index), now, refused, tuple(waiting), records)
+        submit_errors = dict.fromkeys(candidates, str(error))
+        return Step(tuple(new.index), now, submit_errors, tuple(incomplete), {})
+    records, submit_errors = _reduce(batch, not_reduced(state))
+    return Step(tuple(new.index), now, submit_errors, tuple(incomplete), records)
 
 
 def _reduce(batch: Batch, keys: list[str]) -> tuple[dict[str, Record], dict[str, str]]:
@@ -137,11 +137,11 @@ def _reduce(batch: Batch, keys: list[str]) -> tuple[dict[str, Record], dict[str,
         try:
             return batch.reduce(keys), refused
         except SubmitError as error:  # noqa: PERF203
-            named = set(keys).intersection(e.entry for e in error.errors)
+            named = set(keys).intersection(e.request_key for e in error.errors)
             if not named:
                 return {}, refused | dict.fromkeys(keys, str(error))
             for key in named:
-                errors = [e for e in error.errors if e.entry == key]
+                errors = [e for e in error.errors if e.request_key == key]
                 refused[key] = str(SubmitError(errors))
             keys = [k for k in keys if k not in named]
     return {}, refused

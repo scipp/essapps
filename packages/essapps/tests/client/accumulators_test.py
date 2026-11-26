@@ -307,7 +307,7 @@ def test_an_accumulator_refuses_a_template_that_a_request_would_refuse(
     # the template of an accumulator is checked as that of a stage is.
     refused: list[dict[str, Any]] = [
         {'scale': {'factor': 'x'}},  # request_types refuses it
-        {'offset': released.ref('value')},  # a record not kept
+        {'offset': released.ref('value')},  # a record neither in memory nor persisted
     ]
     for params in refused:
         with pytest.raises(SubmitError) as requested:

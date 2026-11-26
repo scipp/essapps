@@ -102,7 +102,7 @@ def test_sources_lists_each_row_source_with_the_parameters_that_it_fills(
     assert main(['-w', str(folder), *SOURCES, 'sources']) == 0
 
     assert capsys.readouterr().out.splitlines() == [
-        'name,fills,description',
+        'name,source_columns,description',
         'pairs,sample,A row per sample run.',
         'broken,sample,',
     ]

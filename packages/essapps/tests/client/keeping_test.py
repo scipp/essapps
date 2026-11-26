@@ -33,10 +33,10 @@ def test_a_released_value_is_not_kept_and_the_record_stays(client: Client) -> No
     load = client.compute(toys.load_request(1))
     client.release(load)
 
-    not_kept = f'record {load.id} is not kept'
-    with pytest.raises(NotReadable, match=not_kept):
+    not_held = f'record {load.id} is neither in memory nor persisted'
+    with pytest.raises(NotReadable, match=not_held):
         client.output(load, 'value')
-    with pytest.raises(SubmitError, match=rf'^source: {not_kept}$'):
+    with pytest.raises(SubmitError, match=rf'^source: {not_held}$'):
         client.submit(toys.read_request(load))
     assert client.records() == [load]
     assert client.status(load) is Status.COMPLETED
@@ -68,8 +68,8 @@ def test_a_released_pending_record_is_refused_and_still_runs_for_its_readers(
     )
     client.release(load)
 
-    not_kept = rf'^source: record {load.id} is not kept$'
-    with pytest.raises(SubmitError, match=not_kept):  # however far it has run
+    not_held = rf'^source: record {load.id} is neither in memory nor persisted$'
+    with pytest.raises(SubmitError, match=not_held):  # however far it has run
         client.submit(toys.read_request(load))
     loading.set()
     assert client.output(shifted, 'value') == toys.Amount(value=2.0)
@@ -186,7 +186,9 @@ def test_a_read_tells_what_is_unknown_from_what_cannot_be_read(
         lambda: client.output(load, 'value'),
         lambda: client.output(total),
     ):
-        with pytest.raises(NotReadable, match=r'is not (kept|open)$'):
+        with pytest.raises(
+            NotReadable, match=r'is (neither in memory nor persisted|not open)$'
+        ):
             released()
     with pytest.raises(SubmitError, match='is not open'):
         total.push(parts=[toys.Amount(value=1.0)])  # a push is refused, not read
@@ -208,7 +210,9 @@ def test_another_client_releases_what_the_workspace_keeps(
     total = toys.total_accumulator(client)
     other.release([load, stage, total])
 
-    with pytest.raises(NotReadable, match=f'record {load.id} is not kept'):
+    with pytest.raises(
+        NotReadable, match=f'record {load.id} is neither in memory nor persisted'
+    ):
         client.output(load, 'value')
     with pytest.raises(SubmitError, match='the stage was released'):
         toys.submit_shift(client, stage, 1.0)

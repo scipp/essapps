@@ -43,7 +43,7 @@ def check_digests(specs: Iterable[WorkflowSpec[Any, Any]], path: Path) -> None:
 
     A digest changes when the stored form of the params or the outputs
     changes (see :attr:`~ess.spec.WorkflowSpec.digest`). A record made with
-    the old models is then of another spec than the one bound under the same
+    the old models is then of an unbound spec under the same
     name and version, so such a change comes with a new version. The file is
     JSON, ``{"loki-iofq/v1": "9f2c..."}``, kept in the package and written by
     :func:`write_digests`. The message names each spec whose digest differs,

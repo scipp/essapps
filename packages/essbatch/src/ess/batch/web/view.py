@@ -26,10 +26,11 @@ from ess.apps.listing import Listing
 from ess.apps.records import Status
 from ess.spec import WorkflowSpec, field_types
 
-from ..definition import Form
+from ..definition import OutputOptions
 from ..state import RowState, left_to_reduce, ready
-from ..table import NAME, as_request, names
+from ..table import NAME, as_request, row_names
 from . import forms
+from .errors import Rejected, request_error_text, titled_field_error
 from .models import (
     Action,
     CellEdit,
@@ -37,11 +38,10 @@ from .models import (
     Format,
     Output,
     OutputShown,
-    Refused,
     SourceRow,
     SourceRows,
+    SubmitProblem,
 )
-from .refusals import Problem, say, why
 
 if TYPE_CHECKING:
     from ess.apps.writers import Writer
@@ -50,7 +50,7 @@ ORDER = (
     'ready',
     'running',
     'done',
-    'earlier',
+    'settings changed',
     'outdated',
     'failed',
     'cancelled',
@@ -69,23 +69,23 @@ def note(name: str) -> Column:
     return Column(name=name, title=name.replace('_', ' ').capitalize())
 
 
-def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
+def listed(given: pd.DataFrame, source_columns: Collection[str]) -> SourceRows:
     """
-    The rows of ``given``, the rows of a source with a column
-    ``waits``, and maybe a column ``taken``, as a dialog lists them: each
-    named as :func:`names` names it, with the text of each note, the columns
-    but ``fills``, and its mark.
+    The rows of ``given``, the rows of a source with a column ``incomplete``,
+    and maybe a column ``taken``, as a dialog lists them: each named as
+    :func:`~..table.row_names` names it, with the text of each note, the
+    columns but ``source_columns``, and its mark.
     """
-    named = names(given, ())
-    marks = {'waits', 'taken'}
-    shown = [c for c in given.columns if c not in {NAME, *fills, *marks}]
+    named = row_names(given, ())
+    marks = {'incomplete', 'taken'}
+    shown = [c for c in given.columns if c not in {NAME, *source_columns, *marks}]
 
     def text(value: Any) -> str:
         return '' if pd.api.types.is_scalar(value) and pd.isna(value) else str(value)
 
     def mark(row: Mapping[str, Any]) -> str:
-        if row['waits']:
-            return 'waits'
+        if row['incomplete']:
+            return 'incomplete'
         if 'taken' not in row:
             return ''
         return 'taken' if row['taken'] else 'left out'
@@ -107,11 +107,13 @@ def listed(given: pd.DataFrame, fills: Collection[str]) -> SourceRows:
 def read(fields: Fields, edit: CellEdit) -> Any:
     """The value of ``edit`` as the field of its column reads it."""
     if edit.column not in fields.fields:
-        raise Problem(f'There is no column {edit.column}.')
+        raise Rejected(f'There is no column {edit.column}.')
     try:
         return forms.read(fields.fields[edit.column], edit.value)
     except (KeyError, ValueError) as error:
-        raise Problem(say(fields.titles[edit.column], why(error))) from None
+        raise Rejected(
+            titled_field_error(fields.titles[edit.column], request_error_text(error))
+        ) from None
 
 
 def text(listing: Listing, value: Any) -> str:
@@ -129,16 +131,16 @@ def cell_text(listing: Listing, params: type[BaseModel], name: str, cell: Any) -
     return text(listing, as_request(params, {name: cell})[name])
 
 
-def said(errors: Sequence[FieldError], titles: Mapping[str, str]) -> str:
+def field_errors_text(errors: Sequence[FieldError], titles: Mapping[str, str]) -> str:
     """Errors of the settings in words, each with its setting's title."""
-    return '; '.join(_said_at(e, titles) for e in errors)
+    return '; '.join(_field_error_text(e, titles) for e in errors)
 
 
-def _said_at(error: FieldError, titles: Mapping[str, str]) -> str:
+def _field_error_text(error: FieldError, titles: Mapping[str, str]) -> str:
     if not error.loc:
         return error.msg
     name = str(error.loc[0])
-    return say(titles.get(name, name), error.msg)
+    return titled_field_error(titles.get(name, name), error.msg)
 
 
 def settings_problem(
@@ -148,7 +150,7 @@ def settings_problem(
     What the settings lack or what is refused of them, and the settings
     ``unfit`` that the form cannot show; ``None`` if nothing.
     """
-    told = [said(errors, titles)] if errors else []
+    told = [field_errors_text(errors, titles)] if errors else []
     if unfit:
         told.insert(0, f'Settings that this form cannot show: {_join(unfit)}')
     return '; '.join(told) or None
@@ -156,12 +158,14 @@ def settings_problem(
 
 def refusal(
     error: FieldError, named: Mapping[str, str], titles: Mapping[str, str]
-) -> Refused:
+) -> SubmitProblem:
     """``error`` of a reduction refused, with its row named as ``named`` names it."""
-    text = _said_at(error, titles)
-    if error.entry is not None:
-        text = f'{named.get(error.entry, error.entry)}: {text}'
-    return Refused(entry=error.entry, loc=list(error.loc), message=error.msg, text=text)
+    text = _field_error_text(error, titles)
+    if error.request_key is not None:
+        text = f'{named.get(error.request_key, error.request_key)}: {text}'
+    return SubmitProblem(
+        request_key=error.request_key, loc=list(error.loc), message=error.msg, text=text
+    )
 
 
 def problems(
@@ -169,7 +173,9 @@ def problems(
 ) -> dict[str, str]:
     """The reason of each of ``errors`` at a cell of row ``key``, by column."""
     return {
-        str(e.loc[0]): _said_at(e, titles) for e in errors if e.entry == key and e.loc
+        str(e.loc[0]): _field_error_text(e, titles)
+        for e in errors
+        if e.request_key == key and e.loc
     }
 
 
@@ -189,19 +195,19 @@ def reason(
     titles: Mapping[str, str],
 ) -> tuple[str, str]:
     """
-    Why a row reads as its status, and, if it reads ``earlier``, the titles
+    Why a row reads as its status, and, if it reads ``settings changed``, the titles
     of what changed since. ``problems`` are those of its cells,
     ``unsubmitted`` is why Follow could not reduce it, and ``failure`` why
     its result failed.
     """
-    status = state.text
+    status = state.status
     if unsubmitted:
         return unsubmitted, ''
     if status in ('failed', 'cancelled') and state.record is not None:
         return failure, ''
     if problems:
         return '; '.join(problems.values()), ''
-    if status == 'earlier':
+    if status == 'settings changed':
         named = _changed(state, titles)
         changed = f'{named} changed' if named else ''
         since = f': {changed} since' if changed else ''
@@ -234,16 +240,16 @@ def _changed(state: RowState, titles: Mapping[str, str]) -> str:
 
 def result(state: RowState) -> str | None:
     """Whether a row has a result, ``'current'`` or ``'outdated'``; else ``None``."""
-    if state.record is None or state.status is not Status.COMPLETED:
+    if state.record is None or state.record_status is not Status.COMPLETED:
         return None
-    return 'outdated' if state.text == 'outdated' else 'current'
+    return 'outdated' if state.status == 'outdated' else 'current'
 
 
 def counts(states: Mapping[str, RowState]) -> dict[str, int]:
     """How many rows there are, and how many read as each status."""
     counted = dict.fromkeys(ORDER, 0)
     for s in states.values():
-        counted[s.text] += 1
+        counted[s.status] += 1
     return {'all': len(states), **counted}
 
 
@@ -252,7 +258,7 @@ def action(
 ) -> Action:
     """What the button does now, or ``label`` if blocked; how far rows run."""
     left = [] if blocked else left_to_reduce(states)
-    kinds = {states[k].text for k in left}
+    kinds = {states[k].status for k in left}
     n = len(left)
     if blocked:
         label = label or 'Check the settings'
@@ -273,7 +279,7 @@ def action(
         blocked=blocked,
         remaining=n,
         again=len(ready(states)),
-        running=sum(s.status is Status.PENDING for s in states.values()),
+        running=sum(s.record_status is Status.PENDING for s in states.values()),
         progress=_progress(states),
     )
 
@@ -284,7 +290,9 @@ def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
     how many are finished and how many there are; ``None`` if none is running.
     """
     pending = [
-        s.record for s in states.values() if s.status is Status.PENDING and s.record
+        s.record
+        for s in states.values()
+        if s.record_status is Status.PENDING and s.record
     ]
     if not pending:
         return None
@@ -292,17 +300,18 @@ def _progress(states: Mapping[str, RowState]) -> tuple[int, int] | None:
     started = [
         s for s in states.values() if s.record is not None and s.record.created >= since
     ]
-    return sum(s.status is not Status.PENDING for s in started), len(started)
+    return sum(s.record_status is not Status.PENDING for s in started), len(started)
 
 
 def output(
-    form: Form,
+    options: OutputOptions,
     writers: Sequence[Writer],
     spec: WorkflowSpec[Any, Any],
     catalogue: bool,
 ) -> OutputShown:
     """
-    The tab "Output": the ``form`` kept, the ``writers`` that it may pick,
+    The tab "Output": the output ``options`` kept, the ``writers`` that they
+    may pick,
     the outputs of ``spec``, and whether a catalogue takes the results.
     """
     formats = [
@@ -316,14 +325,14 @@ def output(
     ]
     problem = (
         ''
-        if any(f.name == form.format for f in formats)
-        else f'This application has no writer of the format {form.format} '
+        if any(f.name == options.format for f in formats)
+        else f'This application has no writer of the format {options.format} '
         'that the form names: pick a format and apply.'
     )
-    lacking = ', no '.join(form.lacking)
+    lacking = ', no '.join(options.lacking)
     outputs = spec.outputs.model_fields
     return OutputShown(
-        form=form,
+        options=options,
         formats=formats,
         outputs=[Output(name=n, title=f.title or n) for n, f in outputs.items()],
         catalogue=catalogue,

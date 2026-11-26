@@ -6,18 +6,18 @@ Rows of a row source into a batch, and which batch follows.
 :class:`Intake` keeps one entry of the definitions (:mod:`.definition`) for
 each batch made from a source::
 
-    source      the source, the keys considered, and whether the batch follows
+    source      the source, the keys seen, and whether the batch follows
 
 :meth:`Intake.step` is one step of Follow on the batch that follows::
 
     made = SOURCE.load(definitions, label)                   # source.json
-    done = step(batch(label), sources[made.source], made.considered)
-    source.json = replace(made, considered=done.considered)  # after rows.json
-    # if the step raised: made.considered | the keys of the batch table
+    done = step(batch(label), sources[made.row_source], made.seen_keys)
+    source.json = replace(made, seen_keys=done.seen_keys)  # after table.json
+    # if the step raised: made.seen_keys | the keys of the batch table
 
-A process that stops between ``rows.json`` and ``source.json`` leaves rows
-whose keys are not considered yet. The next step considers them: it
-considers every key of the source that the batch table has. The order of the
+A process that stops between ``table.json`` and ``source.json`` leaves rows
+whose keys are not seen yet. The next step sees them: it
+sees every key of the source that the batch table has. The order of the
 writes of :meth:`Intake.create` and :meth:`Intake.follow` is in the guide,
 "What is kept on disk". ``Intake`` has no timer and no lock: whoever serves
 owns both.
@@ -35,15 +35,15 @@ from typing import Any
 
 import pandas as pd
 
-from ess.apps.errors import said
+from ess.apps.errors import error_text
 from ess.spec import WorkflowSpec
 
 from . import auto
 from .auto import SourceError, Step
-from .definition import SOURCE, FromSource, NotKept
+from .definition import SOURCE, DefinitionWriteError, SourceEntry
 from .manager import BatchManager
 from .reduction import Batch
-from .source import Range, RowSource, filled, rows_of
+from .source import Range, RowSource, complete, rows_of
 
 
 def fits(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> bool:
@@ -57,8 +57,8 @@ def fits(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> bool:
 
 def _lacked(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> list[str]:
     """The parameters that ``source`` fills and ``spec`` lacks."""
-    fills = () if source is None else source.fills
-    return [f for f in fills if f not in spec.params.model_fields]
+    source_columns = () if source is None else source.source_columns
+    return [f for f in source_columns if f not in spec.params.model_fields]
 
 
 def not_registered(name: str, registered: Iterable[str]) -> str:
@@ -71,9 +71,9 @@ def step_failure(error: Exception) -> str:
     """
     What a person reads of a step of Follow (:meth:`Intake.step`) that raised
     ``error``: ``Follow could not step: `` and what
-    :func:`~ess.apps.errors.said` says of it.
+    :func:`~ess.apps.errors.error_text` says of it.
     """
-    return f'Follow could not step: {said(error)}'
+    return f'Follow could not step: {error_text(error)}'
 
 
 def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
@@ -102,7 +102,7 @@ class Intake:
     ) -> None:
         self.manager = manager
         self.sources = sources
-        # The batch that follows, as read when the manager had this version.
+        # The batch that follows, as read when the manager had this revision.
         self._read: tuple[int, str | None] | None = None
 
     @property
@@ -110,11 +110,11 @@ class Intake:
         """
         The label of the batch that follows, ``None`` if none does. It is read
         from the definitions again only when
-        :attr:`.manager.BatchManager.version` moved.
+        :attr:`.manager.BatchManager.revision` moved.
         """
-        version = self.manager.version
-        if self._read is None or self._read[0] != version:
-            self._read = (version, self._kept_following())
+        revision = self.manager.revision
+        if self._read is None or self._read[0] != revision:
+            self._read = (revision, self._kept_following())
         return self._read[1]
 
     def _kept_following(self) -> str | None:
@@ -130,7 +130,7 @@ class Intake:
 
     def _set_following(self, label: str | None) -> None:
         """Hold ``label`` as the batch that follows, as now written."""
-        self._read = (self.manager.version, label)
+        self._read = (self.manager.revision, label)
 
     def _write_follows(self, label: str, follows: bool) -> None:
         """Write whether the batch of ``label`` follows."""
@@ -151,10 +151,10 @@ class Intake:
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source or its source is not registered.
-        Raises :class:`~.definition.NotKept` if the definitions refuse a
+        Raises :class:`~.definition.DefinitionWriteError` if the definitions refuse a
         write; the batch that followed then follows again.
         """
-        self._source(self._made(label).source)
+        self._source(self._made(label).row_source)
         if (before := self.following) == label:
             return
         self._follow_instead(before, lambda: self._write_follows(label, True))
@@ -174,9 +174,9 @@ class Intake:
                 self._write_follows(before, False)
                 ended = before
             write()
-        except NotKept:
+        except DefinitionWriteError:
             if ended is not None:
-                with suppress(NotKept):  # the first error is what to say
+                with suppress(DefinitionWriteError):  # the first error is what to say
                     self._write_follows(ended, True)
             raise
 
@@ -201,7 +201,7 @@ class Intake:
     ) -> pd.DataFrame:
         """
         The rows that the source registered as ``source`` makes now, with a
-        column ``waits``, whether the row waits, and a column ``taken``,
+        column ``incomplete``, whether the row is incomplete, and a column ``taken``,
         whether :meth:`create` takes it with ``choose``, such as
         ``Range(first='60339')`` (:class:`~.source.Range`); every row that
         does not wait if not given. Raises ``ValueError`` if no source is
@@ -209,10 +209,10 @@ class Intake:
         """
         found = self._source(source)
         given = rows_of(self.manager.client, found)
-        waits = ~filled(given, found.fills)
-        arrived = given[~waits]
+        incomplete = ~complete(given, found.source_columns)
+        arrived = given[~incomplete]
         taken = arrived.index if choose is None else choose(arrived).index
-        return given.assign(waits=waits, taken=given.index.isin(taken))
+        return given.assign(incomplete=incomplete, taken=given.index.isin(taken))
 
     def create(
         self,
@@ -229,13 +229,13 @@ class Intake:
     ) -> Batch:
         """
         Make a batch from the rows of ``source`` with the manager
-        (:meth:`~.manager.BatchManager.create`), and keep what it considered;
+        (:meth:`~.manager.BatchManager.create`), and keep what it seen;
         its ``Batch``. The source is listed once::
 
             given = rows_of(client, source)
-            arrived = given[filled]          # a value in each of source.fills
+            arrived = given[complete]        # a value in each of source.source_columns
             rows = arrived if choose is None else choose(arrived)
-            considered = arrived.index       # the rows taken and those left out
+            seen_keys = arrived.index       # the rows taken and those left out
 
         The label, the spec, the source and whether the spec fits it are
         checked before the source is listed. Nothing is written if a check
@@ -264,7 +264,7 @@ class Intake:
             if the source fills a parameter that the spec lacks
             (:func:`fits`); if ``choose`` gives a row that the source did
             not; and as :meth:`~.manager.BatchManager.create` refuses.
-        NotKept
+        DefinitionWriteError
             If the definitions refuse a write. The batch is removed again,
             and the batch that followed follows again.
         """
@@ -284,59 +284,59 @@ class Intake:
                 f'source {source} fills'
             )
         given = rows_of(self.manager.client, found)
-        arrived = given[filled(given, found.fills)]
+        arrived = given[complete(given, found.source_columns)]
         rows = arrived if choose is None else choose(arrived)
         _check_chosen(rows, arrived)
         before = self.following
         batch = self.manager.create(
             spec,
             title=title,
-            rows=rows,
-            fills=found.fills,
+            table=rows,
+            source_columns=found.source_columns,
             parameter_columns=parameter_columns,
             description=description,
             settings=settings,
             label=label,
         )
-        made = FromSource(source, frozenset(arrived.index), follows=follow)
+        made = SourceEntry(source, frozenset(arrived.index), follows=follow)
         try:
             self._follow_instead(
                 before if follow else None,
                 lambda: SOURCE.save(self.manager.definitions, batch.label, made),
             )
-        except NotKept:
-            with suppress(NotKept):  # the first error is what to say
+        except DefinitionWriteError:
+            with suppress(DefinitionWriteError):  # the first error is what to say
                 self.manager.remove(batch.label)
             raise
         if follow:
             self._set_following(batch.label)
         return batch
 
-    def _from(self, label: str) -> FromSource | None:
+    def _from(self, label: str) -> SourceEntry | None:
         """The ``source.json`` of ``label``, or ``None``; ``KeyError`` if no batch."""
         if label not in self.manager.headers():
             raise KeyError(label)
         return SOURCE.load(self.manager.definitions, label)
 
-    def _made(self, label: str) -> FromSource:
+    def _made(self, label: str) -> SourceEntry:
         """:meth:`_from`, with ``ValueError`` for a batch made without a source."""
         if (made := self._from(label)) is None:
             raise ValueError(f'{label} was not made from a row source')
         return made
 
-    def source(self, label: str) -> str | None:
+    def row_source(self, label: str) -> str | None:
         """
         The name of the source that the batch of ``label`` was made from,
         ``None`` if it was made without one. Raises ``KeyError`` if no batch
         has the label.
         """
         made = self._from(label)
-        return None if made is None else made.source
+        return None if made is None else made.row_source
 
     def step(self) -> Step | None:
         """
         One step of Follow (:func:`~.auto.step`) on the batch that follows,
-        then keep the keys considered; ``None`` if no batch follows.
+        then keep the keys seen; ``None`` if no batch follows.
 
         Raises ``ValueError`` if the source of the batch is not registered,
         if the source raises ``ValueError``, or if the batch refuses a row
@@ -347,67 +347,75 @@ class Intake:
             return None
         made = self._made(label)
         batch = self.manager.batch(label)
-        source = self._source(made.source)
+        source = self._source(made.row_source)
         try:
-            done = auto.step(batch, source, made.considered)
+            done = auto.step(batch, source, made.seen_keys)
         except SourceError as error:  # a defect of the code of the source
-            raise ValueError(f'the source {made.source}: {error}') from error
+            raise ValueError(f'the source {made.row_source}: {error}') from error
         except BaseException:
-            with suppress(NotKept):  # the exception of the step is what to say
-                kept = made.considered | set(batch.frame().index)
-                self._consider(label, made, kept)
+            with suppress(
+                DefinitionWriteError
+            ):  # the exception of the step is what to say
+                kept = made.seen_keys | set(batch.table().index)
+                self._mark_seen(label, made, kept)
             raise
-        self._consider(label, made, done.considered)
+        self._mark_seen(label, made, done.seen_keys)
         return done
 
-    def offered(self, label: str) -> pd.DataFrame:
+    def available_rows(self, label: str) -> pd.DataFrame:
         """
         The rows that the source of the batch of ``label`` makes now and its
         batch table lacks, with the columns of the source and a boolean column
-        ``waits``, true if a cell of :attr:`~.reduction.Batch.fills` is
-        empty. A column of the source named ``waits`` is replaced.
+        ``incomplete``, true if a cell of :attr:`~.reduction.Batch.source_columns` is
+        empty. A column of the source named ``incomplete`` is replaced.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, if its source is not registered, or
-        raises ``ValueError``, or no longer gives a column of the batch's
-        fills (:func:`~.source.filled`).
+        raises ``ValueError``, or no longer gives a source column of the batch
+        (:func:`~.source.complete`).
         """
         made = self._made(label)
-        source = self._source(made.source)
+        source = self._source(made.row_source)
         batch = self.manager.batch(label)
         try:
             given = rows_of(self.manager.client, source)
-            waits = ~filled(given, batch.fills)
+            incomplete = ~complete(given, batch.source_columns)
         except ValueError as error:  # as step says it
-            raise ValueError(f'the source {made.source}: {said(error)}') from error
-        return given.assign(waits=waits)[~given.index.isin(batch.frame().index)]
+            raise ValueError(
+                f'the source {made.row_source}: {error_text(error)}'
+            ) from error
+        return given.assign(incomplete=incomplete)[
+            ~given.index.isin(batch.table().index)
+        ]
 
-    def take(self, label: str, keys: Iterable[str]) -> None:
+    def add_rows(self, label: str, keys: Iterable[str]) -> None:
         """
         Add the rows of ``keys`` to the batch of ``label``, as its source
-        makes them now, with the columns of its batch table; then consider
-        them. A considered key may be taken.
+        makes them now, with the columns of its batch table; then mark
+        them seen. A seen key may be added.
 
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if it
         was not made from a source, if its source is not registered or makes
         no row of a key, or if its batch table has a row of a key.
         """
         made = self._made(label)
-        given = self.rows_of(made.source)
+        given = self.rows_of(made.row_source)
         keys = list(keys)
         if unknown := [k for k in keys if k not in given.index]:
-            raise ValueError(f'the source {made.source} makes no rows {unknown}')
+            raise ValueError(f'the source {made.row_source} makes no rows {unknown}')
         batch = self.manager.batch(label)
-        table = batch.frame()
+        table = batch.table()
         if held := [k for k in keys if k in table.index]:
             raise ValueError(f'rows {held} are in the batch already')
-        batch.put(pd.concat([table, given.loc[keys].reindex(columns=table.columns)]))
-        self._consider(label, made, made.considered | set(keys))
+        batch.set_table(
+            pd.concat([table, given.loc[keys].reindex(columns=table.columns)])
+        )
+        self._mark_seen(label, made, made.seen_keys | set(keys))
 
-    def _consider(
-        self, label: str, made: FromSource, considered: frozenset[str]
+    def _mark_seen(
+        self, label: str, made: SourceEntry, seen_keys: frozenset[str]
     ) -> None:
-        """Keep ``considered`` as the keys of the source of ``label``, if changed."""
-        if considered != made.considered:
-            kept = replace(made, considered=considered)
+        """Keep ``seen_keys`` as those of the source of ``label``, if changed."""
+        if seen_keys != made.seen_keys:
+            kept = replace(made, seen_keys=seen_keys)
             SOURCE.save(self.manager.definitions, label, kept)

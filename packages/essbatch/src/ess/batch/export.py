@@ -5,8 +5,8 @@ The files that a person takes away from a batch. It needs pandas, scipp, and h5p
 
 :func:`export_table` takes the table that :func:`.frames.reduce_table` returned,
 indexed by key, and writes the result of each completed row to a folder named
-by its key, with a :data:`RowWriter`: by the form of the batch
-(:meth:`.writing.Writing.by_form`), or with one writer (:func:`by_writer`),
+by its key, with a :data:`RowWriter`: by the output options of the batch
+(:meth:`.writing.Writing.by_options`), or with one writer (:func:`by_writer`),
 such as scipp HDF5 for a table that names no batch. It finds a row's
 result by the ``record`` column, so it exports what the table says, also after
 later reductions under the same label.
@@ -24,7 +24,7 @@ import pandas as pd
 from ess.apps import writers
 from ess.apps.client import Client
 from ess.apps.records import Record, Status
-from ess.apps.writers import SCIPP_HDF5, About, Writer
+from ess.apps.writers import SCIPP_HDF5, DatasetMetadata, Writer
 
 type RowWriter = Callable[[str, Record, Path], None]
 """Writes the result of the row of a key, its record, into a new folder."""
@@ -40,7 +40,7 @@ def by_writer(client: Client, writer: Writer = SCIPP_HDF5) -> RowWriter:
         client,
         record,
         writer,
-        About(name=key),
+        DatasetMetadata(name=key),
         directory,
         client.readable([record])[0],
     )

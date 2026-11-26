@@ -33,7 +33,7 @@ A person thinks of a batch as a table: they edit its cells, remove its rows, red
 
 ## Decision
 
-**A batch is a template and a table. The settings are one value per parameter, for the batch. The template holds the settings of the parameters that are no column, and its blanks are the columns; each row of the table fills it once. The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter. In a batch made from a source, a column that the source fills takes its value from the cell only. The table has one value per cell, and only `put` changes it: with what a person asks for, or with the rows that a step of Follow adds, which never changes a row that the table has (ADR 0013). The table is not computed again from the source at each read: how the table was made is not part of the batch.**
+**A batch is a template and a table. The settings are one value per parameter, for the batch. The template holds the settings of the parameters that are no column, and its blanks are the columns; each row of the table fills it once. The value of a parameter for a row is its cell; if the cell is empty or the parameter is no column, the setting; if the batch has none, the default of the parameter. In a batch made from a source, a column that the source fills takes its value from the cell only. The table has one value per cell, and only `set_table` changes it: with what a person asks for, or with the rows that a step of Follow adds, which never changes a row that the table has (ADR 0013). The table is not computed again from the source at each read: how the table was made is not part of the batch.**
 
 ```
 batch '20261118-130204'
@@ -58,7 +58,7 @@ This decides what a batch is when it is made once and then changed by a person. 
 
 ### Keys, columns, cells
 
-- **The key** of a row is text, unique in the batch, and the index of the frame, named `key`; no column has that name. It joins a row to its results: the records under the label of the batch with that key, as today.
+- **The key** of a row is text, unique in the batch, and the index of the batch table, named `key`; no column has that name. It joins a row to its results: the records under the label of the batch with that key, as today.
 - **A column named as a parameter of the spec is a parameter column**, and the parameter columns are the blanks of the template. Any other column, such as `run` or `name`, is a note for the person. Nothing else tells them apart.
 - **A cell holds one value, or is empty.** The value is plain data: a number, text, a truth value, a list, or a group. A file and an output are text: `run:60339`, and `r17.centre` for the output `centre` of record `r17`. A request takes neither as text, so the cells of a row are converted in one place before `fill` (`table.as_request`), and a value of a request back to a cell in one place (`table.cell_of`).
 - **A column has the type of its parameter**, so a wrong value is refused where it enters the table:
@@ -109,18 +109,18 @@ def request(key):
 A batch gives its table and takes one:
 
 ```python
-frame = batch.frame()                                      # the rows, as above
+frame = batch.table()                                      # the rows, as above
 frame.loc['60340', 'sample_transmission'] = 'run:60341'    # set a cell
 frame.loc['60340', 'sample_transmission'] = pd.NA          # empty it
 frame.loc['d2o', 'sample'] = 'run:7'                       # add a row
 frame = frame.drop('60339')                                # remove a row
 frame['thickness'] = pd.NA                                 # add a column: `thickness` becomes a blank; each row takes the setting
 frame = frame.drop(columns='thickness')                    # remove it: every row takes the setting
-batch.put(frame)                                           # replaces the table; the blanks follow its columns
-batch.put(batch.frame())                                   # changes nothing and writes nothing
+batch.set_table(frame)                                     # replaces the table; the blanks follow its columns
+batch.set_table(batch.table())                             # changes nothing and writes nothing
 ```
 
-`put` refuses the whole table for a key that is empty or used twice, and for a cell that does not have the type of its column. It keeps the blanks of the template equal to the parameter columns of the table, so the columns are said in one place, and changes no setting. Each action of the page that changes rows is `put` with one such line before it. A table file of the page and the CSV of the command are this frame as text.
+`set_table` refuses the whole table for a key that is empty or used twice, and for a cell that does not have the type of its column. It keeps the blanks of the template equal to the parameter columns of the table, so the columns are said in one place, and changes no setting. Each action of the page that changes rows is `set_table` with one such line before it. A table file of the page and the CSV of the command are this frame as text.
 
 A parameter becomes a column, or a column a setting, with the settings in view:
 
@@ -140,8 +140,8 @@ The first rows are an argument of making the batch, as its first settings are; t
 
 ```python
 frame = rows_of(client, source)                          # rows from the files: code of the application
-manager.create('loki-iofq', title='Afternoon', rows=frame[frame.run >= 60339])
-manager.create('loki-iofq', title='Water', rows=pd.read_csv('runs.csv', index_col='key', dtype='string'))  # files and text only
+manager.create('loki-iofq', title='Afternoon', table=frame[frame.run >= 60339])
+manager.create('loki-iofq', title='Water', table=pd.read_csv('runs.csv', index_col='key', dtype='string'))  # files and text only
 manager.create('loki-iofq', title='By hand')             # no rows yet
 ```
 
@@ -152,13 +152,13 @@ On the page, "New batch" takes a spec, and either a source with a range of its r
 ```python
 newest = records.sort_values('created').drop_duplicates('member', keep='last').set_index('member')
 state = rows.join(newest)                               # a left join on the key
-changed = {key: differs(request(key), newest.params[key]) for key in rows.index}
-own = {key: set(row.dropna().index) for key, row in rows[columns].iterrows()}  # the cells with a value
-earlier = [key for key in rows.index if changed[key] and not changed[key] & own[key]]
-outdated = [key for key in rows.index if changed[key] & own[key]]
+changed = {key: changed_names(request(key), newest.params[key]) for key in rows.index}
+overrides = {key: set(row.dropna().index) for key, row in rows[columns].iterrows()}  # the cells with a value
+settings_changed = [key for key in rows.index if changed[key] and not changed[key] & overrides[key]]
+outdated = [key for key in rows.index if changed[key] & overrides[key]]
 ```
 
-A row whose request differs from its result's only at settings reads `earlier`, reduced with earlier settings: a change of settings applies to the rows not reduced yet. For one row, a parameter counts as a setting if it is no column or the row's cell is empty, since the row then follows the setting. A row whose own cell changed reads `outdated`. Which cells are empty is read from the table now, so nothing more is kept.
+A row whose request differs from its result's only at settings reads `settings changed`, reduced with earlier settings: a change of settings applies to the rows not reduced yet. For one row, a parameter counts as a setting if it is no column or the row's cell is empty, since the row then follows the setting. A row whose own cell changed reads `outdated`. Which cells are empty is read from the table now, so nothing more is kept.
 
 A cell that names a file that is not found is marked when the table is shown, and a request with it is refused, as for any cell that does not resolve. Nothing about the files is stored in the table.
 
@@ -166,11 +166,11 @@ A cell that names a file that is not found is marked when the table is shown, an
 
 ```
 definitions/labels/20261118-130204/header.json     title, description
-definitions/labels/20261118-130204/settings.json   the settings, as a template file: spec, params, and as its blanks the parameters that the row source fills (batch.fills)
-definitions/labels/20261118-130204/rows.json       the table: {"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}, ...]}
+definitions/labels/20261118-130204/settings.json   the settings, as a template file: spec, params, and as its blanks the parameters that the row source fills (batch.source_columns)
+definitions/labels/20261118-130204/table.json       the table: {"schema": ..., "data": [{"key": "60339", "sample": "run:60339", ...}, ...]}
 ```
 
-`rows.json` has the shape of `frame.to_json(orient='table')`, but pandas neither writes nor reads its records: `to_json` rounds floats (`0.1 + 0.2` reads back `0.3`), and an `Int64` above 2**53 loses its last digit. So:
+`table.json` has the shape of `frame.to_json(orient='table')`, but pandas neither writes nor reads its records: `to_json` rounds floats (`0.1 + 0.2` reads back `0.3`), and an `Int64` above 2**53 loses its last digit. So:
 
 ```python
 data = {'schema': build_table_schema(frame, version=False),                      # pandas: the dtype of each column
@@ -179,7 +179,7 @@ text = pydantic_core.to_json(data)                                              
 column = pd.array([r.get(name) for r in data['data']], dtype=field['extDtype'])    # each column, read back
 ```
 
-`table.data_of` and `table.frame_of` are the two halves. Checked on a table with `string`, `Float64`, `Int64`, `boolean` and `object` columns, empty cells, a list and a dict in a cell, `0.1 + 0.2`, `2**53 + 1`, a table without rows, and the key `'0342'`: the frame read back equals the frame written, dtypes included, with an empty cell of an `object` column read as `None`. It holds for every table, since a note too is text, a number, a truth value, or plain data.
+`table.data_of` and `table.table_of` are the two halves. Checked on a table with `string`, `Float64`, `Int64`, `boolean` and `object` columns, empty cells, a list and a dict in a cell, `0.1 + 0.2`, `2**53 + 1`, a table without rows, and the key `'0342'`: the frame read back equals the frame written, dtypes included, with an empty cell of an `object` column read as `None`. It holds for every table, since a note too is text, a number, a truth value, or plain data.
 
 ## Examples
 
@@ -194,11 +194,11 @@ column = pd.array([r.get(name) for r in data['data']], dtype=field['extDtype']) 
 ```python
 batch.settings['thickness']                 # 1.0, for every row
 batch.make_column('thickness')              # an empty column; every request is as before, no row is outdated
-frame = batch.frame()
+frame = batch.table()
 frame.loc['60340', 'thickness'] = 2.0
-batch.put(frame)                            # row 60340 is outdated; the others are not
+batch.set_table(frame)                      # row 60340 is outdated; the others are not
 batch.settings = {**batch.settings, 'thickness': 1.5}
-                                            # the rows with an empty cell read `earlier`; 60340 does not
+                                            # the rows with an empty cell read `settings changed`; 60340 does not
 ```
 
 A row that Follow adds later has an empty cell, and is reduced with 1.5. The settings form shows `thickness` with 1.5, marked as a column.
@@ -222,7 +222,7 @@ The batch holds its rows as a `DataFrame`, so pandas becomes a dependency of `es
 
 | Concept | In pandas |
 |---|---|
-| a row, a key | a row of the frame, its index |
+| a row, a key | a row of the batch table, its index |
 | the parameter columns | `[c for c in rows.columns if c in parameters]`, equal to `template.blanks` |
 | the request of a row | `template.fill(params=as_request(spec.params, rows[blanks].loc[[key]].to_dict('index')[key]))`, its empty cells given the settings |
 | set, empty, add, remove | `.loc[key, column] = value`, `= pd.NA`, `.loc[key, column] = value` at a new key, `.drop(key)` |
@@ -243,8 +243,8 @@ A source does three things to a batch today after it is made:
 
 Whether each is wanted, and how it is done, is decided in [ADR 0013](0013-follow-adds-the-rows-not-considered.md). Two conditions for it follow from this one:
 
-- **What amends a batch uses the table as a person does**: it adds a row or sets a cell with `put`.
-- **What it needs to know is its own state, next to the batch**: which source, and which rows it has considered. None of it is a column of `rows` or a field of every row.
+- **What amends a batch uses the table as a person does**: it adds a row or sets a cell with `set_table`.
+- **What it needs to know is its own state, next to the batch**: which source, and which rows it has seen. None of it is a column of `rows` or a field of every row.
 
 The code of this ADR and of ADR 0013 is written together, since Follow is in use. Several workflows on one batch (#222) are the same kind of question: something other than a person fills cells.
 
@@ -253,7 +253,7 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 - **Keep the rows derived, and cache the last scan for when the files are away.** Two models: what a person sees depends on whether the cache or the scan answered, and removing files still removes rows.
 - **Two values per cell, one that the source gave and one that a person set, and a scan that merges.** It stores the inputs of a merge in place of the table. Each row then carries what only a scan needs (`source`, `hand`, `cleared`, `added`, `removed`), and the table is not one that pandas holds or stores. It also decides the three uses of a scan above with "yes" without asking.
 - **A parameter is a setting or a column, never both**, as in a template: every value that the table contributes would be in the table, and no cell would depend on a setting. Making a parameter a column would copy the setting into the cell of every row and drop the setting. A row added later, by Follow, by "Add rows from the runs" or by hand, would have an empty cell, so it would be reduced with the default, not with the value that the batch had, and nothing would tell the person.
-- **Fill the cell of a row added with the setting.** Each code that adds a row (a step, `take`, the page, a table file) would need the settings, and a setting changed would not reach the rows added before.
+- **Fill the cell of a row added with the setting.** Each code that adds a row (a step, `add_rows`, the page, a table file) would need the settings, and a setting changed would not reach the rows added before.
 - **A setting at a column that the source fills, as at any other column.** A row taken before its file arrives would take the setting, a file of another sample, and be reduced with it without a word.
 - **The columns fixed when the batch is made** (today). Nothing needs it: a row is outdated by the comparison of its request with its record, whatever the columns were.
 - **A list of the parameter columns in the header.** The template has it: its blanks.
@@ -263,23 +263,23 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 
 ## Consequences
 
-- `rows.json` replaces `edits.json`. No code reads `edits.json`: a batch made before keeps its settings, and what was set by hand on it is lost.
+- `table.json` replaces `edits.json`. No code reads `edits.json`: a batch made before keeps its settings, and what was set by hand on it is lost.
 - `RowTable`, the layers of `Row` (`values`, `info`, `index`), the marker `EMPTY`, "set by hand", and the four converters of cells go. `Header.spec` and `Header.columns` go: the template names the spec, and its blanks are the columns.
 - A batch is shown without a scan and without its source. A batch cannot be shown in two cases: the workspace binds no spec of its name, or it binds a version of the spec that refuses the cells of the table, since it takes another kind of value at a column, or has a parameter of the name of a note.
 - A wrong value in a cell is refused when it is set or read from a table file, not when the row is reduced.
 - A spec cannot make a person choose between a value and `None` for each row: an empty cell of such a column is the setting, or `None` if there is none. It still can for a setting.
 - An empty cell depends on the settings, outside the table. The page shows it in grey as the value that the row takes.
 - A table file shows an empty cell where a row takes the setting, so it needs the settings file to say what a row was reduced with.
-- A cell emptied after its row was reduced counts its value as a setting: the row reads `earlier`, not `outdated`.
+- A cell emptied after its row was reduced counts its value as a setting: the row reads `settings changed`, not `outdated`.
 - A batch made from a source keeps the names that its source fills with it, as the blanks of `settings.json`, as they were when it was made; the batch, the command without the sources, and Follow read them there. A step asks the batch which names a row waits for.
-- The table of a batch made from a source keeps a column for each name that its source fills: `put`, a table file loaded, and "Make this a setting" refuse to drop one.
-- `settings.json` holds every setting, those at the columns too, as a template whose blanks are `batch.fills`. A folder written before, whose templates had other blanks, is refused when opened (`FolderDefinitions`, `format.json`).
+- The table of a batch made from a source keeps a column for each name that its source fills: `set_table`, a table file loaded, and "Make this a setting" refuse to drop one.
+- `settings.json` holds every setting, those at the columns too, as a template whose blanks are `batch.source_columns`. A folder written before, whose templates had other blanks, is refused when opened (`FolderDefinitions`, `format.json`).
 - A row that only wrong metadata made stays until a person removes it, and a correction of a run changes no batch (the example above).
 - The command and the page need no translation of a table: a table file is the table.
-- `put` writes the whole table. At 3000 rows that is tens of milliseconds.
+- `set_table` writes the whole table. At 3000 rows that is tens of milliseconds.
 - What ADR 0011 says of the spec and the columns in the header and of `edits.json` is replaced by this. What it says of the source, the scope and Follow is replaced by ADR 0013.
 
 ## Open
 
 - **A note cannot have the name of a parameter.** A column `sample` is the parameter `sample` of the spec, whatever the maker of the table meant by it.
-- **The order of the rows** is the order of the frame, and a new row goes to its end. Whether sorting on the page changes the stored order is not decided.
+- **The order of the rows** is the order of the batch table, and a new row goes to its end. Whether sorting on the page changes the stored order is not decided.

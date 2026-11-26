@@ -61,7 +61,9 @@ def test_a_step_that_raises_is_said_while_it_changes_and_the_steps_go_on(
             raise raising[0]
         return toys.pair(files)
 
-    intake = Intake(manager, sources={'pairs': RowSource(rows, toys.PAIRS.fills)})
+    intake = Intake(
+        manager, sources={'pairs': RowSource(rows, toys.PAIRS.source_columns)}
+    )
     sample(1, 'water')
     label = toys.from_pairs(intake, 'plain', title='A', follow=True)
     after = [
@@ -74,7 +76,7 @@ def test_a_step_that_raises_is_said_while_it_changes_and_the_steps_go_on(
 
     follow(
         intake,
-        say=lines.append,
+        write_line=lines.append,
         pause=lambda: after.pop(0)(),
         stopped=lambda: False,
         steps=5,
@@ -82,7 +84,7 @@ def test_a_step_that_raises_is_said_while_it_changes_and_the_steps_go_on(
 
     assert capsys.readouterr().err.count(f'Follow could not step: {said}') == 2
     assert {line['error'] for line in lines} == {None, said}
-    assert list(intake.manager.batch(label).frame().index) == ['1', '2']
+    assert list(intake.manager.batch(label).table().index) == ['1', '2']
 
 
 def test_a_stop_asked_ends_the_steps_once_the_reductions_that_run_end(
@@ -102,11 +104,11 @@ def test_a_stop_asked_ends_the_steps_once_the_reductions_that_run_end(
         asked.append(True)
         return len(asked) > 1
 
-    follow(intake, say=lines.append, pause=lambda: None, stopped=stopped)
+    follow(intake, write_line=lines.append, pause=lambda: None, stopped=stopped)
 
     record = following.state()['1'].record
     assert following.client.status([record]) == [Status.COMPLETED]
-    assert list(following.frame().index) == ['1']
+    assert list(following.table().index) == ['1']
     assert lines[0]['reducing'] == ['1']
     assert lines[-1]['ended'] == {'1': 'done'}
 
@@ -116,11 +118,11 @@ def test_a_step_that_finds_nothing_new_says_nothing(
 ) -> None:
     lines: list[Mapping[str, Any]] = []
     steps = {'pause': lambda: None, 'stopped': lambda: False, 'steps': 1}
-    follow(intake, say=lambda _: None, **steps)
+    follow(intake, write_line=lambda _: None, **steps)
 
-    follow(intake, say=lines.append, **steps)
+    follow(intake, write_line=lines.append, **steps)
 
-    assert following.state()['1'].text == 'done'
+    assert following.state()['1'].status == 'done'
     assert lines == []
 
 
@@ -135,7 +137,9 @@ def test_reductions_that_run_when_the_steps_start_are_said_once_they_end(
         gate.open()
         return False
 
-    follow(intake, say=lines.append, pause=lambda: None, stopped=stopped, steps=1)
+    follow(
+        intake, write_line=lines.append, pause=lambda: None, stopped=stopped, steps=1
+    )
 
     assert [line['reducing'] for line in lines] == [[]] * len(lines)
     assert {k: v for line in lines for k, v in line['ended'].items()} == {'1': 'done'}
@@ -173,7 +177,7 @@ def test_a_workspace_that_stopped_ends_the_steps(
     with pytest.raises(Stopped, match='the workspace stopped'):
         follow(
             intake,
-            say=lambda _: None,
+            write_line=lambda _: None,
             pause=lambda: None,
             stopped=lambda: False,
             steps=3,

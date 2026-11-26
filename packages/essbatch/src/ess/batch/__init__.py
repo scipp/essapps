@@ -9,19 +9,19 @@ for application developers is ``packages/essbatch/docs/batch.md``.
 """
 
 from .corrections import CorrectedFiles, open_workspace
-from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
+from .definition import DefinitionStore, DefinitionWriteError, FolderDefinitions, Header
 from .intake import Intake
 from .manager import BatchManager
 from .reduction import Batch
 from .source import FileInfo, Range, RowFunction, RowSource, rows_of
 from .state import (
     RowState,
-    earlier_settings,
     left_to_reduce,
     not_reduced,
     publishable,
     ready,
     to_reduce,
+    with_changed_settings,
 )
 
 __all__ = [
@@ -29,16 +29,15 @@ __all__ = [
     'BatchManager',
     'CorrectedFiles',
     'DefinitionStore',
+    'DefinitionWriteError',
     'FileInfo',
     'FolderDefinitions',
     'Header',
     'Intake',
-    'NotKept',
     'Range',
     'RowFunction',
     'RowSource',
     'RowState',
-    'earlier_settings',
     'left_to_reduce',
     'not_reduced',
     'open_workspace',
@@ -46,4 +45,5 @@ __all__ = [
     'ready',
     'rows_of',
     'to_reduce',
+    'with_changed_settings',
 ]
