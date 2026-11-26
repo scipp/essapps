@@ -323,6 +323,28 @@ def test_a_record_persisted_at_submission_completes_once_written(
     }
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason='A record cancelled while its workflow runs still writes its persisted '
+    'outputs to the store',
+)
+def test_a_record_cancelled_while_it_runs_writes_nothing_to_the_store(
+    workspace: Workspace,
+    client: Client,
+    store: GatedStore,
+    loading: threading.Event,
+    entered: threading.Event,
+) -> None:
+    loading.clear()
+    load = client.submit(LOAD, params=_sample(1), persist=True)
+    assert entered.wait(timeout=5)  # in its workflow
+    client.cancel(load)
+    loading.set()
+    workspace.close()  # waits for the workflow running
+
+    assert (load.id, 'value') not in store
+
+
 def test_a_failed_write_fails_a_record_persisted_at_submission(
     client: Client, store: GatedStore
 ) -> None:
@@ -690,6 +712,32 @@ def test_a_restart_fails_persisted_work_that_reads_what_is_gone(
         'the workspace restarted: the driver it reads is gone',
         f'the workspace restarted: record {state.id} failed',
     ]
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason='At a restart, a pending record that persists nothing runs although the '
+    'only persisted record that reads it fails the restart rules',
+)
+def test_a_restart_cancels_what_only_failed_persisted_work_reads(
+    tmp_path: Path,
+    start: Callable[..., Client],
+    restart: Callable[[Path], Client],
+    loading: threading.Event,
+) -> None:
+    first = start(tmp_path / 'log', workers=1)
+    kept = first.compute(LOAD, params=_sample(1))
+    loading.clear()
+    first.submit(LOAD, params=_sample(1))  # holds the only worker
+    pending = first.submit(LOAD, params=_sample(2))
+    total = first.submit(
+        TOTAL, params={'part': [kept.ref('value'), pending.ref('value')]}, persist=True
+    )
+
+    again = restart(tmp_path / 'log')
+    loading.set()
+
+    assert again.wait([total, pending]) == [Status.FAILED, Status.CANCELLED]
 
 
 def test_a_restart_runs_a_call_through_a_stage_as_its_plain_request(

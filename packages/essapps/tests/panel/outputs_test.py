@@ -580,6 +580,49 @@ def test_a_field_of_one_or_two_dimensions_is_drawn_from_the_first_cut(
     assert recording.outputs[0][2] is not None
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason='Outputs draws a 2-D field that has the dimension of a slider of another '
+    'field as the cut at index 0, not whole',
+)
+def test_a_field_of_two_dimensions_with_the_dimension_of_a_slider_is_drawn_whole(
+    run: tuple[FakeFiles, FileRef],
+) -> None:
+    class Trace(BaseModel, arbitrary_types_allowed=True):
+        counts: sc.DataArray  # time, y, x
+        trace: sc.DataArray  # time, x
+
+    class TraceOutputs(BaseModel):
+        trace: Trace
+
+    trace_spec = WorkflowSpec(
+        name='trace',
+        version=1,
+        title='Trace',
+        description='Counts by time, y, and x, and summed over y.',
+        params=CubeParams,
+        outputs=TraceOutputs,
+    )
+    counts = sc.DataArray(
+        sc.array(dims=['time', 'y', 'x'], values=np.arange(24.0).reshape(2, 3, 4))
+    )
+    whole = counts.sum('y')
+    bind = [
+        function_binding(
+            trace_spec,
+            lambda params: TraceOutputs(trace=Trace(counts=counts, trace=whole)),
+        )
+    ]
+    with local(proposal='p1', files=run[0], bind=bind) as client:
+        record = client.compute(trace_spec)
+        outputs = Outputs(client, Listing(client))
+        outputs.select(record, 'trace')
+
+    plain, _ = outputs.view.objects
+    colour_ranges = [axes.get_ylim() for axes in plain.object.axes[1:]]
+    assert colour_ranges == [(whole.min().value, whole.max().value)]
+
+
 def test_an_array_output_has_a_slider_for_each_dimension_but_the_last_two(
     client: Client,
 ) -> None:

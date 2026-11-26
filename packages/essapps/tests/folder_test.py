@@ -11,7 +11,7 @@ import pydantic
 import pytest
 import scipp as sc
 
-from ess.apps import Client, Selector, file
+from ess.apps import Client, Request, Selector, file, local
 from ess.apps.folder import (
     ArrivingFiles,
     FolderStore,
@@ -226,6 +226,22 @@ def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_t
         again = second.submit(found[0].request)
         second.wait([again])
         assert second.output(again, 'offset').value == 1
+
+
+def test_a_file_that_gains_a_pid_resolves_to_another_identity_than_a_record_holds(
+    tmp_path: Path, bindings: list[Binding]
+) -> None:
+    (tmp_path / 'run-1.json').write_text('1')
+    row = {'file': 'run-1.json', 'run': 1}
+    write_files_table(tmp_path, [row])
+    request = Request(FIND, params={'sample': file(run=1)})
+    with local(proposal='p1', files=ArrivingFiles(tmp_path), bind=bindings) as client:
+        record = client.compute(request)
+        write_files_table(tmp_path, [{**row, 'pid': '20.500.12269/abc'}])
+        resolved = client.resolve(request)
+
+    assert record.request.params['sample'] == FileRef(file='path:run-1.json')
+    assert resolved.params['sample'] == FileRef(file='pid:20.500.12269/abc')
 
 
 def test_a_folder_held_by_a_client_cannot_be_opened_again(
