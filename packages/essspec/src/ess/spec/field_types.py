@@ -284,11 +284,7 @@ def holds_marker(annotation: Any) -> bool:
 def _holds(
     annotation: Any, marked: Callable[[Any], bool], seen: frozenset[type] = frozenset()
 ) -> bool:
-    """
-    Whether ``marked`` holds for ``annotation`` or a type in it, at any
-    depth, in the fields of each group too. ``seen`` holds the groups looked
-    into already, so that a group that contains itself ends.
-    """
+    """Whether ``marked`` holds for ``annotation`` or a type in it, at any depth."""
     if marked(annotation):
         return True
     if is_group(annotation):
@@ -311,8 +307,7 @@ def is_array(tp: Any) -> bool:
 def has_array(tp: Any) -> bool:
     """
     Whether ``tp``, ``X`` or ``X | None``, is an array, or a group with an
-    array field (see :func:`is_array`): what a reader slices by dimension,
-    or plots.
+    array field (see :func:`is_array`).
     """
     tp = optional(tp)[0]
     return is_array(tp) or (
@@ -480,10 +475,7 @@ def discriminates(meta: Any) -> bool:
 
 
 def _discriminator(metadata: tuple[Any, ...]) -> Any:
-    """
-    The discriminator in ``metadata``, the last if several: the name of a
-    field or a callable. ``None`` if there is none.
-    """
+    """The last discriminator in ``metadata``, a field name or a callable; or None."""
     found = None
     for meta in metadata:
         by = meta.discriminator if isinstance(meta, FieldInfo | Discriminator) else None
