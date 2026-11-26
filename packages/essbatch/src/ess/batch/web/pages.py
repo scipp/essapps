@@ -263,7 +263,7 @@ class Pages:
             ]
             return Batches(
                 application=self.title,
-                runs=self.runs.version,
+                runs=self.runs.revision,
                 rows=rows,
             )
 

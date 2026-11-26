@@ -8,7 +8,7 @@ uses it, at ``/batches/<label>/``.
 Each action of a page is a ``POST`` that answers with the
 :class:`~.models.State` after it, or a 422 with ``{'message': ...}``; the
 reasons of a refused reduction are in the state. ``GET api/state`` with the
-``after`` version and the ``start`` the page has answers 204 while nothing
+``after`` revision and the ``start`` the page has answers 204 while nothing
 changed. The API of a label that is no batch answers 404, and of a batch
 that cannot be made 422; the page is served for any label, and shows the
 batches with that message instead. The
@@ -177,7 +177,7 @@ def create_app(pages: Pages) -> FastAPI:
 
     @batch.get('/api/state', responses={204: {'description': 'Nothing changed.'}})
     def state(page: PageOfLabel, after: int = 0, start: str = '') -> Any:
-        """The state, or 204 if it is that of version ``after`` of ``start``."""
+        """The state, or 204 if it is that of revision ``after`` of ``start``."""
         current = page.poll(after, start)
         return Response(status_code=204) if current is None else current
 

@@ -588,13 +588,13 @@ def test_make_setting_refuses_rows_that_take_different_values_without_a_row(
 def test_make_setting_refuses_a_name_that_is_no_parameter_column(
     measured: Batch, name: str, key: str | None
 ) -> None:
-    before = (measured.frame(), dict(measured.settings), measured.version)
+    before = (measured.frame(), dict(measured.settings), measured.revision)
 
     with pytest.raises(ValueError, match=f'^{name} is not a column of the batch$'):
         measured.make_setting(name, key)
 
     pd.testing.assert_frame_equal(measured.frame(), before[0])
-    assert (dict(measured.settings), measured.version) == before[1:]
+    assert (dict(measured.settings), measured.revision) == before[1:]
 
 
 def test_make_setting_of_a_batch_without_rows_keeps_the_setting(
@@ -1227,11 +1227,11 @@ def test_cancel_reaches_a_row_removed_since(
     assert client.wait(records) == {'1': 'cancelled'}
 
 
-# The version
+# The revision
 
 
 def _shown(batch: Batch) -> tuple[Any, ...]:
-    """What the version stands for."""
+    """What the revision stands for."""
     return data_of(batch.frame()), batch.template(), batch.shown()
 
 
@@ -1248,11 +1248,11 @@ def _shown(batch: Batch) -> tuple[Any, ...]:
 def test_the_version_moves_at_each_change_of_the_table_or_the_template(
     measured: Batch, change: Any
 ) -> None:
-    before = measured.version
+    before = measured.revision
 
     change(measured)
 
-    assert measured.version != before
+    assert measured.revision != before
 
 
 @pytest.mark.parametrize(
@@ -1284,11 +1284,11 @@ def test_the_version_stays_at_a_read_and_at_a_put_of_an_equal_table(
     measured: Batch, client: Client, read: Any
 ) -> None:
     client.wait(measured.reduce(['1']))
-    before = measured.version
+    before = measured.revision
 
     read(measured)
 
-    assert measured.version == before
+    assert measured.revision == before
 
 
 def test_a_row_reduced_reads_the_same_until_it_finishes_and_the_version_stays(
@@ -1296,14 +1296,14 @@ def test_a_row_reduced_reads_the_same_until_it_finishes_and_the_version_stays(
 ) -> None:
     gate.close()
     records = measured.reduce(['1'])
-    version, running = measured.version, _shown(measured)
+    revision, running = measured.revision, _shown(measured)
 
     assert _shown(measured) == running
     gate.open()
     client.wait(records)
 
     assert measured.shown()[0]['1'].record_status is Status.COMPLETED
-    assert measured.version == version
+    assert measured.revision == revision
 
 
 def test_a_record_that_a_cell_reads_is_read_again_when_it_finishes(

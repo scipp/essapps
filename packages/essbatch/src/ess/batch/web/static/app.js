@@ -40,7 +40,7 @@ const view = {
   colors: {}, // the colour of each curve drawn, by key
   detail: '', // what the row tab shows, to draw it again only on a change
   dismissed: '', // the refusal whose message was closed
-  runs: 0, // the version of the runs shown
+  runs: 0, // the revision of the runs shown
   runData: null, // the runs last loaded, with their columns
   batchData: null, // the list of batches last shown
   counts: null, // the counts of the rows of each batch, once counted
@@ -152,7 +152,7 @@ class Unshown extends Error {}
 // shown before is dropped.
 async function refresh() {
   const at = changes;
-  const after = view.state ? {after: view.state.version, start: view.state.start} : {};
+  const after = view.state ? {after: view.state.revision, start: view.state.start} : {};
   const response = await get(`state?${query(after)}`, here).catch(() => null);
   if (at !== changes) return;
   if (!response) throw new Offline('The server does not answer.');
@@ -227,7 +227,7 @@ function toast(text) {
 function render(state) {
   const old = view.state;
   if (old && state.start !== old.start) return location.reload();
-  if (old && state.version < old.version) return;
+  if (old && state.revision < old.revision) return;
   view.state = state;
   const built = !rows;
   if (built) build(state);
@@ -338,7 +338,7 @@ function downloadResults(rows, name) {
 async function loadRuns() {
   const shown = await request('runs', {kind: 'runs'});
   if (!shown) return;
-  view.runs = shown.version;
+  view.runs = shown.revision;
   view.runData = shown;
   $('n-runs').textContent = shown.rows.length;
   if (view.page === 'runs') drawRuns();
@@ -415,7 +415,7 @@ function drawRuns() {
 }
 
 // Correct runs, an action of the workspace; whether it was done. The page of
-// a batch then asks for its state at once, whose version of the runs has
+// a batch then asks for its state at once, whose revision of the runs has
 // moved, so that it loads the runs; a page without a batch asks for the runs.
 function correctRuns(url, body) {
   return queued(async () => {

@@ -233,7 +233,7 @@ class Batch:
         The other parameters of the spec, which no row gives itself.
     definitions:
         As given: where the entries of the label are kept, if anywhere.
-    version:
+    revision:
         A number that moves whenever :meth:`frame` or :meth:`template` may
         give something else: while it is the same, they give the same. A
         :meth:`put` that writes, an assignment of :attr:`settings`,
@@ -269,7 +269,7 @@ class Batch:
         self.label = label
         self.fills = frozenset(fills)
         self.definitions = definitions
-        self._version = 0
+        self._revision = 0
         # A setting at fills, as definitions may hold, is never read: dropped.
         self._settings = copy.deepcopy(self.settable(settings or {}))
         self._template = Template(spec, params=self._settings)
@@ -298,11 +298,11 @@ class Batch:
         self._rows = rows
         blanks = [c for c in rows.columns if c in fields]
         self._template = Template(self.spec, params=self._settings, blanks=blanks)
-        self._version += 1
+        self._revision += 1
 
     @property
-    def version(self) -> int:
-        return self._version
+    def revision(self) -> int:
+        return self._revision
 
     @property
     def parameter_columns(self) -> tuple[str, ...]:
@@ -407,7 +407,7 @@ class Batch:
         self._template = Template(
             self.spec, params=settings, blanks=self.parameter_columns
         )
-        self._version += 1
+        self._revision += 1
 
     def make_column(self, name: str) -> None:
         """

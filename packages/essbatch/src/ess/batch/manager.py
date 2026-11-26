@@ -84,9 +84,9 @@ class BatchManager:
     for, and :class:`~.definition.DefinitionWriteError` that the definitions refuse a
     write. Anything else is an error of the code of the application.
 
-    :attr:`version` moves whenever :meth:`headers` may give something else:
+    :attr:`revision` moves whenever :meth:`headers` may give something else:
     while it is the same, they give the same. A batch counts its own changes
-    (:attr:`.reduction.Batch.version`).
+    (:attr:`.reduction.Batch.revision`).
 
     The headers are read when the manager is made. Each change of a header is
     written to the definitions before the manager holds it, so the manager
@@ -135,12 +135,12 @@ class BatchManager:
             if (header := HEADER.load(definitions, label)) is not None:
                 self._headers[label] = header
         self._batches: dict[str, Batch] = {}
-        self._version = 0
+        self._revision = 0
 
     @property
-    def version(self) -> int:
+    def revision(self) -> int:
         """Counts the changes of the headers."""
-        return self._version
+        return self._revision
 
     def create(
         self,
@@ -235,7 +235,7 @@ class BatchManager:
             raise
         self._headers[label] = header
         self._batches[label] = batch
-        self._version += 1
+        self._revision += 1
         return batch
 
     def check(self, spec: str, *, title: str, label: str | None) -> None:
@@ -338,7 +338,7 @@ class BatchManager:
         )
         HEADER.save(self.definitions, label, header)
         self._headers[label] = header
-        self._version += 1
+        self._revision += 1
 
     def remove(self, label: str) -> None:
         """
@@ -358,7 +358,7 @@ class BatchManager:
         header, *parts = LABEL_ENTRIES
         self.definitions.delete(header.key(label))
         self._headers.pop(label, None)
-        self._version += 1
+        self._revision += 1
         if (batch := self._batches.pop(label, None)) is not None:
             batch.close()
         for entry in parts:

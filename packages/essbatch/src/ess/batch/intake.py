@@ -102,7 +102,7 @@ class Intake:
     ) -> None:
         self.manager = manager
         self.sources = sources
-        # The batch that follows, as read when the manager had this version.
+        # The batch that follows, as read when the manager had this revision.
         self._read: tuple[int, str | None] | None = None
 
     @property
@@ -110,11 +110,11 @@ class Intake:
         """
         The label of the batch that follows, ``None`` if none does. It is read
         from the definitions again only when
-        :attr:`.manager.BatchManager.version` moved.
+        :attr:`.manager.BatchManager.revision` moved.
         """
-        version = self.manager.version
-        if self._read is None or self._read[0] != version:
-            self._read = (version, self._kept_following())
+        revision = self.manager.revision
+        if self._read is None or self._read[0] != revision:
+            self._read = (revision, self._kept_following())
         return self._read[1]
 
     def _kept_following(self) -> str | None:
@@ -130,7 +130,7 @@ class Intake:
 
     def _set_following(self, label: str | None) -> None:
         """Hold ``label`` as the batch that follows, as now written."""
-        self._read = (self.manager.version, label)
+        self._read = (self.manager.revision, label)
 
     def _write_follows(self, label: str, follows: bool) -> None:
         """Write whether the batch of ``label`` follows."""

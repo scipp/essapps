@@ -10,7 +10,7 @@ the files, with their metadata, and the records. A page asks to list again
 (:meth:`Runs.list_again`) when the records or its batch table changed, at a
 step of Follow, at "List runs again", and as it is made; the listing counts
 the changes of the files and of why they cannot be listed
-(:attr:`SafeListing.version`), which every page compares at its poll.
+(:attr:`SafeListing.revision`), which every page compares at its poll.
 The runs are the files, the same on every page (:meth:`Runs.shown`), and a
 person corrects them on any page, with or without a batch
 (:meth:`Runs.correct`). A correction changes no row of a batch: a batch
@@ -46,7 +46,7 @@ class SafeListing(Listing):
     What the client lists now, as :class:`Listing` gives it, but without files
     if the file source raises: a picker then offers none, the Runs view lists
     none, and :attr:`failure` says why. It lists every file with its metadata
-    as it is made (:attr:`files_listed`), and :attr:`version` counts, from
+    as it is made (:attr:`files_listed`), and :attr:`revision` counts, from
     the first listing, each listing whose files or failure differ from those
     of the listing ``previous``.
     """
@@ -60,9 +60,9 @@ class SafeListing(Listing):
         # The files and why they cannot be listed, as made: a picker may
         # list files later, and set :attr:`error`.
         self._said = (self.files_listed, self.failure)
-        self.version = 1
+        self.revision = 1
         if previous is not None:
-            self.version = previous.version + (self._said != previous._said)
+            self.revision = previous.revision + (self._said != previous._said)
 
     @property
     def failure(self) -> str | None:
@@ -129,13 +129,13 @@ class Runs:
         return self._listing
 
     @property
-    def version(self) -> int | None:
+    def revision(self) -> int | None:
         """
-        :attr:`SafeListing.version`, which the Runs view of each page compares
+        :attr:`SafeListing.revision`, which the Runs view of each page compares
         to ask for the runs again; ``None`` if the application corrects no
         runs, so that the pages have no Runs view.
         """
-        return self._listing.version if self.corrects else None
+        return self._listing.revision if self.corrects else None
 
     @property
     def corrects(self) -> bool:
@@ -173,7 +173,7 @@ class Runs:
             self.list_again()
             listing = self._listing
             return models.Runs(
-                version=listing.version,
+                revision=listing.revision,
                 columns=[
                     Column(name=n, title=marks.titles[n], editor=forms.editor(f))
                     for n, f in marks.fields.items()

@@ -252,7 +252,7 @@ class State(BaseModel):
     and the runs. ``label`` names the batch, ``title`` is its title, and
     ``header`` the rest of its header; ``application`` is the title of the
     application. ``start`` changes when
-    the server starts again, ``version`` with each change, and ``runs`` with
+    the server starts again, ``revision`` with each change, and ``runs`` with
     each change of the runs. ``batches`` lists the batches of the workspace,
     as :class:`Batches` has them. ``notes`` are the note columns of the batch
     table, but ``name``, and ``columns`` the parameter columns; both change
@@ -270,7 +270,7 @@ class State(BaseModel):
     what the action that answers with this state did.
     """
 
-    version: int
+    revision: int
     start: str
     runs: int | None
     batches: list[BatchRow]
@@ -319,7 +319,7 @@ class Runs(BaseModel):
     ``problem`` says why.
     """
 
-    version: int
+    revision: int
     columns: list[Column]
     rows: list[RunRow]
     problem: str | None = None
@@ -340,7 +340,7 @@ class BatchRow(BaseModel):
 class Batches(BaseModel):
     """
     The batches; and for the page without a batch, the title of the
-    application, and the version of the runs, as :class:`State` has them.
+    application, and the revision of the runs, as :class:`State` has them.
     """
 
     application: str

@@ -483,11 +483,11 @@ def test_the_version_moves_at_each_change_of_the_headers(
     manager: BatchManager, change: Callable[[BatchManager], object]
 ) -> None:
     manager.create('plain', title='B', label='b')
-    before = manager.version
+    before = manager.revision
 
     change(manager)
 
-    assert manager.version != before
+    assert manager.revision != before
 
 
 # A create or remove cut off

@@ -190,11 +190,11 @@ def test_a_poll_at_the_same_version_answers_204_but_not_after_a_restart(
     http: TestClient,
 ) -> None:
     now = state(http)
-    same = {'after': now['version'], 'start': now['start']}
+    same = {'after': now['revision'], 'start': now['start']}
 
     assert http.get('/api/state', params=same).status_code == 204
     restarted = http.get('/api/state', params={**same, 'start': 'other'})
-    assert restarted.json()['version'] == now['version']
+    assert restarted.json()['revision'] == now['revision']
 
 
 def test_a_poll_sees_a_reduction_finish(
@@ -205,7 +205,7 @@ def test_a_poll_sees_a_reduction_finish(
     gate.open()
     client.wait(client.records())
 
-    after = {'after': running['version'], 'start': running['start']}
+    after = {'after': running['revision'], 'start': running['start']}
     finished = http.get('/api/state', params=after).json()
 
     assert [r['status'] for r in running['rows']][:2] == ['running', 'running']
@@ -216,7 +216,7 @@ def test_a_poll_sees_a_row_that_another_caller_put_without_a_record(
     http: TestClient, batch: Batch, sample: Measure, client: Client
 ) -> None:
     now = state(http)
-    after = {'after': now['version'], 'start': now['start']}
+    after = {'after': now['revision'], 'start': now['start']}
     batch.put(batch.frame())
     assert http.get('/api/state', params=after).status_code == 204
 
@@ -242,14 +242,14 @@ def test_an_action_of_one_page_reaches_another_at_its_next_poll(
     http: TestClient, act: Callable[[TestClient], Any]
 ) -> None:
     now = state(http)
-    after = {'after': now['version'], 'start': now['start']}
+    after = {'after': now['revision'], 'start': now['start']}
     assert http.get('/api/state', params=after).status_code == 204
 
     act(http)
 
     polled = http.get('/api/state', params=after)
     assert polled.status_code == 200
-    assert polled.json()['version'] > now['version']
+    assert polled.json()['revision'] > now['revision']
 
 
 def test_a_rescan_offers_the_runs_it_found_and_changes_no_row(
@@ -1929,7 +1929,7 @@ def test_a_page_learns_from_its_poll_that_another_batch_follows(
     http.post('/api/batches', json=new_batch(title='Other', follow=True))
 
     polled = http.get(
-        '/api/state', params={'after': now['version'], 'start': now['start']}
+        '/api/state', params={'after': now['revision'], 'start': now['start']}
     )
     assert polled.status_code == 200
     listed = polled.json()['batches']
@@ -2778,7 +2778,7 @@ def test_another_page_of_a_removed_batch_answers_404_at_its_next_poll(
 
     http.post('/api/batch/remove')
 
-    at = {'after': now['version'], 'start': now['start']}
+    at = {'after': now['revision'], 'start': now['start']}
     polled = other.get('/api/state', params=at)
     assert (polled.status_code, polled.json()) == (
         404,

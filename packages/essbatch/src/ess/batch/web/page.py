@@ -54,11 +54,11 @@ holds a change, which the new form would drop.
 
 The page in the browser holds only what it shows: the selection, the
 filter, the tab. Each action returns the :class:`~.models.State` after it, and
-the browser polls the state about once a second with the ``version`` it has,
-to see results arrive. The version counts the changes made here, and those
+the browser polls the state about once a second with the ``revision`` it has,
+to see results arrive. The revision counts the changes made here, and those
 that the batch, the manager, the runs and Follow count, which a poll compares
-(such as :attr:`~ess.batch.Batch.version`). ``start`` tells a page that
-the server started again, so that the same version may be another state.
+(such as :attr:`~ess.batch.Batch.revision`). ``start`` tells a page that
+the server started again, so that the same revision may be another state.
 
 A reduction refused raises :class:`~.errors.Rejected`. It says the reasons
 that no cell or setting shows. The others stay in the state until the value of each is
@@ -210,7 +210,7 @@ def _locked[**P, T](method: Callable[P, T]) -> Callable[P, T]:
 
 def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
     """
-    An action: it changes the version, and returns the state with what the
+    An action: it changes the revision, and returns the state with what the
     action says it did.
     """
 
@@ -222,7 +222,7 @@ def _action[**P](method: Callable[P, str | None]) -> Callable[P, State]:
                 with reject_on_write_error():
                     notice = method(*args, **kwargs)
             finally:
-                page._new_version()
+                page._new_revision()
             return page.state(notice=notice or '')
 
     return action
@@ -232,7 +232,7 @@ class Page:
     """
     What the API does for the page of one batch for one person, without HTTP.
     It owns, and only it writes, the draft of the settings, the refusals of
-    the last reduction, and the version. See the module for the rules.
+    the last reduction, and the revision. See the module for the rules.
 
     Parameters
     ----------
@@ -252,9 +252,9 @@ class Page:
         self._fit()
         # The reasons of the last reduction refused that a cell or a setting shows.
         self._submit_errors: list[FieldError] = []
-        self.version = 1
+        self.revision = 1
         self.start = uuid.uuid4().hex[:8]
-        # What :meth:`_live` gave at the last change of the version.
+        # What :meth:`_live` gave at the last change of the revision.
         self._seen = self._live()
 
     @property
@@ -308,7 +308,7 @@ class Page:
         What the page shows that changes without an action, each by what
         counts its changes or as its value: the batch (its table and its
         template), the records listed, the files listed and why they cannot
-        be (:attr:`SafeListing.version <.runs.SafeListing.version>`), the
+        be (:attr:`SafeListing.revision <.runs.SafeListing.revision>`), the
         headers of the batches, which batch follows, and what Follow said of
         this batch (:meth:`LastStep.token <.last_step.LastStep.token>`).
         A record that changed since the records listed is in the feed that
@@ -316,16 +316,16 @@ class Page:
         """
         pages = self.pages
         return (
-            self.batch.version,
+            self.batch.revision,
             pages.runs.listing.cursor,
-            pages.runs.listing.version,
-            pages.intake.manager.version,
+            pages.runs.listing.revision,
+            pages.intake.manager.revision,
             pages.intake.following,
             pages.last_step.token(self.label),
         )
 
-    def _new_version(self) -> None:
-        self.version += 1
+    def _new_revision(self) -> None:
+        self.revision += 1
         self._seen = self._live()
 
     def _list_again(self) -> None:
@@ -353,15 +353,15 @@ class Page:
 
     @_locked
     def poll(self, after: int, start: str = '') -> State | None:
-        """The state, or ``None`` if it is still that of version ``after``."""
+        """The state, or ``None`` if it is still that of revision ``after``."""
         # The feed catches a record that ended after the last relist but before
         # ``_seen`` was read, which ``_live`` holds already and the listing lacks.
         changes = self.batch.client.changes(after=self.pages.runs.listing.cursor)
         # A table changed by another caller may name files that the listing lacks.
         if changes.records or self._live() != self._seen:
             self._list_again()
-            self._new_version()
-        if after == self.version and start == self.start:
+            self._new_revision()
+        if after == self.revision and start == self.start:
             return None
         return self.state()
 
@@ -427,9 +427,9 @@ class Page:
         empty = batch.empty()
         header = self.pages.intake.manager.headers()[self.label]
         return State(
-            version=self.version,
+            revision=self.revision,
             start=self.start,
-            runs=self.pages.runs.version,
+            runs=self.pages.runs.revision,
             batches=self.pages.batches().rows,
             label=self.label,
             title=header.title,
@@ -736,14 +736,14 @@ class Page:
         refresh the forms, since new rows may name files that they do not
         offer yet. A step that changes nothing the page shows, such as the
         rows, the runs, the records, what waits and why, or how it went,
-        leaves the version, so that a page polling it gets nothing new.
+        leaves the revision, so that a page polling it gets nothing new.
         """
         with self.lock:
             try:
                 self._list_again()
             finally:
                 if self._live() != self._seen:
-                    self._new_version()
+                    self._new_revision()
 
     # Settings
 

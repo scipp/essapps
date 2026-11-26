@@ -253,19 +253,19 @@ There is no login yet.
 The web layer follows eight rules. Each says where a reader finds a kind of thing, so a change that breaks one needs a reason.
 
 1. **The batch layer decides.** Every rule of rows, settings, sources, reduction and Follow is in `ess.batch`. The web layer says what the batch layer refuses in words for a person and copies no rule of the batch layer. It refuses only a request that no call of the batch layer can express, such as Follow without a row source (`NewBatch`). The form in the browser may know a rule to be helpful, such as that a batch that follows has no last row, but the server does not decide it here.
-2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` and of its `Runs` takes it, and a caller may hold it already; a property of `Runs` (`listing`, `version`, `corrects`) reads one value without it. `LastStep` is used only under it.
+2. **One lock.** `Pages.lock` is around every request, every step of Follow and every count. Each public method of `Pages` and of its `Runs` takes it, and a caller may hold it already; a property of `Runs` (`listing`, `revision`, `corrects`) reads one value without it. `LastStep` is used only under it.
 3. **Each piece of state has one owner, which alone writes it.**
 
    | Owner | State |
    |---|---|
    | the batch layer | the batches: batch table, settings, header, which batch follows, the output form and what was published |
    | `Pages` | which pages are open; through `Runs`, the listing of the files and the corrections of runs; through `LastStep`, what the last step of Follow said |
-   | `Page` | the draft of the settings form, the refusals of the last reduction, its version |
+   | `Page` | the draft of the settings form, the refusals of the last reduction, its revision |
    | the browser | what is shown: selection, filter, view, tab, sort, axes; the draft of the output form ([Output](#output)) |
 
    A `Page` changes its batch through the batch layer, and asks `Pages.files` for the listing and `Pages.follow` for what to show of Follow.
 4. **A request answers what the page needs next.** An action that changes a batch answers the `State` after it. A request that reads answers what it reads, also when it is a POST because its body is long (`api/plot`, `api/results.zip`). An action of the workspace answers what the page shows next, since the page without a batch has no state: a `Notice` for correcting a run or removing a batch, `Made` for a new batch. Any request may answer 422 with a message, or 404 for a label that is no batch.
-5. **A change is noticed by counters.** At each poll the server compares versions and answers 204 until one moved ([How the page learns of changes](#how-the-page-learns-of-changes)). No signal says that a file arrived, so nothing read from the files is kept by the version of a batch; the listing has a version of its own.
+5. **A change is noticed by counters.** At each poll the server compares revisions and answers 204 until one moved ([How the page learns of changes](#how-the-page-learns-of-changes)). No signal says that a file arrived, so nothing read from the files is kept by the version of a batch; the listing has a version of its own.
 6. **A refusal is a `Rejected` (422) or a `NotFound` (404); how an exception reads as a message is in `errors.py` and `ess.apps.errors.error_text`.** Code of the application, such as a row source, the file source or a drawing, may raise anything: the page says it and keeps working (`reject_on_error`, `error_text`): a pydantic `ValidationError` as each reason at its field, another refusal (`ValueError`, `OSError`) as its text, and a defect with its type. Elsewhere an action catches only the refusals it expects of the batch layer, or of a file or a value that a person gave, and says them with `request_error_text` after what it was doing, such as "Cannot load rows.csv: ...".
 7. **The browser draws from the state and sends its actions in one queue** ([How the page asks](#how-the-page-asks)).
 8. **The settings form is a draft.** Only **Apply** and **Make this a setting** write settings. While the form holds a change, the page refuses to reduce, to change which parameters are columns, and to give the settings as a file.
@@ -292,19 +292,19 @@ There are no websockets: each action answers with the new `State`, and the page 
 
 ## Layers
 
-The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `version`, and which batch follows (see [How the page learns of changes](#how-the-page-learns-of-changes)):
+The objects of the server; an arrow points from a caller to what it calls, and `Page.poll` compares the numbers named `revision`, and which batch follows (see [How the page learns of changes](#how-the-page-learns-of-changes)):
 
 ```mermaid
 flowchart TD
     browser["browser: app.js"]
     api["api: create_app, the timer"]
     pages["Pages: one lock, the pages open"]
-    runs["Runs: the listing of the files and its version, the Runs view"]
+    runs["Runs: the listing of the files and its revision, the Runs view"]
     last_step["LastStep: what Follow said"]
-    page["Page, one per batch: poll compares the versions"]
+    page["Page, one per batch: poll compares the revisions"]
     intake["Intake: following"]
-    manager["BatchManager: version"]
-    batch["Batch: version"]
+    manager["BatchManager: revision"]
+    batch["Batch: revision"]
     browser -->|HTTP| api
     api -->|"tick(), page(label), routes of the workspace"| pages
     api -->|routes of a batch| page
@@ -326,8 +326,8 @@ flowchart TD
 | `static/` | the page: `index.html`, `app.js`, `tables.js`, `form.js`; what is shown: selection, filter, view, tab, sort, axes |
 | `api.py` | HTTP: `create_app(pages)`; each action is a POST that answers with the new `State` (`models.py`), 422 `{message}`, or 404 for a label that is no batch; `serve(app, port=...)` runs it on localhost |
 | `pages.py` | `Pages`: what the pages share, without HTTP: the `Intake` and its manager, one lock around every request and step, the list of batches and its counts, making and removing a batch. It steps Follow (`tick`) |
-| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its version. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Runs` for the listing and `LastStep` for what to show of Follow |
-| `runs.py` | `Runs`: the listing of what the client lists, shared by every page, its version (`SafeListing.version`), and the Runs view with the corrections of runs |
+| `page.py` | `Page`: what the page of one batch does, without HTTP. It alone writes the settings form (a `Draft` until Apply), the refusals and its revision. Through the manager and the `Intake` it writes its batch: the rows (each change a frame put to the batch), the settings at Apply, its header, the rows taken, Follow's stop. It asks `Runs` for the listing and `LastStep` for what to show of Follow |
+| `runs.py` | `Runs`: the listing of what the client lists, shared by every page, its revision (`SafeListing.revision`), and the Runs view with the corrections of runs |
 | `last_step.py` | `LastStep`: what the last step of Follow said, for the page of the batch that follows |
 | `draft.py` | `Draft`: the settings form of a `Page`, a draft until Apply: what it holds, what it showed of the batch's settings, and the settings it could not show |
 | `view.py` | how what the batch layer gives reads on a page, as the models of `models.py`, and how a cell sent back reads: functions of their arguments only; one title per parameter (`titles`) |
@@ -348,8 +348,8 @@ sequenceDiagram
     page->>server: POST api/cells, an action, sent in the order of the queue
     server-->>page: the State after it, or 422 with a message
     loop 1 s after each answer
-        page->>server: GET api/state?after=version&start=start
-        alt nothing changed since version
+        page->>server: GET api/state?after=revision&start=start
+        alt nothing changed since revision
             server-->>page: 204
         else
             server-->>page: the State
@@ -364,12 +364,12 @@ sequenceDiagram
     server-->>page: the State of the other batch
 ```
 
-`version` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
-At each poll the server compares what the page saw at its last version with: `Batch.version` (the batch table and the template), the position of the listing in the workspace's records, `SafeListing.version` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.following` (the batch that follows), and what the page shows of the last step of Follow (`LastStep.token`). A record that changed since the listing's position is in the workspace's changes, which the poll reads too.
+`revision` counts each action, each step of Follow that changes what the page shows (the rows, the runs, the records, the refusals, or its failure), each change of the batch that follows, and each change of the workspace's records, such as a reduction that finished.
+At each poll the server compares what the page saw at its last revision with: `Batch.revision` (the batch table and the template), the position of the listing in the workspace's records, `SafeListing.revision` (the files listed and why they cannot be), `BatchManager.version` (the headers), `Intake.following` (the batch that follows), and what the page shows of the last step of Follow (`LastStep.token`). A record that changed since the listing's position is in the workspace's changes, which the poll reads too.
 `start` is new at each start of the server; a page that sees another one loads again.
-`State.runs` is `SafeListing.version`, the changes of the runs, which all pages share, and `null` if the application corrects no runs; the Runs view asks for `api/runs` when it moves.
+`State.runs` is `SafeListing.revision`, the changes of the runs, which all pages share, and `null` if the application corrects no runs; the Runs view asks for `api/runs` when it moves.
 The batches of each run come with the counts (`api/batches/counts`), every 2 s while the Runs view is shown, and not with `api/runs`: Follow adds rows that name runs without a change of the runs.
-`State.batches` lists the batches, so the version moves when the headers of the batches or the batch that follows change, whoever changed them; only a page that polls no state asks for `api/batches`.
+`State.batches` lists the batches, so the revision moves when the headers of the batches or the batch that follows change, whoever changed them; only a page that polls no state asks for `api/batches`.
 `api/batches`, `api/batches/counts`, `api/sources`, `api/runs` and the corrections of runs (`api/runs/cells`, `api/runs/cells/revert`) belong to the workspace: they answer the same under any label, and at `/api/...`.
 
 ## How the page asks
@@ -377,7 +377,7 @@ The batches of each run come with the counts (`api/batches/counts`), every 2 s w
 One function of `app.js` makes every request of the page, other than the poll.
 It answers the body, or shows the message of the failure (the server's `message` for a 422, "The server answered 500.", or that the server does not answer) and answers nothing.
 It also drops an answer when a newer request of the same kind was sent (`/api/row`, `/api/runs`, `/api/plot`), or when what it was for changed, such as a row that is no longer the only one selected.
-An older answer of the poll is dropped by its `version`.
+An older answer of the poll is dropped by its `revision`.
 An action is sent to the API of the batch shown when it was made, also if another batch is shown when its turn in the queue comes; the state it answers is then dropped, as is a state of the poll of the batch before. A change of batch also drops the answers on their way of each kind, such as `api/plot`, so that nothing of the batch before is drawn.
 Every request that depends on the actions before it waits in one queue (`queued` in `app.js`), so that the server gets them in the order a person did them and each acts on what the ones before left:
 
