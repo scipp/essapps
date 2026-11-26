@@ -324,7 +324,7 @@ class Intake:
             raise ValueError(f'{label} was not made from a row source')
         return made
 
-    def source(self, label: str) -> str | None:
+    def row_source(self, label: str) -> str | None:
         """
         The name of the source that the batch of ``label`` was made from,
         ``None`` if it was made without one. Raises ``KeyError`` if no batch

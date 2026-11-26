@@ -2475,7 +2475,7 @@ def test_a_batch_made_from_a_table_file_has_its_rows_and_columns_and_no_source(
     batch = manager.batch(made['label'])
     assert batch.parameter_columns == ('sample', 'transmission')
     assert list(batch.table().index) == ['a', 'b']
-    assert intake.source(made['label']) is None
+    assert intake.row_source(made['label']) is None
     assert manager.headers()[made['label']].title == 'From a file'
 
 

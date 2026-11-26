@@ -499,7 +499,7 @@ def _batches(given: _Context) -> pd.DataFrame:
                 'spec': batch.spec.name,
                 'rows': len(states),
                 'reduced': sum(s.record_status is Status.COMPLETED for s in states),
-                'source': intake.source(label),
+                'source': intake.row_source(label),
             }
         except ValueError as error:
             sys.stderr.write(f'{label}: {error}\n')

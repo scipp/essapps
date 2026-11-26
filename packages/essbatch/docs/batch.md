@@ -516,7 +516,7 @@ intake.marked('sample-runs', Range(first='60339'))
                                          # rows_of, with columns incomplete and taken
 intake.create(..., choose=Range(later=True), follow=True)
                                          # no row now: Follow adds the rows that arrive later
-intake.source(batch.label)               # 'sample-runs'; None for a batch made without a source: it cannot follow
+intake.row_source(batch.label)               # 'sample-runs'; None for a batch made without a source: it cannot follow
 ```
 
 `intake.create` takes the rows from the source, in one listing, then makes the batch with the manager:

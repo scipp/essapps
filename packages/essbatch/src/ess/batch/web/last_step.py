@@ -79,7 +79,7 @@ class LastStep:
         step = self._step(label)
         return Following(
             on=on,
-            row_source=self._intake.source(label),
+            row_source=self._intake.row_source(label),
             interval=self._interval,
             failure=self.failure if on else None,
             incomplete=0 if step is None else len(step.incomplete),

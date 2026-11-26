@@ -63,7 +63,7 @@ def test_a_batch_made_from_a_source_takes_and_sees_its_complete_rows(
     kept = SOURCE.load(definitions, 'a')
 
     assert list(made.manager.batch('a').table().index) == ['3', '4', 'mine']
-    assert made.source('a') == 'pairs'
+    assert made.row_source('a') == 'pairs'
     assert kept.seen_keys == {'1', '2', '3', '4'}  # not 5, which is incomplete
 
 
@@ -85,7 +85,7 @@ def test_a_source_json_with_fills_is_refused_when_read(
     definitions.save(SOURCE.key('a'), {**kept, 'fills': ['sample']})
 
     with pytest.raises(ValueError, match=r'source\.json: fills: Unexpected'):
-        _again(client, definitions).source('a')
+        _again(client, definitions).row_source('a')
 
 
 def test_choose_may_give_columns_that_the_source_does_not(
@@ -204,7 +204,7 @@ def test_a_row_that_waits_when_a_batch_is_made_is_added_by_follow_once_complete(
 def test_a_batch_made_without_a_source_has_none(intake: Intake) -> None:
     intake.manager.create('plain', title='A', label='a')
 
-    assert intake.source('a') is None
+    assert intake.row_source('a') is None
 
 
 def _not_registered(name: str, registered: str) -> str:
@@ -239,7 +239,7 @@ def test_a_row_chosen_that_the_source_does_not_give_is_refused_and_nothing_is_ke
 @pytest.mark.parametrize(
     'call',
     [
-        lambda i: i.source('b'),
+        lambda i: i.row_source('b'),
         lambda i: i.available_rows('b'),
         lambda i: i.add_rows('b', []),
         lambda i: i.follow('b'),
@@ -518,9 +518,9 @@ def test_a_source_json_that_cannot_be_read_hides_neither_follow_nor_other_batche
     again = _again(client, definitions)
 
     assert again.following == 'c'
-    assert again.source('b') == 'pairs'
+    assert again.row_source('b') == 'pairs'
     with pytest.raises(ValueError, match=r'source\.json: seen_keys: '):
-        again.source('a')
+        again.row_source('a')
 
 
 def test_a_batch_made_to_follow_ends_follow_on_the_one_before_then_writes_its_own(
