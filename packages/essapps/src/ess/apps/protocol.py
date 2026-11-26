@@ -419,9 +419,9 @@ class WorkspaceProtocol(Protocol):
 
         The state is the logged state once no other freeze of the accumulator
         is being checked. A push that waited for that check may be logged
-        first. The record's outputs are the driver's, not a copy. The workspace holds
-        them, or with ``persist`` the store does. ``submitter`` and ``persist``
-        are as for :meth:`submit`.
+        first. The record's outputs are the driver's, not a copy. The workspace
+        holds them, or with ``persist`` the store does. ``submitter`` and
+        ``persist`` are as for :meth:`submit`.
 
         The accumulator accepts no more pushes. Once the record has completed,
         the accumulator is read through it. If the record fails or is
