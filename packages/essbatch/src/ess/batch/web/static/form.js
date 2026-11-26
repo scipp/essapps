@@ -1,15 +1,15 @@
-// A form from the nodes that the server sends (see forms.py): one section per
-// parameter, the fields of a group in rows, a choice as a row of buttons.
-// Each change is sent as {path, op, value} through `edit`; the server answers
-// with the form again, which replaces this one.
+// A form from the nodes that the server sends (see forms.py). Each change
+// goes to `edit` as {path, op, value}, and the server returns the whole form,
+// which replaces this one.
 import {h} from './dom.js';
 
-// Each new form replaces this one, with the focus given back by path, but it
-// waits while the focused input holds a value typed and not sent, so that the
-// caret stays and no half-typed value is sent, and while an edit is on its
-// way, since its answer is newer. A form that waits is drawn once neither
-// holds, never dropped. `edit` returns a promise of the answer drawn.
-// `action(node)` gives what the heading of a parameter offers, if anything.
+// A new form replaces the one shown, and the focus returns to the input of the
+// same path. The new form waits while the focused input holds a typed value
+// not yet sent, so that the caret stays and no half-typed value is sent. It
+// also waits while an edit is in flight, since the response to that edit is
+// newer. A waiting form is drawn once neither holds; it is never dropped.
+// `edit` returns a promise that settles once its response is drawn.
+// `action(node)` returns an element for the heading of a parameter, or null.
 export function renderForm(container, nodes, edit, action = () => null) {
   container.onfocusout ??= (event) => drawWaiting(container, event.relatedTarget);
   const json = JSON.stringify(nodes);
@@ -17,7 +17,7 @@ export function renderForm(container, nodes, edit, action = () => null) {
     container.given = json;
     container.sending ??= 0;
     const send = (change) => {
-      container.given = null; // the answer is drawn even if it equals this form
+      container.given = null; // draw the response even if it equals this form
       container.sending += 1;
       Promise.resolve(edit(change)).finally(() => {
         container.sending -= 1;
@@ -34,8 +34,8 @@ export function renderForm(container, nodes, edit, action = () => null) {
   drawWaiting(container);
 }
 
-// Draw the form that waits, if one does and may, and give the focus back to
-// `focused`.
+// Draws the waiting form, if there is one and nothing holds it, and returns
+// the focus to `focused`.
 function drawWaiting(container, focused = document.activeElement) {
   const active = document.activeElement;
   const typed = container.contains(active) && active.drawn !== undefined && active.value !== active.drawn;
@@ -64,7 +64,6 @@ function body(node, edit) {
   }
 }
 
-// A field of a group: a labelled row, or a box of its own fields.
 function field(node, edit) {
   if (node.kind === 'input' || node.kind === 'scalars') {
     const input = node.kind === 'input' ? control(node, edit) : scalars(node, edit);
@@ -104,8 +103,9 @@ function alternatives(node, edit) {
 
 const isSwitch = (node) => node.options.length === 2 && node.options.join() === 'True,False';
 
-// The input of one value. Enter or leaving the input sends it, if it differs
-// from the value drawn or sent last (`drawn`); Escape puts that value back.
+// A text or number input sends its value on `change` (Enter or leaving), if
+// it differs from `drawn`, the value drawn or sent last. Escape restores
+// `drawn`.
 function control(node, edit) {
   const path = JSON.stringify(node.path);
   const props = {id: `f-${path}`, 'data-path': path, 'aria-invalid': node.problem ? 'true' : null};
@@ -166,8 +166,8 @@ function rowCount(node) {
   return first ? first.length : 0;
 }
 
-// The form as text, for what a result was reduced with: a line per parameter.
-// `differs` names the parameters to mark.
+// The form as text, a line per parameter, such as what a result was reduced
+// with. `differs` lists the parameters to mark.
 export function summary(nodes, differs = []) {
   return h(
     'dl',
@@ -179,7 +179,7 @@ export function summary(nodes, differs = []) {
   );
 }
 
-// A field with its label: "From 2 Å" for a label "From (Å)" and 2.
+// "From 2 Å" for the label "From (Å)" and the value 2.
 function labelled(node) {
   const [, label, unit] = node.label.match(/^(.*) \((.+)\)$/) ?? [null, node.label, ''];
   return [label, text(node), unit].filter(Boolean).join(' ');

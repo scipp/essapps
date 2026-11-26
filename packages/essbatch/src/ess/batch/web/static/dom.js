@@ -1,8 +1,9 @@
-// The one element helper, and the calls of the API.
+// The element helper `h`, and the calls of the API.
 
-// h('button', {class: 'primary', onclick: f}, 'Reduce') makes an element.
-// A prop that starts with "on" is an event handler, `class` and `text` set
-// those, and any other prop is an attribute, left out if false or null.
+// h('button', {class: 'primary', onclick: f}, 'Reduce') returns a button.
+// A prop that starts with "on" adds an event handler. `class` and `text` set
+// the class and the text. Any other prop sets an attribute, omitted if false
+// or null.
 export function h(tag, props = {}, ...children) {
   const el = document.createElement(tag);
   for (const [name, value] of Object.entries(props)) {
@@ -16,9 +17,10 @@ export function h(tag, props = {}, ...children) {
   return el;
 }
 
-// Each call returns {ok, status, body}; a refusal (422) is not thrown. A file
-// is sent as it is, anything else as JSON. `path` is relative to the API, which
-// is next to the page at `page`, so that the page works under any prefix.
+// Each call returns {ok, status, body} and does not throw on an error status.
+// A file is sent as raw bytes, anything else as JSON. `path` is relative to
+// the API next to the page at `page`, so that the page works under any URL
+// prefix.
 async function call(method, path, body, page) {
   const init = {method, headers: {}};
   if (body !== undefined) {
@@ -46,7 +48,6 @@ export function query(params) {
   return search.toString();
 }
 
-// Save a blob as a file of the browser's downloads.
 export function save(blob, name) {
   const url = URL.createObjectURL(blob);
   h('a', {href: url, download: name}).click();

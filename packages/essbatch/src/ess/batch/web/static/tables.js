@@ -1,25 +1,21 @@
-// A table of rows by `key`, on Tabulator. The boxes at the left select rows,
-// and nothing else does. A click on a cell that can be edited edits it: the
-// editor opens at what the cell holds, Enter or leaving writes, Escape, a
-// value left as it was or an empty cell left empty writes nothing, Tab writes
-// and goes on. An edit of a
-// row that is selected along with others writes that cell to every row
-// selected.
+// A table of rows by `key`, on Tabulator. Only the boxes at the left select
+// rows. A click on an editable cell opens its editor (see `cellEditor`). An
+// edit of a row that is selected along with others writes the value to every
+// selected row.
 import {TabulatorFull as Tabulator, EditModule, TooltipModule} from './vendor/tabulator_esm.min.js';
 import {h} from './dom.js';
 
-// Tabulator's virtual renderer scrolls the row of a cell whose editor opens
-// whole into view, even if it shows nearly all: the edit module's
-// `focusScrollAdjust` does that. The editor scrolls itself instead, and only
-// if less than half of the row shows (see `cellEditor`).
+// Tabulator's edit module (`focusScrollAdjust`) scrolls the whole row of an
+// opened editor into view, even if nearly all of it shows. The editor scrolls
+// itself instead, only if less than half of the row shows (see `cellEditor`).
 class Edit extends EditModule {
   focusScrollAdjust() {}
 }
 Tabulator.registerModule(Edit);
 
-// Tabulator sets a tooltip given as a string as HTML. Every tooltip, of a
-// cell or of a header, is made through `loadTooltip`, so there a string
-// becomes an element that holds it as text.
+// Tabulator inserts a tooltip string as HTML. Every tooltip, of a cell or of a
+// header, passes through `loadTooltip`, so here a string becomes an element
+// that holds it as text.
 class Tooltip extends TooltipModule {
   loadTooltip(event, target, tip) {
     const make = typeof tip === 'function' ? tip : () => tip;
@@ -33,23 +29,20 @@ Tabulator.registerModule(Tooltip);
 
 const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
-// What an empty cell stands for, in words: the setting of the batch, or the
-// default of the parameter, as the server sends it.
 const empty = (column) => (column.default ? `empty: ${column.default}` : 'empty');
 
-// The options of a pick that hold `text`, ignoring case; all for no text.
 const matching = (options, text) =>
   options.filter((o) => o.toLowerCase().includes(text.trim().toLowerCase()));
 
-// A list of options under an editor of a pick: what is marked is what the
-// editor writes. Typing filters it and marks the first option left.
+// The list of options under the editor of a pick. The editor writes the
+// marked option. Typing filters the list and marks the first option left.
 class Choices {
   constructor(options, at, pick) {
     this.options = options;
     this.shown = options;
     this.marked = -1;
     this.element = h('ul', {class: 'choices', role: 'listbox'});
-    // A press in the list must not take the focus from the editor.
+    // Keep the focus in the editor: a blur would close it.
     this.element.addEventListener('mousedown', (event) => event.preventDefault());
     const box = at.getBoundingClientRect();
     const below = window.innerHeight - box.bottom > 200 || box.top < 200;
@@ -62,7 +55,8 @@ class Choices {
     document.body.append(this.element);
   }
 
-  // Show the options that hold `text`, or all marking `current`.
+  // With `current`, shows all options and marks `current`. Without, shows
+  // those that contain `text`.
   show(text, current) {
     this.shown = current === undefined ? matching(this.options, text) : this.options;
     this.marked = current === undefined ? (text.trim() && this.shown.length ? 0 : -1) : this.shown.indexOf(current);
@@ -91,11 +85,11 @@ class Choices {
   }
 }
 
-// The editor of a cell, as an input that opens at what the cell holds, all
-// of it selected so that typing replaces it. Enter, Tab or leaving writes;
-// Escape, text left as it was, or an empty cell left empty writes nothing.
-// A pick shows its options below, as `options()` gives them when the editor
-// opens. `say` tells why a value is not taken.
+// The editor of a cell: a text input that opens at the value of the cell, all
+// selected, so that typing replaces it. Enter, Tab or leaving writes. Escape,
+// unchanged text, or an empty cell left empty writes nothing. A pick lists
+// what `options()` returns when the editor opens. `say` shows why a value is
+// not written.
 function cellEditor(column, options, say) {
   const {type} = column.editor;
   return (cell, onRendered, success, cancel) => {
@@ -137,7 +131,6 @@ function cellEditor(column, options, say) {
         choices = new Choices(options(), cell.getElement(), (o) => close(true, o));
         choices.show('', held.value);
       }
-      // A row edited scrolls into view only if less than half of it shows.
       const row = cell.getRow().getElement().getBoundingClientRect();
       const view = cell.getTable().element.querySelector('.tabulator-tableholder').getBoundingClientRect();
       const shown = Math.min(row.bottom, view.bottom) - Math.max(row.top, view.top);
@@ -154,7 +147,8 @@ function cellEditor(column, options, say) {
         choices.move(event.key === 'ArrowDown' ? 1 : -1);
       }
     });
-    // Tab is left to the table, which opens the next cell and so ends this.
+    // Tab is left to the table: it opens the next cell, and the blur closes
+    // this editor.
     input.addEventListener('blur', () => close(true));
     return input;
   };
@@ -165,9 +159,8 @@ const editorOf = (column, options, say) =>
     ? {editor: cellEditor(column, options, say)}
     : {editable: false};
 
-// What a cell shows: its text, or what empty stands for in grey; marked where
-// it is why the row cannot be reduced, or, given `revert`, where it was set by
-// hand, with a button back to what it was.
+// With `revert`, a cell set by hand gets a button that restores its earlier
+// value.
 function cellFormatter(column, revert) {
   return (cell) => {
     const data = cell.getData();
@@ -210,11 +203,11 @@ function cellTooltip(column) {
   };
 }
 
-// A column for each cell, given {name, title, editor, default} as the server
-// sends them. `current()` gives the columns of the state shown, whose options
-// an editor offers. `revert(key, name)`, if given, takes a cell set by hand
-// back. `menu(column)`, if given, gives the items of the menu of its header,
-// as Tabulator's `headerMenu` takes them.
+// Tabulator columns for the columns {name, title, editor, default} that the
+// server sends. `current()` returns the columns of the state shown, whose
+// options an editor lists. `revert(key, name)`, if given, restores a cell set
+// by hand. `menu(column)`, if given, returns the items of the header menu, in
+// the form of Tabulator's `headerMenu`.
 export function cellColumns(columns, {current, revert, say, menu}) {
   const options = (column) => () => current().find((c) => c.name === column.name).editor.options;
   return columns.map((column) => ({
@@ -232,18 +225,18 @@ export function cellColumns(columns, {current, revert, say, menu}) {
 }
 
 export class Grid {
-  // `columns` are Tabulator's; `edits` maps the field of each editable
-  // column to its column as the server sends it. Where `edit` answers false,
-  // or a promise of false, the cell shows its value before again.
+  // `columns` are Tabulator columns. `edits` maps the field of each editable
+  // column to the column as the server sends it. If `edit` returns false, or
+  // a promise of false, the cell shows its earlier value again.
   constructor(element, {columns, edits, edit, select, sorted, placeholder}) {
     this.element = element;
     this.edits = edits;
     this.onSelect = select;
     this.shown = [];
-    this.json = new Map(); // each row as last shown
+    this.json = new Map(); // each row as last drawn, as JSON
     this.pending = null;
     this.quiet = false;
-    this.empty = h('div', {class: 'empty', text: placeholder}); // what a grid without rows says
+    this.empty = h('div', {class: 'empty', text: placeholder}); // a caller may change its text
     this.table = new Tabulator(element, {
       index: 'key',
       height: '100%',
@@ -282,16 +275,15 @@ export class Grid {
     this.table.on('cellEditCancelled', () => this.closed());
   }
 
-  // Show other columns, as the constructor takes them.
   async setColumns(columns, edits) {
     await this.built;
     this.edits = edits;
     this.table.setColumns(columns);
   }
 
-  // Space below the last row, so that the rows scroll by whole rows to
-  // the end, where the top row then shows whole. A margin, since the
-  // renderer sets the padding to stand for the rows it does not draw.
+  // Space below the last row, so that the rows scroll by whole rows and the
+  // top row shows whole at the end. A margin, since the renderer sets the
+  // padding itself, to stand for the rows it does not draw.
   fit() {
     const holder = this.table.rowManager.element;
     const rows = holder.querySelector('.tabulator-table');
@@ -305,7 +297,6 @@ export class Grid {
     return this.table.getSelectedData().map((row) => row.key);
   }
 
-  // Tell `select` the keys selected, if they changed.
   announce() {
     const keys = this.selected();
     if (sameSet(keys, this.shown)) return;
@@ -321,27 +312,29 @@ export class Grid {
     setTimeout(() => this.pending && this.update(...this.pending));
   }
 
-  // Show `rows`, keeping the selection, but not while a cell is edited. With
-  // `start`, {selected, filter, sort}, the rows are those of another table,
-  // such as another batch: they replace those shown, from the top, with the
-  // selection, the status filter and the sort of `start`.
+  // Shows `rows` and keeps the selection. While a cell is edited, the rows
+  // wait until the editor closes. `start`, {selected, filter, sort}, is for
+  // the rows of another table, such as another batch: they replace the rows
+  // shown, from the top, with the selection, status filter and sort of
+  // `start`.
   update(rows, start) {
     this.updated = this.draw(rows, start);
     return this.updated;
   }
 
-  // Scroll to the row of `key`, once shown, if the filter shows it.
+  // Scrolls to the row of `key` once it is drawn, unless the filter hides it.
   async reveal(key) {
     await this.updated;
     await this.table.scrollToRow(key, 'nearest', false).catch(() => {});
   }
 
-  // Remove the rows gone, update those changed, and add the new ones where
-  // they stand in `rows`; the others are not drawn again. Then the filter and
-  // the sort are applied again, which these calls do not do. The table is
-  // replaced instead if it has no rows yet, where adding takes quadratic time,
-  // or if the rows kept changed order. While a cell is edited, the rows wait,
-  // with the `start` of any rows that waited before them.
+  // Removes the rows gone, updates those changed, and adds the new ones at
+  // their place in `rows`. Other rows are not drawn again. These Tabulator
+  // calls do not filter or sort, so the filter and sort are applied again
+  // after them. The table is replaced instead if it has no rows yet, where
+  // adding takes quadratic time, or if the remaining rows changed order. While
+  // a cell is edited, the rows wait in `pending`, with the `start` of any rows
+  // that waited before them.
   async draw(rows, start) {
     await this.built;
     this.pending = [rows, start ?? this.pending?.[1]];
@@ -393,9 +386,9 @@ export class Grid {
     this.announce();
   }
 
-  // Run `work`, which may draw rows again, and give the keyboard focus back to
-  // the control it was on in a cell: the first of its tag in the cell at the
-  // same place in the row of the same key.
+  // Runs `work`, which may draw rows again, and returns the keyboard focus to
+  // the control it was on in a cell: the first element of its tag in the cell
+  // at the same position in the row of the same key.
   async keepFocus(work) {
     const active = document.activeElement;
     const cell = active.closest?.('.tabulator-cell');
@@ -409,7 +402,6 @@ export class Grid {
     again?.querySelector(active.tagName)?.focus({preventScroll: true});
   }
 
-  // Show only the rows of `status`, and select none that is hidden.
   async filter(status) {
     await this.built;
     this.setFilter(status);
@@ -428,13 +420,11 @@ export class Grid {
   }
 }
 
-// The CSS class of a status: a status text may hold a space.
+// A status may contain a space, as in "settings changed".
 export const statusClass = (status) => `st-${status.replaceAll(' ', '-')}`;
 
 const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'settings changed', 'done'];
 
-// The status of a row as a pill, with the settings that changed beside it if
-// its result was reduced with settings that changed since; the tooltip says why.
 export const statusColumn = {
   title: 'Status',
   field: 'status',
