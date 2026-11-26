@@ -128,6 +128,31 @@ def test_path_refuses_a_dataset_without_one_nexus_file(
         files.path(ref)
 
 
+def test_a_file_source_given_a_login_logs_in_once_at_its_first_query(
+    catalogue: Catalogue,
+) -> None:
+    logins: list[Catalogue] = []
+
+    def login() -> Catalogue:
+        logins.append(catalogue)
+        return catalogue
+
+    files = ScicatFiles(login, PROPOSAL, max_age=0)
+    made = len(logins)
+    files.list(Selector())
+    files.list(Selector())
+
+    assert (made, len(logins)) == (0, 1)
+
+
+def test_a_login_that_fails_raises_oserror() -> None:
+    def login() -> Catalogue:
+        raise ScicatCommError('no token')
+
+    with pytest.raises(OSError, match='no token'):
+        ScicatFiles(login, PROPOSAL).list(Selector())
+
+
 def test_a_catalogue_that_does_not_answer_raises_oserror(
     catalogue: Catalogue,
 ) -> None:

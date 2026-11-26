@@ -40,6 +40,7 @@ import hashlib
 import json
 import os
 from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from io import FileIO
 from pathlib import Path
@@ -255,6 +256,18 @@ def _hold(path: Path) -> FileIO:
             f'{path} is held by another process, or by another log of this one'
         ) from None
     return file
+
+
+@contextmanager
+def hold(path: Path) -> Iterator[None]:
+    """
+    Lock the log file ``path`` as a :class:`Log` does, without reading it.
+
+    Raises ``RuntimeError`` if a log or another hold has it. Makes the file if
+    there is none.
+    """
+    with _hold(path):
+        yield
 
 
 def _append_line(file: FileIO, line: bytes) -> None:

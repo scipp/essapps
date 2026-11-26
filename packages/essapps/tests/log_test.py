@@ -39,6 +39,7 @@ from ess.apps.log import (
     Pushed,
     Started,
     Submitted,
+    hold,
 )
 from ess.apps.testing import FakeFiles, StagedFunction, list_driver, read_file
 from ess.apps.workspace import installed_software
@@ -727,6 +728,18 @@ def test_a_log_file_has_one_writer(tmp_path: Path) -> None:
     with Log(path), pytest.raises(RuntimeError, match='held by another process'):
         Log(path)
     Log(path).close()  # free once the first has let go
+
+
+def test_a_hold_and_a_log_exclude_each_other_and_a_hold_reads_nothing(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'log'
+    path.write_text('not a log')
+    with hold(path), pytest.raises(RuntimeError, match='held by another process'):
+        Log(path)
+    with Log(tmp_path / 'other'), pytest.raises(RuntimeError, match='held by'):
+        with hold(tmp_path / 'other'):
+            pass
 
 
 @pytest.mark.parametrize('kind', ['submitted', 'opened'])

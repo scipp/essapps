@@ -6,14 +6,13 @@ LoKI's catalogues for the option ``-c`` of ``essbatch``. It needs the extra
 
     essbatch -c ess.instruments.loki.scicat:staging files --proposal 336349
 
-Each catalogue logs in to SciCat by single sign-on, once per command. The login
-opens a browser on this machine. With ``SCITACEAN_OAUTH_FLOW=device``, it prints
-a URL to open on any machine.
+Each catalogue logs in to SciCat by single sign-on, with
+:func:`ess.apps.scicat.login`: once per profile and process, shared with a file
+source of the same profile. The login opens a browser on this machine. With
+``SCITACEAN_OAUTH_FLOW=device``, it prints a URL to open on any machine.
 """
 
-import scitacean
-
-from ess.apps.scicat import Catalogue
+from ess.apps.scicat import Catalogue, login
 
 
 def staging(proposal: str) -> Catalogue:
@@ -27,4 +26,4 @@ def production(proposal: str) -> Catalogue:
 
 
 def _logged_in(profile: str) -> Catalogue:
-    return Catalogue(client=scitacean.Client.login(profile), instrument='loki')
+    return Catalogue(client=login(profile), instrument='loki')
