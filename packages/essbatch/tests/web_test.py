@@ -2934,7 +2934,14 @@ def test_a_page_handed_out_before_the_pages_closed_is_rejected(
 
     pages.close()
 
-    for request in (page.relist, lambda: pages.remove('scan'), pages.batches):
+    requests = [
+        page.relist,
+        lambda: page.clear([]),
+        lambda: pages.remove('scan'),
+        pages.clear,
+        pages.batches,
+    ]
+    for request in requests:
         with pytest.raises(Rejected, match='The workspace is closed'):
             request()
 
