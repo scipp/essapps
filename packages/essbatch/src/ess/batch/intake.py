@@ -1,38 +1,29 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Rows of a row source into a batch: :class:`Intake` makes a batch from a
-source, adds rows of its source by hand (:meth:`Intake.take`), and keeps
-which batch follows and steps it. All three write ``considered``. The guide
-is the section "Follow" of ``packages/essbatch/docs/batch.md``; the decision
-is ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
+Rows of a row source into a batch, and which batch follows.
 
-``Intake`` makes and reads the batches through its
-:class:`~.manager.BatchManager`, and writes one entry of the definitions
-(:mod:`.definition`) for each batch made from a source::
+:class:`Intake` keeps one entry of the definitions (:mod:`.definition`) for
+each batch made from a source::
 
     source      the source, the keys considered, and whether the batch follows
 
-Whether a batch follows is kept with its label, so a removal through the
-manager, which deletes every entry of the label, ends Follow, and a batch
-made again with the label does not follow unless made so.
-:meth:`Intake.create` makes the batch with the manager, which writes its
-settings, rows and header; with ``follow``, it then ends Follow on the batch
-that followed; then it writes ``source``. :meth:`Intake.follow` ends
-Follow on the batch that followed, then writes that its batch follows. So no
-two batches follow, also when a process stops in between. A batch follows
-from the time it is made with ``follow`` or :meth:`Intake.follow` is called,
-until :meth:`Intake.stop`, its removal, or another batch that starts to
-follow. :meth:`Intake.step` is one step of Follow on the batch that
-follows::
+:meth:`Intake.step` is one step of Follow on the batch that follows::
 
     made = SOURCE.load(definitions, label)                   # source.json
-    done = step(batch(label), sources[made.source], made.considered)  # put, reduce
-    source.json = replace(made, considered=done.considered)  # after rows.json;
+    done = step(batch(label), sources[made.source], made.considered)
+    source.json = replace(made, considered=done.considered)  # after rows.json
     # if the step raised: made.considered | the keys of the batch table
 
-Whoever serves owns the timer that calls it, and the lock. ``Intake`` has
-neither.
+A process that stops between ``rows.json`` and ``source.json`` leaves rows
+whose keys are not considered yet. The next step considers them: it
+considers every key of the source that the batch table has. The order of the
+writes of :meth:`Intake.create` and :meth:`Intake.follow` is in the guide,
+"What is kept on disk". ``Intake`` has no timer and no lock: whoever serves
+owns both.
+
+Guide: ``packages/essbatch/docs/batch.md``, "From a row source" and "Follow".
+Decision: ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
 """
 
 from __future__ import annotations
@@ -59,8 +50,7 @@ def fits(spec: WorkflowSpec[Any, Any], source: RowSource | None) -> bool:
     """
     Whether a batch of ``spec`` can be made with ``source``: whether each
     parameter that the source fills is a parameter of the spec. With no
-    source, every spec fits. :meth:`Intake.create` refuses a spec that does
-    not fit; the page offers only those that fit.
+    source, every spec fits.
     """
     return not _lacked(spec, source)
 
@@ -87,10 +77,7 @@ def step_failure(error: Exception) -> str:
 
 
 def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
-    """
-    Raise ``ValueError`` unless ``chosen`` is a frame whose keys are keys of
-    ``arrived``. Its columns are the person's to choose.
-    """
+    """Raise ``ValueError`` unless ``chosen`` is a frame of keys of ``arrived``."""
     if not isinstance(chosen, pd.DataFrame):
         raise ValueError(f'choose gives a {type(chosen).__name__}, not a frame')
     if rows := [k for k in chosen.index if k not in arrived.index]:
@@ -99,16 +86,8 @@ def _check_chosen(chosen: pd.DataFrame, arrived: pd.DataFrame) -> None:
 
 class Intake:
     """
-    Brings the rows of row sources into the batches of ``manager``: makes a
-    batch from a source, offers and takes the rows that its batch table lacks, and
-    keeps which batch follows. See ``packages/essbatch/docs/batch.md``.
-
-    Refusals are as those of :class:`~.manager.BatchManager`: ``ValueError``
-    for what is asked, such as a source that is not registered,
-    ``KeyError`` for a label that no batch has, and
-    :class:`~.definition.NotKept` for a write that the definitions refuse.
-    Anything else is an error of the code of the application, such as a
-    source that raises.
+    Brings the rows of row sources into the batches of ``manager``, and keeps
+    which batch follows. It raises as ``batch.md``, "Invariants", says.
 
     Parameters
     ----------
@@ -129,11 +108,9 @@ class Intake:
     @property
     def following(self) -> str | None:
         """
-        The label of the batch whose ``source.json`` says that it follows,
-        ``None`` if none does. It is read from the definitions at the first
-        call and whenever :attr:`.manager.BatchManager.version` moved since.
-        If several say so, which no call of ``Intake`` makes, it is the first
-        in the order of :meth:`~.manager.BatchManager.headers`.
+        The label of the batch that follows, ``None`` if none does. It is read
+        from the definitions again only when
+        :attr:`.manager.BatchManager.version` moved.
         """
         version = self.manager.version
         if self._read is None or self._read[0] != version:
@@ -141,11 +118,7 @@ class Intake:
         return self._read[1]
 
     def _kept_following(self) -> str | None:
-        """
-        The first label whose ``source.json`` says that its batch follows. A
-        ``source.json`` that cannot be read is passed over: :meth:`source`
-        says why at the page of its batch, and the other pages still work.
-        """
+        """The first label whose readable ``source.json`` says that it follows."""
         for label in self.manager.headers():
             try:
                 made = self._from(label)
@@ -165,10 +138,7 @@ class Intake:
         SOURCE.save(self.manager.definitions, label, made)
 
     def stop(self) -> None:
-        """
-        End Follow: no batch follows from then on, until :meth:`follow` or
-        :meth:`create` with ``follow``. Nothing is done if no batch follows.
-        """
+        """End Follow. Nothing is done if no batch follows."""
         if (label := self.following) is None:
             return
         self._write_follows(label, False)
@@ -176,23 +146,13 @@ class Intake:
 
     def follow(self, label: str) -> None:
         """
-        Let the batch of ``label`` follow from then on, in place of the batch
-        that follows now. Nothing is done if it follows already.
-
-        Its first step adds every row of its source that is filled and that
-        the batch has not considered, also a row that arrived while it did
-        not follow and a row that another batch took meanwhile. A row left
-        out when the batch was made, or removed by a person, is considered
-        and stays out.
-
-        ``source.json`` of the batch that follows now is written to say that
-        it follows no more, then that of ``label`` to say that it follows. A
-        process that stops in between leaves no batch that follows. If the
-        definitions refuse the second write, the batch that followed is
-        written to follow again.
+        Let the batch of ``label`` follow, in place of the batch that follows
+        now. Nothing is done if it follows already.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source or its source is not registered.
+        Raises :class:`~.definition.NotKept` if the definitions refuse a
+        write; the batch that followed then follows again.
         """
         self._source(self._made(label).source)
         if (before := self.following) == label:
@@ -204,7 +164,9 @@ class Intake:
         """
         End Follow on the batch of ``before``, if given, then call ``write``,
         which writes the ``source.json`` of the batch that follows in its
-        place. If the definitions refuse either, ``before`` follows again.
+        place. In this order no two batches follow, also if the process stops
+        in between. If the definitions refuse either write, ``before`` is
+        written to follow again.
         """
         ended = None  # the batch whose Follow was ended, to follow again
         try:
@@ -219,10 +181,7 @@ class Intake:
             raise
 
     def _source(self, name: str) -> RowSource:
-        """
-        The source registered as ``name``; ``ValueError`` if none is, naming
-        those that are.
-        """
+        """The source registered as ``name``; ``ValueError`` if none is."""
         if name not in self.sources:
             raise ValueError(not_registered(name, self.sources))
         return self.sources[name]
@@ -269,58 +228,33 @@ class Intake:
         label: str | None = None,
     ) -> Batch:
         """
-        Make a batch from ``source`` with the manager
-        (:meth:`~.manager.BatchManager.create`) and keep what it considered;
-        its ``Batch``. Nothing is written if a check fails.
-
-        The source is listed once, and the rows that are filled
-        (:func:`~.source.filled`) are taken and considered::
+        Make a batch from the rows of ``source`` with the manager
+        (:meth:`~.manager.BatchManager.create`), and keep what it considered;
+        its ``Batch``. The source is listed once::
 
             given = rows_of(client, source)
             arrived = given[filled]          # a value in each of source.fills
             rows = arrived if choose is None else choose(arrived)
             considered = arrived.index       # the rows taken and those left out
 
-        A row that waits is neither taken nor considered: Follow adds it once
-        it is filled, if the batch follows. The batch keeps ``source.fills``
-        (:attr:`.reduction.Batch.fills`): its batch table keeps a column for each,
-        an empty cell there means that the row waits for its file, and the
-        settings given are left out there.
-
         The label, the spec, the source and whether the spec fits it are
-        checked before the source is listed. The manager writes the settings,
-        the rows and the header; then, with ``follow``, the ``source.json`` of
-        the batch that followed says that it follows no more; then the
-        ``source.json`` of the batch is written.
-        If the definitions refuse one of these writes, the batch that
-        followed is written to follow again, if its Follow was ended, and the
-        batch is removed again (:meth:`~.manager.BatchManager.remove`). A process
-        that stops between the header and the batch's ``source.json`` leaves
-        a batch made without a source, which neither offers rows nor
-        follows, and no batch that follows.
+        checked before the source is listed. Nothing is written if a check
+        fails. The order of the writes: ``batch.md``, "What is kept on disk".
 
         Parameters
         ----------
         spec, title, parameter_columns, description, settings, label:
             As :meth:`~.manager.BatchManager.create` takes them.
         source:
-            The name of a registered source to take the rows from. The batch
-            keeps it, to offer the rows that its batch table lacks and to follow.
+            The name of a registered source.
         choose:
-            Makes the batch table from the rows of the source that are
-            filled: some of its rows, with any columns, such as
-            ``lambda given: given[given.run >= 60339].assign(thickness=pd.NA)``,
-            or a range of them as a person picks it, such as
-            ``Range(first='60339')`` (:class:`~.source.Range`). All of them,
-            as they are, if not given.
+            Makes the batch table from ``arrived``: a function that gives some
+            of its rows, with any columns, such as
+            ``lambda arrived: arrived[arrived.run >= 60339]``, or a
+            :class:`~.source.Range`. All of ``arrived`` if not given.
         follow:
-            Whether the batch follows its source from the time it is made, in
-            place of the batch that followed before. A batch made without
-            ``follow`` follows only after :meth:`follow`. A
-            :class:`~.source.Range` with a ``last`` is refused with
-            ``follow``; a function may choose any rows, and the filled rows
-            that it leaves out are considered, so Follow adds only the rows
-            that arrive later.
+            Whether the batch follows from its making, in place of the batch
+            that follows now.
 
         Raises
         ------
@@ -330,6 +264,9 @@ class Intake:
             if the source fills a parameter that the spec lacks
             (:func:`fits`); if ``choose`` gives a row that the source did
             not; and as :meth:`~.manager.BatchManager.create` refuses.
+        NotKept
+            If the definitions refuse a write. The batch is removed again,
+            and the batch that followed follows again.
         """
         if follow and isinstance(choose, Range) and choose.last is not None:
             raise ValueError(
@@ -376,20 +313,13 @@ class Intake:
         return batch
 
     def _from(self, label: str) -> FromSource | None:
-        """
-        What the batch of ``label`` keeps of its source, ``None`` if it was
-        not made from one. Raises ``KeyError`` if no batch has the label.
-        """
+        """The ``source.json`` of ``label``, or ``None``; ``KeyError`` if no batch."""
         if label not in self.manager.headers():
             raise KeyError(label)
         return SOURCE.load(self.manager.definitions, label)
 
     def _made(self, label: str) -> FromSource:
-        """
-        What the batch of ``label`` keeps of its source. Raises ``KeyError``
-        if no batch has the label, and ``ValueError`` if it was not made from
-        a source.
-        """
+        """:meth:`_from`, with ``ValueError`` for a batch made without a source."""
         if (made := self._from(label)) is None:
             raise ValueError(f'{label} was not made from a row source')
         return made
@@ -397,29 +327,21 @@ class Intake:
     def source(self, label: str) -> str | None:
         """
         The name of the source that the batch of ``label`` was made from,
-        ``None`` if it was made without one and cannot follow. Raises
-        ``KeyError`` if no batch has the label.
+        ``None`` if it was made without one. Raises ``KeyError`` if no batch
+        has the label.
         """
         made = self._from(label)
         return None if made is None else made.source
 
     def step(self) -> Step | None:
         """
-        One step of Follow on the batch that follows, ``None`` if none does:
-        add the rows of its source that are new and filled, reduce the rows
-        that are ready and have no result (:func:`~.auto.step`), then keep the
-        keys considered. The step is returned, to read what it refused and
-        which rows wait.
-
-        If the step raises, such as when a submission is cut off after the
-        rows were added, the keys of the batch table are kept as considered:
-        otherwise a row that it added and a person removes would come back.
+        One step of Follow (:func:`~.auto.step`) on the batch that follows,
+        then keep the keys considered; ``None`` if no batch follows.
 
         Raises ``ValueError`` if the source of the batch is not registered,
         if the source raises ``ValueError``, or if the batch refuses a row
-        that the source makes, naming the source, the row and the column;
-        and what the step raises otherwise, also if the definitions then
-        refuse the keys considered.
+        that the source makes; the message names the source, the row and the
+        column. Raises what the step raises otherwise.
         """
         if (label := self.following) is None:
             return None
@@ -441,15 +363,9 @@ class Intake:
     def offered(self, label: str) -> pd.DataFrame:
         """
         The rows that the source of the batch of ``label`` makes now and its
-        batch table lacks, with the columns of the source and a column ``waits``:
-        whether a cell of the batch's :attr:`~.reduction.Batch.fills` is
-        empty, so that Follow adds the row once it is filled, unless it is
-        considered.
-        A row that does not wait was left out when the batch was made, or
-        removed from it, and is considered, so Follow does not add it; or it
-        was filled after the batch was made and is not considered, so Follow
-        adds it at its next step if the batch follows. A column of the source
-        named ``waits`` is replaced by it.
+        batch table lacks, with the columns of the source and a boolean column
+        ``waits``, true if a cell of :attr:`~.reduction.Batch.fills` is
+        empty. A column of the source named ``waits`` is replaced.
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source, if its source is not registered, or
@@ -469,8 +385,8 @@ class Intake:
     def take(self, label: str, keys: Iterable[str]) -> None:
         """
         Add the rows of ``keys`` to the batch of ``label``, as its source
-        makes them now, with the columns of its batch table; then consider them, so
-        that Follow does not add them again once removed.
+        makes them now, with the columns of its batch table; then consider
+        them. A considered key may be taken.
 
         Raises ``KeyError`` if no batch has the label; ``ValueError`` if it
         was not made from a source, if its source is not registered or makes

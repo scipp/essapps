@@ -1,51 +1,28 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2026 Scipp contributors (https://github.com/scipp)
 """
-Automatic reduction: a batch amended from the files and reduced as they
-arrive. The guide is the section "Follow" of
-``packages/essbatch/docs/batch.md``; the decision is
-``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
+One step of Follow on a batch::
 
-:func:`step` is one step on one batch. Follow is a step on the batch that the
-intake keeps as the one that follows, every few seconds
-(:meth:`~.intake.Intake.step`); whoever serves owns the timer that
-calls it.
-
-A step adds the rows of the source that are new and filled, as a person does
-with ``put``, then reduces the rows that are ready and have no result::
-
-    given = rows_of(batch.client, source)        # every row the source makes now
+    table = batch.frame()
+    given = rows_of(batch.client, source)                  # lists every file
     new, waiting = added(table, given, batch.fills, considered)
     batch.put(pd.concat([table, new]))
     considered |= set(new.index) | (set(given.index) & set(table.index))
-    candidates = not_reduced(batch.state(compare=False))   # ready as given, no result
-    batch.reduce(not_reduced(batch.state(candidates)))
+    candidates = not_reduced(batch.state(compare=False))   # resolves no cell
+    batch.reduce(not_reduced(batch.state(candidates)))     # resolves their cells
 
-A step never changes a row that the batch table has, and never changes the blanks
-of the template: it takes only the columns that the batch table has. A row whose
-key is considered, such as one a person removed, is never added again; the
-caller keeps :attr:`Step.considered` and gives it to the next step (``Intake``
-in ``source.json``). A key of the source that the batch table has is considered,
-whoever added the row, and the step keeps it so. So a row that a person added
-by hand with a key that the source gives later stays away once removed, and
-so does a row of a step cut off between ``put`` and keeping ``considered``:
-the next step considers it.
+The caller keeps ``considered`` from one step to the next
+(:class:`~.intake.Intake` in ``source.json``).
 
-The rule of what a step reduces is on the state, not on who changed it:
-:func:`~.state.not_reduced` gives the ready rows that have no result under the
-label. A row with a result is never reduced by a step, whether it is outdated,
-failed or was cancelled; a person reduces it. So a row is reduced by a step
-once, as soon as it is complete, whether the step or a person put it into the
-batch; and a step after a restart reduces no row again. :attr:`Step.refused`
-says why rows of a step were refused, and a refused row is tried again at
-every step.
+Invariants:
 
-A step costs the listing of all files, and the results of all rows: the status
-of every row's result, and the problems of every row's cells as given
-(``batch.state(compare=False)``). It resolves the settings, and the cells of
-the rows without a result only (:meth:`~.reduction.Batch.state` of those
-keys), since a row with a result is not reduced, whatever its comparison
-says.
+- A step never changes a row that the batch table has, nor the template's blanks.
+- A step never adds a row whose key is considered.
+- A step never reduces a row that has a result.
+
+Guide: ``packages/essbatch/docs/batch.md``, "Follow".
+Decision: ``docs/developer/adr/0013-follow-adds-the-rows-not-considered.md``.
+Cost: ``docs/developer/automatic-reduction.md``, "Cost".
 """
 
 from __future__ import annotations
@@ -77,13 +54,12 @@ def added(
     considered: Collection[str],
 ) -> tuple[pd.DataFrame, pd.Index]:
     """
-    The rows of ``given`` to add to ``table``, and the keys of those that wait.
+    The rows of ``given`` to add to ``table``, with the columns of ``table``,
+    and the keys of the rows that wait.
 
-    A row of ``given`` is new if its key is neither considered nor in
-    ``table``. A new row is added once it has a value in each of ``fills``,
-    the parameters that the batch waits for (:attr:`.reduction.Batch.fills`),
-    and waits until then. The rows added have the columns of ``table``, those
-    of ``given`` that it lacks left out.
+    A row is added if its key is neither considered nor in ``table`` and it
+    is filled: it has a value in each of ``fills``. A row with such a key
+    that is not filled waits.
     """
     is_new = ~given.index.isin(list(considered)) & ~given.index.isin(table.index)
     is_ready = filled(given, fills)
@@ -108,11 +84,10 @@ class Step:
         Why the submission refused each row, by key: the rows submitted that
         a ``SubmitError`` names, or every row submitted if the reason names
         none. If the settings are refused, every row without a result that is
-        ready as given: no cell is resolved while the settings are refused, so
-        a row whose cell would be refused is named too.
+        ready as given, also a row whose cell would be refused, since no cell
+        is resolved then.
     waiting:
-        The keys of the rows of the source that the step did not add since
-        they are not filled yet.
+        The keys of the new rows that are not filled yet.
     records:
         The records of the rows reduced, by key.
     """
@@ -126,10 +101,9 @@ class Step:
 
 def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     """
-    Add the rows of ``source`` that are new and filled to ``batch``, and
-    reduce the rows that :func:`~.state.not_reduced` gives, with the batch's
-    settings as they are at the step. A row whose request is refused does not
-    hold back the others, and :attr:`Step.refused` says why. See the module.
+    Add the rows of ``source`` that are new and filled to ``batch``, then
+    reduce the rows of :func:`~.state.not_reduced`. A row whose request is
+    refused does not hold back the others: :attr:`Step.refused` says why.
 
     Parameters
     ----------
@@ -139,8 +113,7 @@ def step(batch: Batch, source: RowSource, considered: Collection[str]) -> Step:
     source:
         The source that the rows are added from.
     considered:
-        The keys of the source that the batch has considered: taken, or left
-        out when it was made. The step adds no row of these keys.
+        The keys of the source that the batch has considered.
 
     Raises
     ------
