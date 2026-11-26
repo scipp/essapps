@@ -322,9 +322,10 @@ batch.settable(settings)                                    # settings without t
 
 `batch.state(keys=None, *, compare=True)` returns a `RowState` per row.
 It is read from the records at each call; no state is stored in the definitions.
-Its `status` is one of `running`, `incomplete`, `ready`, `done`, `settings changed`, `outdated`, `failed` or `cancelled`, as the page, a written table file and the command show it.
+Its `status` is one of `running`, `incomplete`, `ready`, `done`, `settings changed`, `outdated`, `failed`, `cancelled` or `cleared`, as the page, a written table file and the command show it.
 A row with status `settings changed` has a completed result, as a row with status `done`, and is plotted and downloaded as one.
-So code that wants the rows with a completed result reads `record_status`, not `status`.
+A row with status `cleared` has a completed result whose outputs are cleared (below), so it has nothing to plot or download.
+So code that wants the rows with outputs to read checks `record_status` and `cleared`, not `status`.
 
 What moves a row from one status to another:
 
@@ -342,6 +343,7 @@ stateDiagram-v2
         done --> settings_changed: a setting that it uses changed
         done --> outdated: a cell given another value
         settings_changed --> outdated: a cell given another value
+        done --> cleared: clear
         failed
         cancelled
     }
@@ -349,7 +351,7 @@ stateDiagram-v2
     result --> incomplete: a problem
 ```
 
-A problem is any of `RowState.problems`: a value missing, such as an empty cell of a source column, a cell that the workspace rejects, or a referenced record that failed or was cancelled.
+A problem is any of `RowState.problems`: a value missing, such as an empty cell of a source column, a cell that the workspace rejects, or a record referenced by a cell or a setting that failed, was cancelled, or is cleared.
 The workspace rejects a cell that refers to a file that the file source does not know, or cannot read now: it raised `OSError`, as when a mount is gone or a catalogue timed out.
 Only the rows that refer to that file have the problem, and the reason names the file.
 A row with a result resolves only the cells that differ from its result's request, so a `done` row keeps its status while its file cannot be read.
@@ -364,6 +366,21 @@ Which cells are empty is read from the batch table now, so a row whose cell was 
 A person reduces `left_to_reduce`, or chooses the rows.
 The page and the command choose with `to_reduce`.
 
+### Clearing outputs
+
+Clearing frees the disk space of stored outputs, which a reduction computes again from the raw files.
+`batch.clear(keys=None)` deletes the outputs of every record of the rows `keys`, or of every member of the batch (`ess.apps.Client.clear`):
+
+```python
+batch.clear(['60339'])     # the row 60339 gets status cleared
+batch.reduce(left_to_reduce(batch.state()))  # a new record computes its outputs again
+```
+
+A cleared record keeps its request, its status and its provenance.
+A cell or a setting that refers to a cleared record is a problem of the row, which names the label of that record: `masks: its outputs are cleared; reduce the batch masks again`.
+The cell still refers to the cleared record after that batch is reduced again: set it to the new record, such as by loading the template with `{'@latest': masks}` again.
+Nothing is cleared while a row of the batch is running, and the error names the row.
+
 ## The batches of a workspace
 
 ```python
@@ -376,6 +393,8 @@ manager.headers()          # {label: Header(title, description)}
 manager.batch(label)       # the one Batch of the label, read from the definitions at the first call
 manager.change(label, title='Water, second try')
 manager.remove(label)      # every file of the label goes; the records stay
+manager.remove(label, clear=True)  # and first the outputs of its records are cleared
+manager.clear()            # the outputs of every record of the workspace, of removed batches too
 ```
 
 `Intake.create` passes `source_columns=` to `manager.create`. Code that makes a batch from a batch table of its own, or from a table file, leaves it out.
@@ -511,7 +530,7 @@ for key, record in centres.items():
 iofq.set_table(table)
 ```
 
-A cell may refer to a record that still runs. If that record failed or was cancelled, the row has the problem "the record it reads is failed".
+A cell may refer to a record that still runs. If that record failed or was cancelled, the row has the problem "the record it reads is failed". If its outputs are cleared, the problem names the batch to reduce again ("Clearing outputs").
 
 ## What is stored on disk
 

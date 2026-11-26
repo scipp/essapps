@@ -44,7 +44,7 @@ Property: a selection of an output returns in a fraction of a second, and only t
 ### B6. Find last week's result
 
 Actor: user after a week. Goal: last week's records are still there, with their outputs.
-Property: records survive restarts of the client and of the workspace, until the proposal has been idle for the retention period (H3). Their persisted outputs are in the store, which drops them with the proposal's history. Outputs that were not persisted are gone once a client releases them or the workspace closes, and their records show this.
+Property: records survive restarts of the client and of the workspace, until the proposal has been idle for the retention period (H3). Their persisted outputs are in the store until a client clears them, or until the store drops them with the proposal's history. Outputs that were not persisted are gone once a client releases them or the workspace closes, and their records show this.
 
 ## C. Chaining
 

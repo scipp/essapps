@@ -608,7 +608,7 @@ class Store(Protocol):
         with a value inside a ``DataGroup`` in the same form.
 
         Raises ``LookupError`` if the store no longer holds it, for example
-        once dropped to free disk space, or holds a value that does not fit
+        once deleted outside the workspace, or holds a value that does not fit
         ``tp``, as a file changed or damaged outside the workspace would: a
         client's read of it then raises ``NotReadable``, as for a value that
         nothing holds, and a request that reads it fails.

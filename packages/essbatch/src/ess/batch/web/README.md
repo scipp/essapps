@@ -102,7 +102,7 @@ A request returns what the page needs next:
 | Request | Returns |
 |---|---|
 | an action on a batch | the `State` after it |
-| an action on the workspace (`api/batches`, `api/runs/cells`, `api/batch/remove`) | `Made` or `Notice`, since the page without a batch has no `State` |
+| an action on the workspace (`api/batches`, `api/runs/cells`, `api/batch/remove`, `api/outputs/clear`) | `Made` or `Notice`, since the page without a batch has no `State` |
 | a read (`api/plot`, `api/row`, `api/results.zip`, ...) | what it reads, also when it is a POST because the body is long |
 | any request that fails | 422 `{message}` (`errors.Rejected`), or 404 for a label without a batch (`errors.NotFound`) |
 
@@ -182,7 +182,7 @@ Every request that depends on the actions before it waits in one queue (`queued`
 
 | In the queue | Why |
 |---|---|
-| each action of a batch (`act`), corrections of runs, the removal of a batch | each changes what the next one reads |
+| each action of a batch (`act`), corrections of runs, the removal of a batch, **Clear all outputs** | each changes what the next one reads |
 | a file download (the batch table, the settings, the results) | it must include an edit that the click sent at the blur of its input |
 | **Make** of a new batch | it may start with the settings that an **Apply** before it set |
 

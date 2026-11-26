@@ -200,20 +200,24 @@ beamtime = Template(final.request.spec, params=final.request.params, blanks=('sa
 
 A record is stored with the workspace's history.
 An output value lives while the workspace holds it in memory, a pending request reads it, or the store holds it.
-The workspace holds a value until a client releases its record, or the workspace closes.
-A release by one client applies to every client of the workspace.
+The workspace holds a value until a client releases or clears its record, or the workspace closes.
+The store holds a value until a client clears its record.
+A release or a clear by one client applies to every client of the workspace.
 Work whose outputs nothing would hold is cancelled.
+A cleared record keeps its request and status, so its provenance stays.
+A new record of the same request computes the outputs again.
 [`ess.apps.protocol`](../../packages/essapps/src/ess/apps/protocol.py) states the rules.
 
 ```python
 client.release(centre)              # the workspace drops the centre, for every client
 client.submit(IOFQ, params={...}, persist=('iofq',))  # the store holds iofq, the workspace does not
+client.clear(iofq)                  # the store deletes iofq; client.cleared(iofq) is True
 ```
 
 ## What changed
 
 A client that shows records, or reacts to them, asks which records changed since a position in the workspace's history, and reads only those.
-A record changes when it is submitted, by any client of the workspace, and when it finishes.
+A record changes when it is submitted, by any client of the workspace, when it finishes, and when its outputs are cleared.
 The reply holds record IDs and no values, each ID once:
 
 ```python
