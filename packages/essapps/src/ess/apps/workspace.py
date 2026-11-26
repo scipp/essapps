@@ -173,7 +173,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from pydantic import BaseModel
 
@@ -401,12 +401,15 @@ class _Stage:
         return request.model_copy(update={'params': params})
 
 
-_Step = tuple[dict[str, Any], list[tuple[str, str]]]
-"""
-A step of an accumulator: its values by name, the template's fixed values
-for the opening and the rows of each table for a push, and the outputs of
-records it reads.
-"""
+class _DriverInput(NamedTuple):
+    """
+    A step of an accumulator: its values by name, the template's fixed values
+    for the opening and the rows of each table for a push, and the outputs of
+    records it reads.
+    """
+
+    values: dict[str, Any]
+    reads: list[tuple[str, str]]
 
 
 class _Accumulator:
@@ -451,7 +454,7 @@ class _Accumulator:
         self.template = template
         self.binding = binding
         self.added: int | None = None
-        self.steps: deque[_Step] = deque()
+        self.steps: deque[_DriverInput] = deque()
         self.seen: dict[str, dict[bytes, int]] = {i: {} for i in template.blanks}
         self.busy = False
         self.checked: tuple[int, str | None] | None = None
@@ -1862,7 +1865,7 @@ class Workspace(WorkspaceProtocol):
         """
         reads = _output_reads(values)
         self._readers.update(reads)
-        acc.steps.append((values, reads))
+        acc.steps.append(_DriverInput(values, reads))
         self._accumulating.add(acc)
         self._advance(acc)
 
@@ -1882,8 +1885,7 @@ class Workspace(WorkspaceProtocol):
             return
         if acc.added is not None and self._readers[(acc, acc.added)]:
             return
-        *_, reads = acc.steps[0]
-        for record_id, _ in reads:
+        for record_id, _ in acc.steps[0].reads:
             status = self._views.status(record_id)
             if status is Status.PENDING:
                 return
@@ -1939,8 +1941,8 @@ class Workspace(WorkspaceProtocol):
         self._accumulating.discard(acc)
         steps = list(acc.steps)
         acc.steps.clear()
-        for *_, reads in steps:
-            self._let_go(reads)
+        for step in steps:
+            self._let_go(step.reads)
         for upto in range(len(self._views.pushes.get(acc.id, ())) + 1):
             for record_id in self._dependents.pop(_state_key(acc.id, upto), ()):
                 self._finish(record_id, Status.FAILED, acc.stopped)
@@ -1963,7 +1965,7 @@ class Workspace(WorkspaceProtocol):
         needed = max(read, default=done) - done
         dropped = []
         while len(acc.steps) > max(needed, int(acc.busy)):
-            dropped.append(acc.steps.pop()[1])
+            dropped.append(acc.steps.pop().reads)
         for reads in dropped:
             self._let_go(reads)
         self._advance(acc)
