@@ -210,7 +210,7 @@ def test_a_table_without_a_column_of_its_fills_is_refused_and_nothing_is_kept(
 ) -> None:
     table = rows(client).drop(columns='transmission')
 
-    with pytest.raises(ValueError, match='fills transmission: a row waits'):
+    with pytest.raises(ValueError, match='fills transmission: a row is incomplete'):
         manager.create('plain', title='M', table=table, source_columns=['transmission'])
     assert definitions.labels() == []
 

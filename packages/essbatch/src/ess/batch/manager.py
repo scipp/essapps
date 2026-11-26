@@ -227,7 +227,7 @@ class BatchManager:
             raise KeyError(label)
         template = SETTINGS.load(self.definitions, label)
         if template is None:
-            raise ValueError(f'{label}: no settings are kept')
+            raise ValueError(f'{label}: no settings are stored')
         spec = self.spec_named(template.spec.name)
         table = self.definitions.load(
             TABLE.key(label), lambda data: typed(TABLE.read(data), spec.params)

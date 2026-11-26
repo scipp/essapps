@@ -658,9 +658,9 @@ def test_a_batch_from_a_source_refuses_a_setting_at_and_a_table_without_a_column
 
     with pytest.raises(ValueError, match='the source of the batch fills transmission'):
         from_source.settings = given
-    with pytest.raises(ValueError, match='fills transmission: a row waits'):
+    with pytest.raises(ValueError, match='fills transmission: a row is incomplete'):
         from_source.set_table(from_source.table().drop(columns='transmission'))
-    with pytest.raises(ValueError, match='fills transmission: a row waits'):
+    with pytest.raises(ValueError, match='fills transmission: a row is incomplete'):
         from_source.make_setting('transmission')
     from_source.settings = from_source.settable(given)
 
@@ -674,7 +674,7 @@ def test_a_batch_is_not_made_on_a_table_without_a_column_of_its_fills(
     # As table.json without offset, whose parameter has a default, would be.
     table = from_source.table().drop(columns='offset')
 
-    with pytest.raises(ValueError, match='fills offset: a row waits'):
+    with pytest.raises(ValueError, match='fills offset: a row is incomplete'):
         Batch(from_source.client, PLAIN, label='s', table=table, source_columns=FILLS)
 
 

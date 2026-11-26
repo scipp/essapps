@@ -1461,7 +1461,7 @@ def test_a_source_that_no_longer_gives_a_column_of_the_batch_is_said(
     assert (answer.status_code, answer.json()['message']) == (
         422,
         'The rows of the source cannot be listed: the source pairs: it no '
-        'longer gives the column transmission that the batch keeps as a source '
+        'longer gives the column transmission that the batch stores as a source '
         'column.',
     )
 

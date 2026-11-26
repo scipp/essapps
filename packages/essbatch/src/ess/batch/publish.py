@@ -130,13 +130,14 @@ class Publisher:
             )
         except DefinitionWriteError as error:
             raise DefinitionWriteError(
-                f'{key} was published as {pid}, but that is not kept: {error}'
+                f'{key} was published as {pid}, but the definitions could not '
+                f'record it: {error}'
             ) from error
         return pid
 
     def _load_publishing(self, label: str) -> Publishing:
-        kept = PUBLISH.load(self.writing.manager.definitions, label)
-        return Publishing() if kept is None else kept
+        stored = PUBLISH.load(self.writing.manager.definitions, label)
+        return Publishing() if stored is None else stored
 
     def _save_publishing(self, label: str, publishing: Publishing) -> None:
         PUBLISH.save(self.writing.manager.definitions, label, publishing)

@@ -101,7 +101,7 @@ def complete(given: pd.DataFrame, columns: Collection[str]) -> pd.Series:
     if lacking := [c for c in columns if c not in given.columns]:
         raise ValueError(
             f'it no longer gives the column {", ".join(sorted(lacking))} that '
-            'the batch keeps as a source column'
+            'the batch stores as a source column'
         )
     return given[list(columns)].notna().all(axis=1)
 
