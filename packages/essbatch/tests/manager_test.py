@@ -15,10 +15,10 @@ from ess.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    DefinitionWriteError,
     FolderDefinitions,
     Header,
     Intake,
-    NotKept,
 )
 from ess.batch.definition import (
     HEADER,
@@ -380,7 +380,7 @@ def test_a_batch_whose_header_is_refused_is_not_made(
 ) -> None:
     refusing.part = 'header'
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         manager.create('plain', title='Morning', rows=rows(client), label='b')
     assert manager.headers() == {}
     assert refusing.labels() == []
@@ -409,7 +409,7 @@ def test_a_setting_keeps_its_value_if_the_table_that_makes_it_a_column_is_refuse
     batch = manager.create('plain', title='M', rows=table, settings={'thickness': 2.0})
     refusing.part = 'rows'
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         batch.put(batch.frame().assign(thickness=3.0))
 
     assert _again(client, definitions).batch(batch.label).settings == {'thickness': 2.0}
@@ -452,7 +452,7 @@ def test_a_batch_whose_removal_is_refused_is_kept(
     batch = manager.create('plain', title='Morning', label='b')
     refusing.part = 'header'
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         manager.remove('b')
     assert list(manager.headers()) == ['b']
     assert manager.batch('b') is batch
@@ -521,7 +521,7 @@ class Stopping:
     def _write(self) -> None:
         self.writes += 1
         if self.writes >= self.at:
-            raise NotKept('stopped')
+            raise DefinitionWriteError('stopped')
 
 
 def _create(intake: Intake, *, follow: bool) -> None:
@@ -569,7 +569,7 @@ def test_a_create_cut_off_at_any_write_leaves_what_remove_removes(
         stopping = Stopping(definitions, at)
         try:
             _create(_intake(client, stopping), follow=True)
-        except NotKept:
+        except DefinitionWriteError:
             # No batch a, or one made without a source; z follows still, or
             # none does if the cut came after Follow on z ended.
             again = _intake(client, definitions)
@@ -592,7 +592,7 @@ def test_a_remove_cut_off_at_any_write_leaves_what_remove_removes(
         manager = BatchManager(client, definitions=stopping)
         try:
             manager.remove('a')
-        except NotKept:
+        except DefinitionWriteError:
             _made_again(client, definitions, follow=False)
         else:
             break

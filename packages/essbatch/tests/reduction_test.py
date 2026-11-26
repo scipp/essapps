@@ -12,8 +12,8 @@ import pytest
 from ess.batch import (
     Batch,
     CorrectedFiles,
+    DefinitionWriteError,
     FolderDefinitions,
-    NotKept,
     RowState,
     definition,
     left_to_reduce,
@@ -154,7 +154,7 @@ def test_a_table_put_again_writes_nothing(
 
     batch.put(batch.frame())
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         batch.put(batch.frame().assign(thickness=3.0))
     assert batch.frame().loc['1', 'thickness'] == 2.0
 

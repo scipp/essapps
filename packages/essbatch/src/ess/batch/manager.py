@@ -52,8 +52,8 @@ from .definition import (
     ROWS,
     SETTINGS,
     DefinitionStore,
+    DefinitionWriteError,
     Header,
-    NotKept,
 )
 from .reduction import Batch
 from .table import typed
@@ -81,7 +81,7 @@ class BatchManager:
     Every refusal of what is asked raises ``ValueError``, with a message for a
     person, such as for a spec that the workspace does not bind, or a label
     that is taken. ``KeyError`` says only that no batch has the label asked
-    for, and :class:`~.definition.NotKept` that the definitions refuse a
+    for, and :class:`~.definition.DefinitionWriteError` that the definitions refuse a
     write. Anything else is an error of the code of the application.
 
     :attr:`version` moves whenever :meth:`headers` may give something else:
@@ -91,8 +91,8 @@ class BatchManager:
     The headers are read when the manager is made. Each change of a header is
     written to the definitions before the manager holds it, so the manager
     lists the batches whose header the definitions keep. A write that they
-    refuse raises :class:`~.definition.NotKept`, and what was written before
-    it in the same call stays written.
+    refuse raises :class:`~.definition.DefinitionWriteError`, and what was
+    written before it in the same call stays written.
 
     Parameters
     ----------
@@ -220,7 +220,7 @@ class BatchManager:
         empty = [c for c in parameter_columns if c not in table.columns]
         # Refused here, before anything is written.
         table = typed(table.assign(**dict.fromkeys(empty)), bound.params)
-        batch = self._kept(label, bound, {}, None, fills)
+        batch = self._new_batch(label, bound, {}, None, fills)
         # what to delete if a write is refused
         written = [entry.key(label) for entry in LABEL_ENTRIES[1:]]
         try:
@@ -228,8 +228,8 @@ class BatchManager:
             batch.settings = batch.settable(settings)
             HEADER.save(self.definitions, label, header)
             written.insert(0, HEADER.key(label))
-        except NotKept:
-            with suppress(NotKept):  # the first error is what to say
+        except DefinitionWriteError:
+            with suppress(DefinitionWriteError):  # the first error is what to say
                 for key in written:
                     self.definitions.delete(key)
             raise
@@ -298,11 +298,11 @@ class BatchManager:
         rows = self.definitions.load(
             ROWS.key(label), lambda data: typed(ROWS.read(data), spec.params)
         )
-        batch = self._kept(label, spec, template.params, rows, template.blanks)
+        batch = self._new_batch(label, spec, template.params, rows, template.blanks)
         self._batches[label] = batch
         return batch
 
-    def _kept(
+    def _new_batch(
         self,
         label: str,
         spec: WorkflowSpec[Any, Any],

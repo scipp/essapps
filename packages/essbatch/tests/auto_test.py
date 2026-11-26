@@ -17,10 +17,10 @@ from ess.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    DefinitionWriteError,
     FileInfo,
     FolderDefinitions,
     Intake,
-    NotKept,
     RowFunction,
     RowSource,
     rows_of,
@@ -624,7 +624,7 @@ def test_a_row_of_a_step_cut_off_before_considered_stays_away_once_removed(
 ) -> None:
     sample(5, 'oil')
     refusing.part = 'source'  # as a process that stops after rows.json
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         following.step()
     refusing.part = None
     client.wait(client.records(label='a'))

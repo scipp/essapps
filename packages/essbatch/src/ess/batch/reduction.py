@@ -97,7 +97,7 @@ from .table import as_request, cell_of, data_of, names, typed
 _NONE = object()
 
 
-def _kept(name: str, value: Any) -> tuple[str, Any] | None:
+def _cache_key(name: str, value: Any) -> tuple[str, Any] | None:
     """
     The key a resolved value is kept by, ``None`` for one that cannot be a key.
     The column is in it, since a value resolves per parameter: ``True`` is
@@ -358,7 +358,7 @@ class Batch:
         given twice, or a cell that is not of the kind of its column; and for
         a table that lacks a column of :attr:`fills`.
 
-        Raises :class:`~.definition.NotKept` if the definitions refuse the
+        Raises :class:`~.definition.DefinitionWriteError` if the definitions refuse the
         table, and then nothing changes.
         """
         rows = typed(frame, self.spec.params)
@@ -439,7 +439,7 @@ class Batch:
         Raises ``ValueError`` if ``name`` is not a column, or one of
         :attr:`fills`, as :meth:`put` refuses a table without it; if the
         table has no row of ``key``, or if ``key`` is not given and the rows
-        take different values; :class:`~.definition.NotKept` if the
+        take different values; :class:`~.definition.DefinitionWriteError` if the
         definitions refuse a write.
         """
         self._check_column(name)
@@ -560,7 +560,7 @@ class Batch:
             *(item for cells in self.cells().values() for item in cells.items()),
         ]
         unique = {
-            _kept(n, v) or object(): {n: v} for n, v in given if _files_in({n: v})
+            _cache_key(n, v) or object(): {n: v} for n, v in given if _files_in({n: v})
         }
         asked = {str(i): a for i, a in enumerate(unique.values())}
         resolved, refused = self._resolve_cells(asked)
@@ -736,7 +736,7 @@ class Batch:
         for key, given in asked.items():
             cells[key] = {}
             for name, value in given.items():
-                kept = self._resolved.get(_kept(name, value), _NONE)
+                kept = self._resolved.get(_cache_key(name, value), _NONE)
                 if kept is _NONE:
                     new.setdefault(key, {})[name] = value
                 else:
@@ -755,7 +755,7 @@ class Batch:
                 continue
             for name, value in new[key].items():
                 cells[key][name] = result.params[name]
-                if (at := _kept(name, value)) is not None:
+                if (at := _cache_key(name, value)) is not None:
                     self._resolved[at] = result.params[name]
         return cells, refused
 

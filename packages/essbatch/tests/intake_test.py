@@ -9,9 +9,9 @@ import pandas as pd
 import pytest
 from ess.batch import (
     BatchManager,
+    DefinitionWriteError,
     FolderDefinitions,
     Intake,
-    NotKept,
     Range,
     RowSource,
 )
@@ -428,7 +428,7 @@ class _SourceRefused(Refusing):
 
     def save(self, key: Key, data: Any) -> None:
         if key[-1] == 'source':
-            raise NotKept(f'{key}: refused')
+            raise DefinitionWriteError(f'{key}: refused')
         super().save(key, data)
 
 
@@ -439,7 +439,7 @@ def test_a_batch_whose_source_is_refused_is_removed_again(
     refusing = _SourceRefused(definitions)
     intake = Intake(BatchManager(client, definitions=refusing), sources=SOURCES)
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         intake.create('plain', title='A', source='pairs', label='a', follow=True)
 
     assert intake.manager.headers() == {}
@@ -548,7 +548,7 @@ def test_a_refused_batch_made_to_follow_is_removed_and_the_one_before_follows(
 ) -> None:
     refusing.part = SOURCE.key('c')
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.create('plain', title='C', source='pairs', label='c', follow=True)
 
     assert (list(two.manager.headers()), two.following) == (['a', 'b'], 'a')
@@ -679,7 +679,7 @@ def test_a_batch_refused_to_follow_leaves_the_one_before_following(
 ) -> None:
     refusing.part = SOURCE.key('b')
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.follow('b')
 
     assert two.following == 'a'
@@ -758,9 +758,9 @@ def test_which_batch_follows_stays_if_the_definitions_refuse_a_change(
 ) -> None:
     refusing.part = SOURCE.key('a')
 
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.create('plain', title='C', source='pairs', label='c', follow=True)
-    with pytest.raises(NotKept):
+    with pytest.raises(DefinitionWriteError):
         two.stop()
     assert (list(two.manager.headers()), two.following) == (['a', 'b'], 'a')
     assert 'c' not in refusing.labels()

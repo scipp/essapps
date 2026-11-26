@@ -30,8 +30,8 @@ from ess.batch import (
 from ess.batch.definition import (
     ROWS,
     SETTINGS,
+    DefinitionWriteError,
     Key,
-    NotKept,
 )
 from ess.batch.web import Pages, Shown, create_app, demo, plots
 from ess.batch.web.errors import NotFound, Rejected
@@ -921,7 +921,7 @@ class Flaky:
 
     def save(self, key: Key, data: Any) -> None:
         if self.fail:
-            raise NotKept('disk full')
+            raise DefinitionWriteError('disk full')
         self.saves += 1
         self.kept[key] = data
 
@@ -2315,7 +2315,7 @@ class RefusingAt:
     def save(self, key: Key, data: Any) -> None:
         self.saves += 1
         if self.saves == self.at:
-            raise NotKept(f'{key}: refused')
+            raise DefinitionWriteError(f'{key}: refused')
         self._definitions.save(key, data)
 
     def delete(self, key: Key) -> None:

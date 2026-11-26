@@ -113,7 +113,7 @@ Other tables are always named with what they are of:
 
 ### Errors
 
-The batch layer refuses what is asked with `ValueError`, a label that no batch has with `KeyError`, and a write that the definitions refuse with `NotKept`.
+The batch layer refuses what is asked with `ValueError`, a label that no batch has with `KeyError`, and a write that the definitions refuse with `DefinitionWriteError`.
 
 ### What is kept on disk
 
@@ -662,7 +662,7 @@ A cell may name a record that still runs. If that record failed or was cancelled
 A key is a tuple, such as `('labels', label, 'rows')` or `('corrections',)`.
 `FolderDefinitions(folder)` keeps each entry of the definitions, by key, as a JSON file under `definitions/`, written whole through a temporary file.
 `rows.json` holds `data_of(table)`, and `frame_of(data)` reads it back equal, dtypes and floats included; both are in `ess.batch.table`.
-A refused write raises `NotKept`.
+A refused write raises `DefinitionWriteError`.
 
 ## The page
 

@@ -15,11 +15,11 @@ from ess.batch import (
     Batch,
     BatchManager,
     CorrectedFiles,
+    DefinitionWriteError,
     FileInfo,
     FolderDefinitions,
     Header,
     Intake,
-    NotKept,
     RowSource,
 )
 from ess.batch.definition import (
@@ -214,7 +214,7 @@ def test_a_folder_that_cannot_be_written_raises_that_the_table_was_not_kept(
 ) -> None:
     (tmp_path / 'definitions').write_text('a file where the folder should be')
 
-    with pytest.raises(NotKept, match='definitions'):
+    with pytest.raises(DefinitionWriteError, match='definitions'):
         FolderDefinitions(tmp_path).save(CORRECTIONS, {})
 
 
@@ -275,10 +275,10 @@ class Failing:
         return None
 
     def save(self, key: Key, data: Any) -> None:
-        raise NotKept('disk full')
+        raise DefinitionWriteError('disk full')
 
     def delete(self, key: Key) -> None:
-        raise NotKept('disk full')
+        raise DefinitionWriteError('disk full')
 
     def labels(self) -> list[str]:
         return []
@@ -292,11 +292,11 @@ def test_a_change_that_cannot_be_kept_raises_and_changes_nothing(
     files = CorrectedFiles(client.files, definitions=Failing())
     before = batch.frame()
 
-    with pytest.raises(NotKept, match='disk full'):
+    with pytest.raises(DefinitionWriteError, match='disk full'):
         edit(batch, '1', thickness=2.0)
-    with pytest.raises(NotKept, match='disk full'):
+    with pytest.raises(DefinitionWriteError, match='disk full'):
         batch.settings = {'binning': {'bins': 3}}
-    with pytest.raises(NotKept, match='disk full'):
+    with pytest.raises(DefinitionWriteError, match='disk full'):
         files.correct_each(list(client.files.list(Selector())), role='bad')
 
     pd.testing.assert_frame_equal(batch.frame(), before)

@@ -15,7 +15,7 @@ raised by the batch layer               said
                                         (:func:`request_error_text`)
 ``KeyError``                            its first argument
                                         (:func:`request_error_text`)
-:class:`~ess.batch.NotKept`             "The change was not kept: ..."
+:class:`~ess.batch.DefinitionWriteError`             "The change was not kept: ..."
                                         (:func:`reject_on_write_error`)
 ======================================  ==================================
 
@@ -45,7 +45,7 @@ from contextlib import contextmanager
 
 from ess.apps.errors import error_text, field_error_text
 
-from ..definition import NotKept
+from ..definition import DefinitionWriteError
 from . import forms
 
 
@@ -100,9 +100,9 @@ def reject_on_error(doing: str = '') -> Iterator[None]:
 def reject_on_write_error() -> Iterator[None]:
     """
     A block whose writes to the definitions, if refused
-    (:class:`~ess.batch.NotKept`), raise :class:`Rejected`.
+    (:class:`~ess.batch.DefinitionWriteError`), raise :class:`Rejected`.
     """
     try:
         yield
-    except NotKept as error:
+    except DefinitionWriteError as error:
         raise Rejected(f'The change was not kept: {error}') from None

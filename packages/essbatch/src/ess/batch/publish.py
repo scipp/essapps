@@ -33,7 +33,7 @@ from ess.apps.records import Record
 from ess.apps.scicat import Catalogue, publish
 from ess.apps.writers import DatasetMetadata
 
-from .definition import PUBLISH, NotKept, Published, Publishing, published
+from .definition import PUBLISH, DefinitionWriteError, Published, Publishing, published
 from .export import RowWriter
 from .state import publishable
 from .writing import Writing
@@ -77,7 +77,7 @@ class Publisher:
                 pids[key] = self._publish(
                     label, key, record, write, metadata[key], form.format
                 )
-            except NotKept:  # noqa: PERF203
+            except DefinitionWriteError:  # noqa: PERF203
                 raise
             except Exception as error:  # the catalogue's client may raise anything
                 done = ', '.join(f'{k} as {p}' for k, p in pids.items())
@@ -123,21 +123,24 @@ class Publisher:
             write(key, record, written)
             files = sorted(written.iterdir())
             pid = publish(self.catalogue, client, record, files, metadata, format)
-        kept = self._kept(label)
+        publishing = self._load_publishing(label)
         upload = Published(key=key, record=record.id, pid=pid)
         try:
-            self._keep(
-                label, kept.model_copy(update={'published': (*kept.published, upload)})
+            self._save_publishing(
+                label,
+                publishing.model_copy(
+                    update={'published': (*publishing.published, upload)}
+                ),
             )
-        except NotKept as error:
-            raise NotKept(
+        except DefinitionWriteError as error:
+            raise DefinitionWriteError(
                 f'{key} was published as {pid}, but that is not kept: {error}'
             ) from error
         return pid
 
-    def _kept(self, label: str) -> Publishing:
+    def _load_publishing(self, label: str) -> Publishing:
         kept = PUBLISH.load(self.writing.manager.definitions, label)
         return Publishing() if kept is None else kept
 
-    def _keep(self, label: str, publishing: Publishing) -> None:
+    def _save_publishing(self, label: str, publishing: Publishing) -> None:
         PUBLISH.save(self.writing.manager.definitions, label, publishing)

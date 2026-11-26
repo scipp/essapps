@@ -98,7 +98,7 @@ type Key = tuple[str, ...]
 CORRECTIONS: Key = ('corrections',)
 
 
-class NotKept(OSError):
+class DefinitionWriteError(OSError):
     """A :class:`DefinitionStore` could not keep an entry; it holds what it did."""
 
 
@@ -107,9 +107,10 @@ class DefinitionStore(Protocol):
     Keeps each entry of the definition as plain data, under its :data:`Key`.
 
     ``save`` takes data that :func:`pydantic_core.to_json` writes, and raises
-    :class:`NotKept` if it cannot keep it. ``load`` gives what ``read`` makes
-    of the data in its JSON form, or ``None`` if nothing was saved under the
-    key; a ``ValueError`` of ``read`` is raised naming where the data is kept.
+    :class:`DefinitionWriteError` if it cannot keep it. ``load`` gives what
+    ``read`` makes of the data in its JSON form, or ``None`` if nothing was
+    saved under the key; a ``ValueError`` of ``read`` is raised naming where
+    the data is kept.
     """
 
     def load[T](self, key: Key, read: Callable[[Any], T]) -> T | None: ...
@@ -222,7 +223,9 @@ class FolderDefinitions:
         self._write(self.path(key), data)
 
     def _write(self, path: Path, data: Any) -> None:
-        """Write ``data`` to ``path`` whole; :class:`NotKept` if refused."""
+        """
+        Write ``data`` to ``path`` whole; :class:`DefinitionWriteError` if refused.
+        """
         content = to_json(data, indent=1)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -238,7 +241,7 @@ class FolderDefinitions:
                     raise
             os.replace(f.name, path)
         except OSError as error:
-            raise NotKept(f'{path}: {error.strerror or error}') from error
+            raise DefinitionWriteError(f'{path}: {error.strerror or error}') from error
 
     def delete(self, key: Key) -> None:
         path = self.path(key)
@@ -247,7 +250,7 @@ class FolderDefinitions:
             for left in path.parent.glob(f'.{path.name}.*'):
                 left.unlink(missing_ok=True)
         except OSError as error:
-            raise NotKept(f'{path}: {error.strerror or error}') from error
+            raise DefinitionWriteError(f'{path}: {error.strerror or error}') from error
         if path.parent != self._root:
             with suppress(OSError):  # not empty: another part is kept
                 path.parent.rmdir()
@@ -413,7 +416,10 @@ class Entry[T]:
         return definitions.load(self.key(label), self.read)
 
     def save(self, definitions: DefinitionStore, label: str, value: T) -> None:
-        """Keep ``value`` as the entry of ``label``; :class:`NotKept` if refused."""
+        """
+        Keep ``value`` as the entry of ``label``; :class:`DefinitionWriteError` if
+        refused.
+        """
         definitions.save(self.key(label), self.dump(value))
 
 

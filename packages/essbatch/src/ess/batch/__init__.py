@@ -9,7 +9,7 @@ for application developers is ``packages/essbatch/docs/batch.md``.
 """
 
 from .corrections import CorrectedFiles, open_workspace
-from .definition import DefinitionStore, FolderDefinitions, Header, NotKept
+from .definition import DefinitionStore, DefinitionWriteError, FolderDefinitions, Header
 from .intake import Intake
 from .manager import BatchManager
 from .reduction import Batch
@@ -29,11 +29,11 @@ __all__ = [
     'BatchManager',
     'CorrectedFiles',
     'DefinitionStore',
+    'DefinitionWriteError',
     'FileInfo',
     'FolderDefinitions',
     'Header',
     'Intake',
-    'NotKept',
     'Range',
     'RowFunction',
     'RowSource',

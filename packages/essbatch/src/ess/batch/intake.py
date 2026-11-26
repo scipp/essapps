@@ -40,7 +40,7 @@ from ess.spec import WorkflowSpec
 
 from . import auto
 from .auto import SourceError, Step
-from .definition import SOURCE, FromSource, NotKept
+from .definition import SOURCE, DefinitionWriteError, FromSource
 from .manager import BatchManager
 from .reduction import Batch
 from .source import Range, RowSource, filled, rows_of
@@ -151,7 +151,7 @@ class Intake:
 
         Raises ``KeyError`` if no batch has the label, and ``ValueError`` if
         it was not made from a source or its source is not registered.
-        Raises :class:`~.definition.NotKept` if the definitions refuse a
+        Raises :class:`~.definition.DefinitionWriteError` if the definitions refuse a
         write; the batch that followed then follows again.
         """
         self._source(self._made(label).source)
@@ -174,9 +174,9 @@ class Intake:
                 self._write_follows(before, False)
                 ended = before
             write()
-        except NotKept:
+        except DefinitionWriteError:
             if ended is not None:
-                with suppress(NotKept):  # the first error is what to say
+                with suppress(DefinitionWriteError):  # the first error is what to say
                     self._write_follows(ended, True)
             raise
 
@@ -264,7 +264,7 @@ class Intake:
             if the source fills a parameter that the spec lacks
             (:func:`fits`); if ``choose`` gives a row that the source did
             not; and as :meth:`~.manager.BatchManager.create` refuses.
-        NotKept
+        DefinitionWriteError
             If the definitions refuse a write. The batch is removed again,
             and the batch that followed follows again.
         """
@@ -304,8 +304,8 @@ class Intake:
                 before if follow else None,
                 lambda: SOURCE.save(self.manager.definitions, batch.label, made),
             )
-        except NotKept:
-            with suppress(NotKept):  # the first error is what to say
+        except DefinitionWriteError:
+            with suppress(DefinitionWriteError):  # the first error is what to say
                 self.manager.remove(batch.label)
             raise
         if follow:
@@ -353,7 +353,9 @@ class Intake:
         except SourceError as error:  # a defect of the code of the source
             raise ValueError(f'the source {made.source}: {error}') from error
         except BaseException:
-            with suppress(NotKept):  # the exception of the step is what to say
+            with suppress(
+                DefinitionWriteError
+            ):  # the exception of the step is what to say
                 kept = made.considered | set(batch.frame().index)
                 self._consider(label, made, kept)
             raise

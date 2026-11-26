@@ -51,7 +51,7 @@ from ess.spec import Binding
 
 from . import frames
 from .corrections import open_workspace
-from .definition import FolderDefinitions, NotKept
+from .definition import DefinitionWriteError, FolderDefinitions
 from .export import by_writer, export_table
 from .intake import Intake, not_registered, step_failure
 from .manager import BatchManager
@@ -611,7 +611,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
         # A refusal submits nothing, so the label is free again, unless a
         # record has the label after all.
         if made and not client.records(label=label):
-            with suppress(NotKept):  # the refusal is what to say
+            with suppress(DefinitionWriteError):  # the refusal is what to say
                 manager.remove(label)
         raise
 
@@ -1503,7 +1503,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except _Failed as error:
         sys.stderr.write(f'{error}\n')
         return 1
-    except NotKept as error:
+    except DefinitionWriteError as error:
         sys.stderr.write(f'not kept: {error}\n')
         return 1
     except Stopped as error:

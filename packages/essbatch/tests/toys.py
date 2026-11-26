@@ -14,9 +14,9 @@ import pandas as pd
 from ess.batch import (
     Batch,
     DefinitionStore,
+    DefinitionWriteError,
     FileInfo,
     Intake,
-    NotKept,
     RowSource,
     rows_of,
 )
@@ -217,7 +217,7 @@ class Refusing:
 
     def _check(self, key: Key) -> None:
         if self.part in (key[-1], key):
-            raise NotKept(f'{key}: refused')
+            raise DefinitionWriteError(f'{key}: refused')
 
 
 def pair(files: Sequence[FileInfo]) -> pd.DataFrame:
