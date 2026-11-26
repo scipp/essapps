@@ -142,6 +142,7 @@ another process holds, such as a page or a follow. Messages go to stderr.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import math
 import os
@@ -304,7 +305,7 @@ def _writing(given: _Given, catalogue: Catalogue | None) -> Writing:
         from ess.apps.scicat import principal_investigator
 
         contact = principal_investigator(catalogue, given.client.proposal)
-    return Writing(given.manager(), given.writers, contact)
+    return Writing(given.manager, given.writers, contact)
 
 
 def _publisher(given: _Given) -> Publisher:
@@ -344,11 +345,17 @@ class _Given:
             raise RuntimeError('the command does not open the folder')
         return self.folder[0]
 
-    def manager(self, *, staged: bool = False) -> BatchManager:
-        """The batches of the folder; their rows run through a stage if ``staged``."""
+    @functools.cached_property
+    def manager(self) -> BatchManager:
+        """
+        The batches of the folder, made at the first use, so that a command
+        has one ``Batch`` of each label; their rows run through a stage if the
+        command is given ``--staged``.
+        """
         if self.folder is None:
             raise RuntimeError('the command does not open the folder')
         client, definitions = self.folder
+        staged = getattr(self.args, 'staged', False)
         return BatchManager(
             client,
             definitions=definitions,
@@ -357,12 +364,11 @@ class _Given:
 
     def batch(self, label: str) -> Batch:
         """The batch of ``label``; ``ValueError`` if the label has none."""
-        manager = self.manager()
-        return manager.batch(_known(manager, label))
+        return self.manager.batch(_known(self.manager, label))
 
     def intake(self) -> Intake:
         """The batches of the folder, with the row sources."""
-        return Intake(self.manager(), sources=self.sources)
+        return Intake(self.manager, sources=self.sources)
 
 
 def _known(manager: BatchManager, label: str) -> str:
@@ -543,7 +549,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
     args, client = given.args, given.client
     label = args.label
     template = None if args.template is None else load_template(args.template)
-    manager = given.manager(staged=args.staged)
+    manager = given.manager
     batch = manager.batch(label) if label in manager.headers() else None
     if batch is not None and args.source is not None:
         raise ValueError(f'{label}: the batch exists; --source makes a new batch')
@@ -624,7 +630,7 @@ def _export(given: _Given) -> pd.DataFrame:
     args = given.args
     if args.label is not None:
         table = _show(given)
-        write, _ = Writing(given.manager(), given.writers).by_form(args.label)
+        write, _ = Writing(given.manager, given.writers).by_form(args.label)
     else:
         table = read_text(args.table)
         if KEY not in table.columns:
@@ -680,7 +686,7 @@ def _remove(given: _Given) -> int:
     """Remove a batch, saying that its records stay; a removal cut off too."""
     label = given.args.label
     try:
-        given.manager().remove(label)
+        given.manager.remove(label)
     except KeyError:
         raise ValueError(
             f'{label}: no batch has the label; batches lists them'
