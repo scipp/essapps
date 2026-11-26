@@ -40,7 +40,7 @@ def reduce_table(
     staged: bool = False,
     persist: bool | Sequence[str] = False,
     remaining: bool = False,
-    earlier_settings: bool = False,
+    settings_changed: bool = False,
 ) -> pd.DataFrame:
     """
     Reduce each row of ``table`` with the settings of ``template``, wait, and
@@ -70,7 +70,7 @@ def reduce_table(
         Run the rows through a stage.
     persist:
         As :meth:`~ess.apps.Client.submit` takes it.
-    remaining, earlier_settings:
+    remaining, settings_changed:
         As :func:`reduce_batch` takes them.
 
     Raises
@@ -91,7 +91,7 @@ def reduce_table(
         staged=staged,
         persist=persist,
     )
-    return reduce_batch(batch, remaining=remaining, earlier_settings=earlier_settings)
+    return reduce_batch(batch, remaining=remaining, settings_changed=settings_changed)
 
 
 def reduce_batch(
@@ -99,7 +99,7 @@ def reduce_batch(
     keys: Sequence[str] | None = None,
     *,
     remaining: bool = False,
-    earlier_settings: bool = False,
+    settings_changed: bool = False,
 ) -> pd.DataFrame:
     """
     Reduce the rows of ``keys`` of ``batch``, or all of its rows, wait, close
@@ -118,10 +118,10 @@ def reduce_batch(
         since the row's cells or its spec changed, or since the settings
         changed for a row that has no result of them yet. A row reduced with
         earlier settings is left, as it is by the page's "Reduce".
-    earlier_settings:
+    settings_changed:
         Together with ``remaining``, reduce also the rows reduced with earlier
-        settings (:func:`~.state.earlier_settings`), as the page's "Reduce them
-        again" does. The rows of both are chosen by
+        settings (:func:`~.state.with_changed_settings`), as the page's
+        "Reduce them again" does. The rows of both are chosen by
         :func:`~.state.to_reduce`, as the page chooses them.
 
     Raises
@@ -136,8 +136,8 @@ def reduce_batch(
         raise ValueError(f'a table cannot hold the blank {", ".join(taken)}')
     client = batch.client
     which: list[Which] = ['remaining'] if remaining else ['all']
-    if remaining and earlier_settings:
-        which.append('earlier')
+    if remaining and settings_changed:
+        which.append('settings changed')
     try:
         # Records that a workspace went on with after a restart finish first.
         found = batch.state(keys, compare=False).values()

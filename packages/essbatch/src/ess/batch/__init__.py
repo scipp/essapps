@@ -16,12 +16,12 @@ from .reduction import Batch
 from .source import FileInfo, Range, RowFunction, RowSource, rows_of
 from .state import (
     RowState,
-    earlier_settings,
     left_to_reduce,
     not_reduced,
     publishable,
     ready,
     to_reduce,
+    with_changed_settings,
 )
 
 __all__ = [
@@ -38,7 +38,6 @@ __all__ = [
     'RowFunction',
     'RowSource',
     'RowState',
-    'earlier_settings',
     'left_to_reduce',
     'not_reduced',
     'open_workspace',
@@ -46,4 +45,5 @@ __all__ = [
     'ready',
     'rows_of',
     'to_reduce',
+    'with_changed_settings',
 ]

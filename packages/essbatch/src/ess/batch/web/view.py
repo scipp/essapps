@@ -50,7 +50,7 @@ ORDER = (
     'ready',
     'running',
     'done',
-    'earlier',
+    'settings changed',
     'outdated',
     'failed',
     'cancelled',
@@ -193,7 +193,7 @@ def reason(
     titles: Mapping[str, str],
 ) -> tuple[str, str]:
     """
-    Why a row reads as its status, and, if it reads ``earlier``, the titles
+    Why a row reads as its status, and, if it reads ``settings changed``, the titles
     of what changed since. ``problems`` are those of its cells,
     ``unsubmitted`` is why Follow could not reduce it, and ``failure`` why
     its result failed.
@@ -205,7 +205,7 @@ def reason(
         return failure, ''
     if problems:
         return '; '.join(problems.values()), ''
-    if status == 'earlier':
+    if status == 'settings changed':
         named = _changed(state, titles)
         changed = f'{named} changed' if named else ''
         since = f': {changed} since' if changed else ''

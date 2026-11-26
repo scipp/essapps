@@ -461,7 +461,7 @@ def test_refused_settings_refuse_every_ready_row_without_a_result_until_they_cha
     assert loop.refused == {}
 
 
-def test_a_changed_setting_reduces_no_row_again_and_its_rows_are_of_earlier_settings(
+def test_a_changed_setting_reduces_no_row_again_and_its_rows_read_settings_changed(
     loop: Stepping, client: Client, sample: Measure
 ) -> None:
     sample(1, 'water')
@@ -474,7 +474,7 @@ def test_a_changed_setting_reduces_no_row_again_and_its_rows_are_of_earlier_sett
     assert record.member == '2'
     assert record.request.params['binning'] == {'bins': 3}
     old = loop.batch.state()['1']
-    assert (old.text, old.changed) == ('earlier', {'binning'})
+    assert (old.text, old.changed) == ('settings changed', {'binning'})
 
 
 def test_a_row_reads_the_record_of_its_row_in_a_batch_stepped_before(

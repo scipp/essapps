@@ -7,7 +7,7 @@
 // a batch serves the page at its root without one, and the page of a batch
 // that cannot be shown is shown so too (see `showWorkspace`).
 import {h, get, post, query, save} from './dom.js';
-import {Grid, cellColumns, statusColumn} from './tables.js';
+import {Grid, cellColumns, statusClass, statusColumn} from './tables.js';
 import {renderForm, summary} from './form.js';
 
 const $ = (id) => document.getElementById(id);
@@ -245,10 +245,10 @@ function render(state) {
   $('title').textContent = named.reverse().join(' · ');
   $('folder').textContent = state.folder;
   $('n-rows').textContent = state.counts.all;
-  renderAction(state.action, state.counts.earlier);
+  renderAction(state.action, state.counts['settings changed']);
   renderChips(state.counts);
   if (old?.action.running && !state.action.running) {
-    const ended = ['done', 'earlier', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
+    const ended = ['done', 'settings changed', 'failed', 'cancelled'].filter((s) => state.counts[s]).map((s) => `${state.counts[s]} ${s}`);
     toast(`Reducing ended: ${ended.join(', ')}.`);
   }
   showColumns(state);
@@ -508,7 +508,7 @@ function drawBatches() {
     status.className = failed ? 'bad' : '';
     status.replaceChildren(
       failed ?? '',
-      ...(n ? CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill st-${s}`, text: `${n[s]} ${s}`})) : []),
+      ...(n ? CHIPS.filter((s) => s !== 'all' && n[s]).map((s) => h('span', {class: `pill ${statusClass(s)}`, text: `${n[s]} ${s}`})) : []),
     );
   }
 }
@@ -865,9 +865,9 @@ async function makeSetting(column) {
   dialog.showModal();
 }
 
-// The reduce button and its menu, and the marks of the Settings tab; `earlier`
-// counts the rows reduced with earlier settings.
-function renderAction(action, earlier) {
+// The reduce button and its menu, and the marks of the Settings tab; `settingsChanged`
+// counts the rows with status `settings changed`.
+function renderAction(action, settingsChanged) {
   const button = $('reduce');
   const running = action.progress !== null;
   const [finished, started] = action.progress ?? [0, 0];
@@ -882,21 +882,21 @@ function renderAction(action, earlier) {
   $('cancel').classList.toggle('danger', action.running > 0);
   $('n-remaining').textContent = action.remaining;
   $('n-again').textContent = action.again;
-  $('n-earlier').textContent = earlier;
-  const counted = {remaining: action.remaining, earlier, all: action.again};
+  $('n-settings-changed').textContent = settingsChanged;
+  const counted = {remaining: action.remaining, 'settings changed': settingsChanged, all: action.again};
   for (const [which, n] of Object.entries(counted)) {
     document.querySelector(`[data-reduce="${which}"]`).disabled = Boolean(action.blocked) || n === 0;
   }
   $('reduce-more').disabled = Boolean(action.blocked);
-  for (const id of ['reduce-more', 'reduce-earlier']) $(id).title = action.blocked ?? '';
+  for (const id of ['reduce-more', 'reduce-settings-changed']) $(id).title = action.blocked ?? '';
   $('settings-badge').hidden = !action.blocked;
   $('settings-badge').title = action.blocked ?? '';
-  $('earlier-badge').hidden = earlier === 0;
-  $('earlier-badge').textContent = earlier;
-  $('earlier-badge').title = `${count(earlier)} reduced with earlier settings`;
+  $('settings-changed-badge').hidden = settingsChanged === 0;
+  $('settings-changed-badge').textContent = settingsChanged;
+  $('settings-changed-badge').title = `${count(settingsChanged)} reduced with earlier settings`;
 }
 
-const CHIPS = ['all', 'ready', 'running', 'done', 'earlier', 'outdated', 'failed', 'incomplete', 'cancelled'];
+const CHIPS = ['all', 'ready', 'running', 'done', 'settings changed', 'outdated', 'failed', 'incomplete', 'cancelled'];
 
 // The chip of each status is made once and updated in place, so that a chip
 // that has the keyboard focus keeps it.
@@ -910,7 +910,7 @@ function chip(status) {
         'button',
         {
           type: 'button',
-          class: `chip st-${status}`,
+          class: `chip ${statusClass(status)}`,
           onclick: () => {
             view.filter = view.filter === status ? 'all' : status;
             remember();
@@ -975,9 +975,9 @@ function stopFollowing() {
 // are never disabled: a click on them may send the value typed first.
 function renderSettings(state) {
   const {action, counts, settings_unapplied: changed, settings_problem: problem} = state;
-  $('earlier').hidden = counts.earlier === 0;
-  $('earlier-state').textContent = `${count(counts.earlier)} reduced with earlier settings.`;
-  $('reduce-earlier').disabled = Boolean(action.blocked);
+  $('settings-changed').hidden = counts['settings changed'] === 0;
+  $('settings-changed-state').textContent = `${count(counts['settings changed'])} reduced with earlier settings.`;
+  $('reduce-settings-changed').disabled = Boolean(action.blocked);
   renderDraft($('draft'), changed, problem ? `${problem}.` : '', 'These settings are in force.');
   // The file holds the batch's settings, so it waits for Apply or Discard.
   const download = document.querySelector('[data-file="settings.yaml"]');
@@ -1208,7 +1208,7 @@ function publishBlocked() {
   if (outputChanged()) return 'Apply or discard the changes of the form first.';
   if (problem) return problem;
   if (unpublishable) return unpublishable;
-  if (!toPublish().length) return 'Select rows that are done or earlier and not published.';
+  if (!toPublish().length) return 'Select rows that are done or settings changed and not published.';
   return '';
 }
 
@@ -1218,7 +1218,7 @@ function renderPublishButton() {
   const blocked = publishBlocked();
   $('publish').disabled = Boolean(blocked);
   $('publish').textContent = n ? `Publish ${n} selected` : 'Publish';
-  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or earlier and not published, with the form in force.';
+  $('publish-hint').textContent = blocked || 'Publishes the result of each selected row that is done or settings changed and not published, with the form in force.';
 }
 
 function sayOutput(text) {
@@ -1321,7 +1321,7 @@ function renderLegend() {
   const groups = Map.groupBy(shown.filter((row) => row.status !== 'done'), (row) => row.status);
   $('legend-summary').replaceChildren(
     ...[...groups].map(([status, group]) => {
-      const reasons = new Set(group.map((row) => (status === 'earlier' ? row.changed : row.reason)));
+      const reasons = new Set(group.map((row) => (status === 'settings changed' ? row.changed : row.reason)));
       const [reason] = reasons;
       const text = reasons.size === 1 && reason ? `${group.length} ${status}: ${reason}` : `${group.length} ${status}`;
       return h('span', {text});
@@ -1336,7 +1336,7 @@ function renderLegend() {
         {title: [row.name, row.reason].filter(Boolean).join(': ')},
         h('span', {class: `swatch${color ? dashed : ' none'}`, style: color ? `--color: ${color}` : null}),
         h('span', {class: 'name', text: row.name}),
-        row.status !== 'done' && h('span', {class: `pill st-${row.status}`, text: row.status}),
+        row.status !== 'done' && h('span', {class: `pill ${statusClass(row.status)}`, text: row.status}),
       );
     }),
   );
@@ -1367,11 +1367,11 @@ function renderRow(detail) {
   if (json === view.detail) return;
   view.detail = json;
   const tried = row.status === 'failed' || row.status === 'cancelled';
-  const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info', earlier: 'earlier'}[row.status];
+  const reasonClass = {failed: 'bad', cancelled: 'bad', incomplete: 'warn', outdated: 'info', 'settings changed': 'settings-changed'}[row.status];
   const useSettings = () => replaceChanges() && act('row/use-settings', {key: row.key}).then((done) => done && showTab('settings'));
   const settingsNames = Object.fromEntries([...view.state.columns.map((c) => [c.name, c.title]), ...view.state.settings.map((n) => [n.path[0], n.label])]);
   const parts = [
-    h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill st-${row.status}`, text: row.status})),
+    h('div', {class: 'row-head'}, h('h2', {text: row.name}), h('span', {class: `pill ${statusClass(row.status)}`, text: row.status})),
     h(
       'dl',
       {class: 'summary'},
@@ -1448,10 +1448,10 @@ function showTab(tab) {
 
 // Reduce the rows of earlier settings, from the reduce menu or the Settings
 // tab, once the person confirms.
-function reduceEarlier() {
-  const n = view.state.counts.earlier;
+function reduceSettingsChanged() {
+  const n = view.state.counts['settings changed'];
   const question = `Reduce the ${count(n)} reduced with earlier settings again, with the settings now?`;
-  if (confirm(question)) act('reduce', {which: 'earlier'});
+  if (confirm(question)) act('reduce', {which: 'settings changed'});
 }
 
 function wire() {
@@ -1464,7 +1464,7 @@ function wire() {
   document.querySelectorAll('[data-reduce]').forEach((item) => {
     item.onclick = () => {
       $('reduce-split').querySelector('.menu-items').hidden = true;
-      if (item.dataset.reduce === 'earlier') reduceEarlier();
+      if (item.dataset.reduce === 'settings changed') reduceSettingsChanged();
       else act('reduce', {which: item.dataset.reduce, keys: view.selected});
     };
   });
@@ -1472,7 +1472,7 @@ function wire() {
   $('stop-follow').onclick = stopFollowing;
   $('settings-apply').onclick = () => act('settings/apply');
   $('settings-discard').onclick = () => act('settings/discard');
-  $('reduce-earlier').onclick = reduceEarlier;
+  $('reduce-settings-changed').onclick = reduceSettingsChanged;
   $('relist').onclick = () => act('relist');
   const newBatch = $('new-batch');
   $('new-batch-open').onclick = openNewBatch;

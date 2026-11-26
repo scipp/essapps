@@ -495,7 +495,7 @@ def test_a_row_says_whether_its_result_is_current_or_outdated(
     assert shown['3']['result'] is None
 
 
-def test_a_changed_setting_of_a_column_turns_the_rows_that_take_it_earlier(
+def test_a_changed_setting_of_a_column_turns_the_rows_that_take_it_settings_changed(
     http: TestClient, client: Client
 ) -> None:
     thickness(http, ['1'], 3.0)
@@ -504,7 +504,7 @@ def test_a_changed_setting_of_a_column_turns_the_rows_that_take_it_earlier(
     http.post('/api/settings', json={'path': ['thickness'], 'op': 'set', 'value': 2.5})
     http.post('/api/settings/apply')
 
-    assert statuses(http) == {'1': 'done', '2': 'earlier', '3': 'incomplete'}
+    assert statuses(http) == {'1': 'done', '2': 'settings changed', '3': 'incomplete'}
     assert rows(http)['2']['changed'] == 'Thickness changed'
     # The row tab shows the value that the row took, and that it changed.
     detail = http.get('/api/row', params={'key': '2'}).json()
@@ -576,7 +576,7 @@ def test_the_setting_of_a_column_without_a_default_can_be_reset_to_none(
     assert [r['status'] for r in applied['rows']] == ['incomplete']
 
 
-def test_a_changed_setting_leaves_the_rows_reduced_reading_earlier(
+def test_a_changed_setting_leaves_the_rows_reduced_reading_settings_changed(
     http: TestClient, client: Client
 ) -> None:
     reduced(http, client)
@@ -584,17 +584,25 @@ def test_a_changed_setting_leaves_the_rows_reduced_reading_earlier(
     bins(http, 3)
 
     shown = state(http)
-    assert statuses(http) == {'1': 'earlier', '2': 'earlier', '3': 'incomplete'}
+    assert statuses(http) == {
+        '1': 'settings changed',
+        '2': 'settings changed',
+        '3': 'incomplete',
+    }
     assert rows(http)['1']['changed'] == 'Binning changed'
     assert rows(http)['1']['reason'].startswith(
         'Reduced with earlier settings: Binning changed since.'
     )
-    assert (shown['counts']['earlier'], shown['counts']['done']) == (2, 0)
+    assert (shown['counts']['settings changed'], shown['counts']['done']) == (2, 0)
     assert shown['action']['label'] == 'Nothing left to reduce'
     detail = http.get('/api/row', params={'key': '1'}).json()
     assert detail['differs'] == ['binning']
     table = pd.read_csv(io.BytesIO(http.get('/api/table.csv').content), dtype=str)
-    assert list(table['status']) == ['earlier', 'earlier', 'incomplete']
+    assert list(table['status']) == [
+        'settings changed',
+        'settings changed',
+        'incomplete',
+    ]
 
 
 def test_the_rows_of_earlier_settings_have_results_to_plot_and_download(
@@ -623,11 +631,11 @@ def test_reduce_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
     thickness(http, ['2'], 4.0)
 
     reduced(http, client)
-    assert (statuses(http)['1'], statuses(http)['2']) == ('earlier', 'done')
+    assert (statuses(http)['1'], statuses(http)['2']) == ('settings changed', 'done')
 
-    reduced(http, client, which='earlier')
+    reduced(http, client, which='settings changed')
     assert statuses(http)['1'] == 'done'
-    assert state(http)['counts']['earlier'] == 0
+    assert state(http)['counts']['settings changed'] == 0
 
 
 def test_a_page_started_again_marks_the_rows_reduced_with_other_settings(
@@ -638,7 +646,11 @@ def test_a_page_started_again_marks_the_rows_reduced_with_other_settings(
 
     bins(again, 3)
 
-    assert statuses(again) == {'1': 'earlier', '2': 'earlier', '3': 'incomplete'}
+    assert statuses(again) == {
+        '1': 'settings changed',
+        '2': 'settings changed',
+        '3': 'incomplete',
+    }
 
 
 class Count(BaseModel):
@@ -1088,7 +1100,7 @@ def test_settings_the_batch_has_show_and_an_applied_edit_of_another_keeps_them(
     }
 
 
-@pytest.mark.parametrize('which', ['remaining', 'earlier', 'all', 'selected'])
+@pytest.mark.parametrize('which', ['remaining', 'settings changed', 'all', 'selected'])
 def test_while_the_form_holds_a_change_nothing_is_reduced(
     http: TestClient, client: Client, which: str
 ) -> None:
@@ -1242,7 +1254,7 @@ def test_the_settings_of_a_row_fill_the_form_until_apply(
         'The form shows the settings water was reduced with. Apply to use them.'
     )
     assert (form_bins(used), used['settings_unapplied']) == (2, True)
-    assert used['rows'][0]['status'] == 'earlier'
+    assert used['rows'][0]['status'] == 'settings changed'
     assert batch.settings['binning'] == {'bins': 2}
     assert applied['rows'][0]['status'] == 'done'
 
@@ -1256,22 +1268,22 @@ def test_settings_tried_on_one_row_reach_the_others_only_when_a_person_says_so(
     http.post('/api/reduce', json={'which': 'selected', 'keys': ['1']})
     client.wait(client.records())
 
-    def earlier() -> list[str]:
-        return [k for k, r in rows(http).items() if r['status'] == 'earlier']
+    def settings_changed() -> list[str]:
+        return [k for k, r in rows(http).items() if r['status'] == 'settings changed']
 
     def binning() -> list[int]:
         return [
             client.latest('scan', k).request.params['binning']['bins'] for k in '12'
         ]
 
-    assert (earlier(), binning()) == (['2'], [4, 2])
+    assert (settings_changed(), binning()) == (['2'], [4, 2])
     assert http.get('/api/row', params={'key': '1'}).json()['differs'] == []
     if keep:
-        reduced(http, client, which='earlier')
-        assert (earlier(), binning()) == ([], [4, 4])
+        reduced(http, client, which='settings changed')
+        assert (settings_changed(), binning()) == ([], [4, 4])
     else:
         bins(http, 2)
-        assert (earlier(), binning()) == (['1'], [4, 2])
+        assert (settings_changed(), binning()) == (['1'], [4, 2])
 
 
 def test_a_row_added_on_the_page_is_empty_and_rows_removed_are_gone(
@@ -1955,7 +1967,9 @@ def test_counts_are_given_in_the_words_of_the_page(
 
     counted = http.get('/api/batches/counts').json()
 
-    assert counted['rows'] == {'scan': {'earlier': 1, 'ready': 1, 'incomplete': 1}}
+    assert counted['rows'] == {
+        'scan': {'settings changed': 1, 'ready': 1, 'incomplete': 1}
+    }
     assert counted['failed'] == {}
 
 

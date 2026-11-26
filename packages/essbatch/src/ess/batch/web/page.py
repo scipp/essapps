@@ -76,10 +76,10 @@ pages.
 
 Statuses are named in a scientist's words (:attr:`RowState.text
 <ess.batch.RowState.text>`): ``ready``, ``running``, ``done``,
-``earlier``, ``outdated``, ``failed``, ``cancelled`` and ``incomplete``. A
+``settings changed``, ``outdated``, ``failed``, ``cancelled`` and ``incomplete``. A
 change of settings applies to rows not reduced yet: a done row whose result
 differs from its request only at settings
-(:func:`~ess.batch.earlier_settings`) reads ``earlier``, reduced with
+(:func:`~ess.batch.with_changed_settings`) reads ``settings changed``, reduced with
 earlier settings, and "Reduce" leaves it
 (:func:`~ess.batch.left_to_reduce`) until a person reduces it with the
 settings now. Its result counts as one of a done row: the plot and the

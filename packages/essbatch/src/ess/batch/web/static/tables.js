@@ -428,10 +428,13 @@ export class Grid {
   }
 }
 
-const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'earlier', 'done'];
+// The CSS class of a status: a status text may hold a space.
+export const statusClass = (status) => `st-${status.replaceAll(' ', '-')}`;
+
+const STATUS_ORDER = ['failed', 'incomplete', 'outdated', 'cancelled', 'ready', 'running', 'settings changed', 'done'];
 
 // The status of a row as a pill, with the settings that changed beside it if
-// its result was reduced with earlier settings; the tooltip says why.
+// its result was reduced with settings that changed since; the tooltip says why.
 export const statusColumn = {
   title: 'Status',
   field: 'status',
@@ -444,7 +447,7 @@ export const statusColumn = {
     return h(
       'span',
       {class: 'status'},
-      h('span', {class: `pill st-${row.status}`}, row.status),
+      h('span', {class: `pill ${statusClass(row.status)}`}, row.status),
       row.changed && h('span', {class: 'changed', text: row.changed}),
     );
   },

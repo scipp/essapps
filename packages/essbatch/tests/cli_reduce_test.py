@@ -156,14 +156,14 @@ def test_main_with_remaining_leaves_the_rows_reduced_with_earlier_settings(
     )
 
     table = read_text(settings_changed)
-    assert list(table['status']) == ['earlier'] * 2
+    assert list(table['status']) == ['settings changed'] * 2
     assert code == 3
     assert 'left 2 rows' in capsys.readouterr().err
     with app(folder) as batch:
         assert len(batch.client.records(label='x')) == 2
 
 
-def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
+def test_main_with_remaining_and_settings_changed_reduces_those_rows_too(
     command: list[str], cli_template: Path, folder: Path, settings_changed: Path
 ) -> None:
     runs = folder / 'runs.csv'
@@ -173,7 +173,7 @@ def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
         '-l',
         'x',
         '--remaining',
-        '--earlier-settings',
+        '--settings-changed',
     ]
 
     code = main([*command, 'reduce', *args, '-o', str(settings_changed)])
@@ -185,7 +185,7 @@ def test_main_with_remaining_and_earlier_settings_reduces_those_rows_too(
         assert len(batch.client.records(label='x')) == 4
 
 
-def test_main_refuses_earlier_settings_without_remaining(
+def test_main_refuses_settings_changed_without_remaining(
     command: list[str],
     cli_template: Path,
     folder: Path,
@@ -198,7 +198,7 @@ def test_main_refuses_earlier_settings_without_remaining(
             [
                 *command,
                 *('reduce', str(cli_template), str(runs), '-l', 'x'),
-                '--earlier-settings',
+                '--settings-changed',
             ]
         )
 

@@ -154,11 +154,11 @@ newest = records.sort_values('created').drop_duplicates('member', keep='last').s
 state = rows.join(newest)                               # a left join on the key
 changed = {key: differs(request(key), newest.params[key]) for key in rows.index}
 own = {key: set(row.dropna().index) for key, row in rows[columns].iterrows()}  # the cells with a value
-earlier = [key for key in rows.index if changed[key] and not changed[key] & own[key]]
+settings_changed = [key for key in rows.index if changed[key] and not changed[key] & own[key]]
 outdated = [key for key in rows.index if changed[key] & own[key]]
 ```
 
-A row whose request differs from its result's only at settings reads `earlier`, reduced with earlier settings: a change of settings applies to the rows not reduced yet. For one row, a parameter counts as a setting if it is no column or the row's cell is empty, since the row then follows the setting. A row whose own cell changed reads `outdated`. Which cells are empty is read from the table now, so nothing more is kept.
+A row whose request differs from its result's only at settings reads `settings changed`, reduced with earlier settings: a change of settings applies to the rows not reduced yet. For one row, a parameter counts as a setting if it is no column or the row's cell is empty, since the row then follows the setting. A row whose own cell changed reads `outdated`. Which cells are empty is read from the table now, so nothing more is kept.
 
 A cell that names a file that is not found is marked when the table is shown, and a request with it is refused, as for any cell that does not resolve. Nothing about the files is stored in the table.
 
@@ -198,7 +198,7 @@ frame = batch.frame()
 frame.loc['60340', 'thickness'] = 2.0
 batch.put(frame)                            # row 60340 is outdated; the others are not
 batch.settings = {**batch.settings, 'thickness': 1.5}
-                                            # the rows with an empty cell read `earlier`; 60340 does not
+                                            # the rows with an empty cell read `settings changed`; 60340 does not
 ```
 
 A row that Follow adds later has an empty cell, and is reduced with 1.5. The settings form shows `thickness` with 1.5, marked as a column.
@@ -270,7 +270,7 @@ The code of this ADR and of ADR 0013 is written together, since Follow is in use
 - A spec cannot make a person choose between a value and `None` for each row: an empty cell of such a column is the setting, or `None` if there is none. It still can for a setting.
 - An empty cell depends on the settings, outside the table. The page shows it in grey as the value that the row takes.
 - A table file shows an empty cell where a row takes the setting, so it needs the settings file to say what a row was reduced with.
-- A cell emptied after its row was reduced counts its value as a setting: the row reads `earlier`, not `outdated`.
+- A cell emptied after its row was reduced counts its value as a setting: the row reads `settings changed`, not `outdated`.
 - A batch made from a source keeps the names that its source fills with it, as the blanks of `settings.json`, as they were when it was made; the batch, the command without the sources, and Follow read them there. A step asks the batch which names a row waits for.
 - The table of a batch made from a source keeps a column for each name that its source fills: `put`, a table file loaded, and "Make this a setting" refuse to drop one.
 - `settings.json` holds every setting, those at the columns too, as a template whose blanks are `batch.fills`. A folder written before, whose templates had other blanks, is refused when opened (`FolderDefinitions`, `format.json`).

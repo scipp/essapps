@@ -383,7 +383,7 @@ class Batch:
             batch.settings = {**batch.settings, 'q': {'num_bins': 50}}
 
         An assignment reduces no row: the rows reduced before that take a
-        setting changed read ``earlier``, with the setting in
+        setting changed read ``settings changed``, with the setting in
         :attr:`RowState.changed`. The workspace checks the settings when
         :meth:`state` resolves them, and refuses a name that is not a
         parameter; a setting at a column is checked as a cell of each row

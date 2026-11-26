@@ -307,9 +307,9 @@ def test_a_step_leaves_the_rows_of_earlier_settings_and_apply_to_all_reduces_the
     page.pages.tick()
 
     shown = {row.name: row for row in done(page, client).rows}
-    assert (shown['water'].record, shown['water'].status) == (first, 'earlier')
+    assert (shown['water'].record, shown['water'].status) == (first, 'settings changed')
     assert shown['oil'].status == 'done'
-    page.reduce(Reduce(which='earlier'))
+    page.reduce(Reduce(which='settings changed'))
     assert done(page, client).rows[0].status == 'done'
 
 
@@ -349,7 +349,7 @@ def test_apply_while_following_reduces_nothing_and_the_next_step_uses_it(
     assert (oil.status, oil.reason) == ('ready', '')
     page.pages.tick()
     shown = {row.name: row for row in done(page, client).rows}
-    assert (shown['water'].status, shown['oil'].status) == ('earlier', 'done')
+    assert (shown['water'].status, shown['oil'].status) == ('settings changed', 'done')
     assert client.latest('scan', '2').request.params['binning'] == {'bins': 3}
 
 

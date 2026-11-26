@@ -127,7 +127,7 @@ class Row(BaseModel):
     text of each of its other notes by column, and a :class:`Cell` per
     parameter column. ``result`` says whether it has a result to show,
     ``current`` or ``outdated``. ``changed`` names, for a row that reads
-    ``earlier``, the settings that changed since its result, such as
+    ``settings changed``, the settings that changed since its result, such as
     ``'Binning changed'``. ``published`` is the catalogue identifier of its
     result, if published, and ``publishable`` says whether its result may be
     published and is not (:func:`~ess.batch.state.publishable`).
@@ -153,7 +153,7 @@ class Action(BaseModel):
     (all), and while rows run, how many of the rows submitted with them are
     finished, as ``[finished, all]``. The rows reduced with earlier settings,
     which "Reduce rows of earlier settings" reduces, are the count
-    ``earlier`` of :attr:`State.counts`.
+    ``settings changed`` of :attr:`State.counts`.
     """
 
     label: str
@@ -453,7 +453,7 @@ class Reduce(BaseModel):
     can be, or those of ``keys``.
     """
 
-    which: Literal['remaining', 'earlier', 'all', 'selected'] = 'remaining'
+    which: Literal['remaining', 'settings changed', 'all', 'selected'] = 'remaining'
     keys: list[str] = []
 
 

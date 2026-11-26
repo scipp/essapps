@@ -11,7 +11,7 @@ the publisher writes (:class:`~.definition.Publishing`): each upload::
 
     {'published': [{'key': '60339', 'record': '7f3a...', 'pid': 'pid:...'}]}
 
-A result is published if its row reads ``done`` or ``earlier``: completed,
+A result is published if its row reads ``done`` or ``settings changed``: completed,
 and not outdated (:func:`~.state.publishable`). A record is published at
 most once; a newer result of the row is published as a new dataset. Each
 upload is kept as soon as it succeeds, so that one that fails after others

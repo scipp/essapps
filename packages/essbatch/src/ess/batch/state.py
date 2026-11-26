@@ -26,8 +26,9 @@ A change of settings applies to the rows not reduced yet. For one row, a
 parameter counts as a setting if it is no column or the row's cell there is
 empty, since the row then takes the setting of the batch. A completed result
 whose request differs from the row's only at settings so counted is reduced
-with *earlier settings* (:attr:`RowState.earlier`): it reads ``earlier``, and
-:func:`left_to_reduce` leaves it until a person reduces it again. A row whose
+with earlier settings (:attr:`RowState.settings_changed`): it reads
+``settings changed``, and :func:`left_to_reduce` leaves it until a person
+reduces it again. A row whose
 own cell changed reads ``outdated``. Which cells are empty is read from the
 batch table now, so a cell emptied after the row was reduced counts as a setting.
 
@@ -65,11 +66,11 @@ class RowState:
     ``spec_changed`` is true if the result is of another spec than the one
     bound. ``outdated`` is true if the result is of another spec, or if the
     request changed; ``None`` if that is not known, since the requests were not
-    compared. ``earlier`` is true if the row is ready and its completed result
-    differs from its request only at settings: not at a column where the
-    row's cell holds a value, and of the same spec. ``own`` names the
-    parameter columns at which the row's cell holds a value: those where the
-    row gives itself its value, not the setting or the default.
+    compared. ``settings_changed`` is true if the row is ready and its
+    completed result differs from its request only at settings: not at a
+    column where the row's cell holds a value, and of the same spec. ``own``
+    names the parameter columns at which the row's cell holds a value: those
+    where the row gives itself its value, not the setting or the default.
     """
 
     key: str
@@ -79,7 +80,7 @@ class RowState:
     changed: frozenset[str] | None = frozenset()
     spec_changed: bool = False
     outdated: bool | None = False
-    earlier: bool = False
+    settings_changed: bool = False
     own: frozenset[str] = frozenset()
 
     @property
@@ -87,13 +88,13 @@ class RowState:
         """
         The status of the row, as the page, a table file written and the command
         say it: ``running``, ``incomplete``, ``ready`` (no result),
-        ``failed``, ``cancelled``, ``done``, ``earlier`` or ``outdated``. A
-        failed or cancelled result reads as its status whether or not the
-        request changed since, since the row needs reducing either way. A row
-        of earlier settings (:attr:`earlier`) reads ``earlier``: its result is
-        completed, as one that reads ``done``. A completed result not compared
-        with the settings, as while they are refused, reads ``outdated``: it
-        cannot be told to match them.
+        ``failed``, ``cancelled``, ``done``, ``settings changed`` or
+        ``outdated``. A failed or cancelled result reads as its status whether
+        or not the request changed since, since the row needs reducing either
+        way. A row of earlier settings (:attr:`settings_changed`) reads
+        ``settings changed``: its result is completed, as one that reads
+        ``done``. A completed result not compared with the settings, as while
+        they are refused, reads ``outdated``: it cannot be told to match them.
         """
         if self.status is Status.PENDING:
             return 'running'
@@ -103,8 +104,8 @@ class RowState:
             return 'ready'
         if self.status in _RERUN:
             return str(self.status)
-        if self.earlier:
-            return 'earlier'
+        if self.settings_changed:
+            return 'settings changed'
         return 'done' if self.outdated is False else 'outdated'
 
 
@@ -201,7 +202,7 @@ def row_states(
             changed=names,
             spec_changed=key in spec_changed,
             outdated=outdated,
-            earlier=not found_problems
+            settings_changed=not found_problems
             and row_status is Status.COMPLETED
             and bool(names)
             and names.isdisjoint(own[key])
@@ -220,46 +221,46 @@ def ready(states: Mapping[str, RowState]) -> list[str]:
     ]
 
 
-def earlier_settings(states: Mapping[str, RowState]) -> list[str]:
+def with_changed_settings(states: Mapping[str, RowState]) -> list[str]:
     """
-    The rows reduced with earlier settings (:attr:`RowState.earlier`). A page
+    The rows reduced with earlier settings (:attr:`RowState.settings_changed`). A page
     that applies a change of settings to new rows only leaves these rows as
     they are, until a person reduces them again. None in states not
     compared.
     """
-    return [k for k, s in states.items() if s.earlier]
+    return [k for k, s in states.items() if s.settings_changed]
 
 
 def left_to_reduce(states: Mapping[str, RowState]) -> list[str]:
     """
     The ready rows with no result, one that failed or was cancelled, or one
-    that is outdated, but those of :func:`earlier_settings`: a change of
+    that is outdated, but those of :func:`with_changed_settings`: a change of
     settings applies to rows not reduced yet, and a change of a cell, or of the
     spec, to its row. A row not compared counts as not outdated.
     """
     return [
         k
         for k in ready(states)
-        if not states[k].earlier
+        if not states[k].settings_changed
         and (
             states[k].status is None or states[k].status in _RERUN or states[k].outdated
         )
     ]
 
 
-type Which = Literal['remaining', 'earlier', 'all']
+type Which = Literal['remaining', 'settings changed', 'all']
 """Which rows to reduce: those left, those of earlier settings, or all ready."""
 
 
 def to_reduce(states: Mapping[str, RowState], which: Which) -> list[str]:
     """
-    The rows of ``which``: :func:`left_to_reduce`, :func:`earlier_settings`,
+    The rows of ``which``: :func:`left_to_reduce`, :func:`with_changed_settings`,
     or :func:`ready`.
     """
     if which == 'remaining':
         return left_to_reduce(states)
-    if which == 'earlier':
-        return earlier_settings(states)
+    if which == 'settings changed':
+        return with_changed_settings(states)
     return ready(states)
 
 
@@ -275,10 +276,10 @@ def not_reduced(states: Mapping[str, RowState]) -> list[str]:
 def publishable(states: Mapping[str, RowState]) -> list[str]:
     """
     The rows whose result may be published: those that read ``done`` or
-    ``earlier``, completed and not outdated.
+    ``settings changed``, completed and not outdated.
     """
     return [
         k
         for k, s in states.items()
-        if s.text in ('done', 'earlier') and s.record is not None
+        if s.text in ('done', 'settings changed') and s.record is not None
     ]

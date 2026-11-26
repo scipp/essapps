@@ -16,10 +16,10 @@ from ess.batch import (
     NotKept,
     RowState,
     definition,
-    earlier_settings,
     left_to_reduce,
     ready,
     rows_of,
+    with_changed_settings,
 )
 from ess.batch.table import as_request, cell_of, data_of
 from pydantic import BaseModel, Field, StrictInt
@@ -441,7 +441,7 @@ def test_changed_settings_make_every_result_outdated(
 
     states = measured.state()
     assert [states[k].outdated for k in ('1', '2')] == [True, True]
-    assert earlier_settings(states) == ['1', '2']
+    assert with_changed_settings(states) == ['1', '2']
     assert left_to_reduce(states) == []
 
 
@@ -663,7 +663,7 @@ def test_a_batch_is_not_made_on_a_table_without_a_column_of_its_fills(
         Batch(from_source.client, PLAIN, label='s', rows=table, fills=FILLS)
 
 
-def test_a_changed_setting_at_a_column_is_earlier_for_rows_that_take_it(
+def test_a_changed_setting_at_a_column_reads_settings_changed_for_rows_that_take_it(
     measured: Batch, client: Client
 ) -> None:
     measured.settings = {**SETTINGS, 'thickness': 2.0}
@@ -675,7 +675,10 @@ def test_a_changed_setting_at_a_column_is_earlier_for_rows_that_take_it(
     edit(measured, '2', thickness=2.5)
     edited = measured.state()['2']
 
-    assert (states['1'].text, states['1'].changed) == ('earlier', {'thickness'})
+    assert (states['1'].text, states['1'].changed) == (
+        'settings changed',
+        {'thickness'},
+    )
     assert (states['2'].text, states['2'].changed) == ('done', set())
     assert (edited.text, edited.changed) == ('outdated', {'thickness'})
 

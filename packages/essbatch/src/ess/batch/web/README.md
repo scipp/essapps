@@ -66,15 +66,15 @@ While the form holds a change, **Reduce**, the ways of its menu, **Reduce them a
 "Put these settings in the form" puts the value that the row was reduced with at each column where its cell is empty, and leaves the batch's setting where the row gives its own value, which is no setting of the batch (`Batch.settings_of`).
 **Download settings** writes every setting, those at the parameter columns too, as a template without blanks.
 A change of the settings applies to the rows not reduced yet.
-A row reduced before that takes the setting changed reads `earlier`, reduced with earlier settings, and **Reduce** leaves it (`ess.batch.left_to_reduce`); a row that gives its own value in the column of the setting stays `done`.
+A row reduced before that takes the setting changed reads `settings changed`, reduced with earlier settings, and **Reduce** leaves it (`ess.batch.left_to_reduce`); a row that gives its own value in the column of the setting stays `done`.
 Its pill is teal, neither the green of `done` nor the amber of `outdated`, and the text beside it names the settings that changed, such as "Binning changed".
 Its result counts as one of a `done` row: the plot, **Download all** and the count of results take it.
-The label of the Settings tab shows how many rows read `earlier`, and the tab a bar above the form, "N rows reduced with earlier settings", with **Reduce them again**.
-That button, and **Reduce rows of earlier settings** in the menu ▾ next to **Reduce**, reduce those rows (`earlier_settings`), after a confirmation that names how many.
+The label of the Settings tab shows how many rows read `settings changed`, and the tab a bar above the form, "N rows reduced with earlier settings", with **Reduce them again**.
+That button, and **Reduce rows of earlier settings** in the menu ▾ next to **Reduce**, reduce those rows (`with_changed_settings`), after a confirmation that names how many.
 **Reduce** never reduces them: with only such rows left, it reads "Nothing left to reduce".
 To try settings on one row, change them, **Apply**, select the row, and choose **Reduce selected** in the menu ▾ next to **Reduce**.
 The row tab then shows what the row was reduced with: the value of each parameter that the row took, from its cells and the settings, and marks those that differ from what the row takes now.
-To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads `earlier`.
+To keep the settings, press **Reduce them again**; to drop them, change them back and **Apply**, and the row tried reads `settings changed`.
 In a batch that follows, the settings applied for the trial are also those of the rows that Follow reduces meanwhile, such as the rows of runs that arrive. To try settings on a few rows first, make a batch without Follow, then the batch that follows with "Start with the settings of" the first.
 The page sends its actions in the order a person did them, so a value typed and Apply clicked at once are applied with one click.
 Each state replaces the form, but not while the focused input holds a value typed and not sent; Escape puts back the value sent last.
@@ -241,7 +241,7 @@ Both are refused while the form holds a change, so that the zip is what the form
 An application given a catalogue (`Pages(..., catalogue=Catalogue(...))`, `ess.apps.scicat`) has, under the form, the button **Publish**, and the grid a column **Published**; without one, neither shows, and `POST api/publish` is refused.
 The result of a row is published as one derived dataset of SciCat (`ess.batch.publish.Publisher`, `ess.apps.scicat.publish`), with the files that the download writes.
 The rest is read from the result: the files it read with a catalogue identifier are its inputs, the proposal is the workspace's, and the software is that of the server now.
-**Publish N selected** publishes the selected rows that read `done` or `earlier` and are not published, with the form in force (`POST api/publish`, `Publisher.publish`); the column **Published** then shows the identifier of each dataset.
+**Publish N selected** publishes the selected rows that read `done` or `settings changed` and are not published, with the form in force (`POST api/publish`, `Publisher.publish`); the column **Published** then shows the identifier of each dataset.
 The batch layer decides which results may be published (`ess.batch.publishable`, `Form.lacking`), and the server sends it, as `Row.publishable` and `OutputShown.unpublishable`; the button only mirrors it, and waits, with a hint, while the form holds a change, names no owner or contact email, or a publication runs.
 A result is published once; a row reduced again may be published again, as a new dataset.
 What the publisher refuses, such as a row whose result is outdated, publishes nothing; an upload that fails keeps those before it, which its message names.

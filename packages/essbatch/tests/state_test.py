@@ -9,11 +9,11 @@ from typing import Any
 import pytest
 from ess.batch import (
     RowState,
-    earlier_settings,
     left_to_reduce,
     not_reduced,
     ready,
     to_reduce,
+    with_changed_settings,
 )
 from ess.batch.state import Which, differs, results, row_states
 from pydantic import BaseModel
@@ -142,7 +142,7 @@ def test_a_failed_or_cancelled_row_reads_so_when_its_request_changed(
 
 
 @pytest.mark.parametrize(
-    ('status', 'changed', 'other', 'earlier', 'left'),
+    ('status', 'changed', 'other', 'settings_changed', 'left'),
     [
         (Status.COMPLETED, {'shared'}, {}, True, False),
         (Status.COMPLETED, {'shared', 'thickness'}, {}, False, True),
@@ -156,7 +156,7 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
     status: Status,
     changed: set[str],
     other: dict[str, Any],
-    earlier: bool,
+    settings_changed: bool,
     left: bool,
 ) -> None:
     found = row_states(
@@ -169,12 +169,12 @@ def test_a_result_that_differs_only_at_settings_is_not_left_to_reduce(
         own=OWN,
     )
 
-    assert found['a'].earlier is earlier
-    assert earlier_settings(found) == (['a'] if earlier else [])
+    assert found['a'].settings_changed is settings_changed
+    assert with_changed_settings(found) == (['a'] if settings_changed else [])
     assert left_to_reduce(found) == (['a'] if left else [])
 
 
-def test_a_change_at_a_column_where_the_cell_is_empty_is_of_earlier_settings() -> None:
+def test_a_change_at_a_column_where_the_cell_is_empty_reads_settings_changed() -> None:
     found = row_states(
         {'a': row(sample='x'), 'b': row(sample='y')},
         COLUMNS,
@@ -184,10 +184,13 @@ def test_a_change_at_a_column_where_the_cell_is_empty_is_of_earlier_settings() -
         own={'a': {'sample'}, 'b': {'sample', 'thickness'}},
     )
 
-    assert {k: s.text for k, s in found.items()} == {'a': 'earlier', 'b': 'outdated'}
+    assert {k: s.text for k, s in found.items()} == {
+        'a': 'settings changed',
+        'b': 'outdated',
+    }
 
 
-def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
+def test_a_row_that_cannot_run_does_not_read_settings_changed() -> None:
     found = row_states(
         {'a': row()},
         COLUMNS,
@@ -198,10 +201,10 @@ def test_a_row_that_cannot_run_is_not_one_of_earlier_settings() -> None:
     )
 
     assert found['a'].problems
-    assert earlier_settings(found) == []
+    assert with_changed_settings(found) == []
 
 
-def earlier_and_new() -> dict[str, RowState]:
+def settings_changed_and_new() -> dict[str, RowState]:
     """Row ``a`` reduced with earlier settings, ``b`` without a result."""
     return row_states(
         {'a': row(sample='x'), 'b': row(sample='y')},
@@ -213,10 +216,13 @@ def earlier_and_new() -> dict[str, RowState]:
     )
 
 
-def test_a_row_of_earlier_settings_reads_earlier() -> None:
-    found = earlier_and_new()
+def test_a_row_reduced_with_earlier_settings_reads_settings_changed() -> None:
+    found = settings_changed_and_new()
 
-    assert {k: s.text for k, s in found.items()} == {'a': 'earlier', 'b': 'ready'}
+    assert {k: s.text for k, s in found.items()} == {
+        'a': 'settings changed',
+        'b': 'ready',
+    }
 
 
 @pytest.mark.parametrize(
@@ -244,10 +250,10 @@ def test_a_row_reads_its_status_in_the_words_of_the_page(
 
 @pytest.mark.parametrize(
     ('which', 'keys'),
-    [('remaining', ['b']), ('earlier', ['a']), ('all', ['a', 'b'])],
+    [('remaining', ['b']), ('settings changed', ['a']), ('all', ['a', 'b'])],
 )
 def test_the_rows_to_reduce_of_each_choice(which: Which, keys: list[str]) -> None:
-    assert to_reduce(earlier_and_new(), which) == keys
+    assert to_reduce(settings_changed_and_new(), which) == keys
 
 
 def test_a_row_without_a_result_is_left_to_reduce() -> None:
@@ -347,8 +353,8 @@ def test_a_completed_row_not_compared_reads_outdated() -> None:
     assert not_compared()['a'].text == 'outdated'
 
 
-def test_a_completed_row_not_compared_is_neither_earlier_nor_left_to_reduce() -> None:
+def test_a_completed_row_not_compared_is_not_reduced_again_by_either_rule() -> None:
     found = not_compared()
 
-    assert earlier_settings(found) == []
+    assert with_changed_settings(found) == []
     assert left_to_reduce(found) == []

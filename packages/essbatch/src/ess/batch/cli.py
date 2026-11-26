@@ -150,17 +150,17 @@ every row that can be, or with --remaining the rows not done. A refused reduce
 makes no batch, but a batch keeps the template and table file given to it.
 
 The status of a row:
-    ready       no result yet; it can be reduced, unless the settings are refused
-    incomplete  it cannot be reduced: a value is missing, such as an empty cell,
-                or refused, or a record that it reads failed or was cancelled
-    running     submitted, not finished
-    done        reduced with the cells and settings it has now
-    earlier     reduced, but a setting it takes changed since; --remaining
-                leaves it, --earlier-settings adds it
-    outdated    reduced, but a cell changed since, or the spec bound is of
-                another version, or the settings are refused, so not compared
-    failed      the reduction failed; the column failure says why
-    cancelled   the reduction was cancelled
+    ready             no result yet; it can be reduced, unless the settings are refused
+    incomplete        it cannot be reduced: a value is missing, such as an empty cell,
+                      or refused, or a record that it reads failed or was cancelled
+    running           submitted, not finished
+    done              reduced with the cells and settings it has now
+    settings changed  reduced, but a setting it takes changed since; --remaining
+                      leaves it, --settings-changed adds it
+    outdated          reduced, but a cell changed since, or the spec bound is of
+                      another version, or the settings are refused, so not compared
+    failed            the reduction failed; the column failure says why
+    cancelled         the reduction was cancelled
 
 follow -l water: water follows its row source, with a step every --interval
 seconds (5). A step adds the rows of the source that are filled and not
@@ -554,7 +554,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
     but at a column that the batch's source fills, where it is left out
     (:meth:`.reduction.Batch.settable`). With ``--remaining`` it reduces the
     rows that the page's "Reduce" does (:func:`.state.left_to_reduce`);
-    ``--earlier-settings`` adds those reduced with earlier settings.
+    ``--settings-changed`` adds those reduced with earlier settings.
     """
     args, client = given.args, given.client
     label = args.label
@@ -605,7 +605,7 @@ def _reduce(given: _Given) -> pd.DataFrame:
         )
     try:
         return frames.reduce_batch(
-            batch, remaining=args.remaining, earlier_settings=args.earlier_settings
+            batch, remaining=args.remaining, settings_changed=args.settings_changed
         )
     except (SubmitError, ValueError):
         # A refusal submits nothing, so the label is free again, unless a
@@ -623,11 +623,11 @@ def _count(number: int, noun: str) -> str:
 
 def _reduced(result: pd.DataFrame) -> int:
     """The exit status of reduce: 3 if a row is not done, saying why if earlier."""
-    # Only --remaining without --earlier-settings leaves such rows.
-    if left := int((result['status'] == 'earlier').sum()):
+    # Only --remaining without --settings-changed leaves such rows.
+    if left := int((result['status'] == 'settings changed').sum()):
         sys.stderr.write(
             f'left {_count(left, "row")} reduced with earlier '
-            'settings: add --earlier-settings to reduce them\n'
+            'settings: add --settings-changed to reduce them\n'
         )
     return 0 if all(result['status'] == 'done') else 3
 
@@ -1042,12 +1042,15 @@ def _reduce_arguments(command: argparse.ArgumentParser) -> None:
     command.add_argument(
         '--remaining',
         action='store_true',
-        help='reduce only the rows that are not done: not those that read earlier',
+        help=(
+            'reduce only the rows that are not done: not those with status '
+            'settings changed'
+        ),
     )
     command.add_argument(
-        '--earlier-settings',
+        '--settings-changed',
         action='store_true',
-        help='with --remaining, reduce the rows that read earlier too',
+        help='with --remaining, reduce the rows with status settings changed too',
     )
 
 
@@ -1093,7 +1096,7 @@ def _publish_arguments(command: argparse.ArgumentParser) -> None:
         'keys',
         metavar='KEY',
         nargs='+',
-        help='the key of a row whose result to publish: done, or earlier',
+        help='the key of a row whose result to publish: done, or settings changed',
     )
 
 
@@ -1153,8 +1156,8 @@ def _with_catalogue(name: str) -> Callable[[argparse.Namespace], str | None]:
 
 
 def _reduce_check(args: argparse.Namespace) -> str | None:
-    if args.earlier_settings and not args.remaining:
-        return '--earlier-settings needs --remaining'
+    if args.settings_changed and not args.remaining:
+        return '--settings-changed needs --remaining'
     if args.table is not None and args.source:
         return 'give a table file or --source, not both'
     if args.source is None and (args.first or args.last or args.later):

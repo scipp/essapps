@@ -486,46 +486,49 @@ def test_a_setting_is_in_force_after_apply_and_discard_takes_a_change_back(
 
 
 @pytest.fixture
-def earlier(page: Any, url: str, client: Client) -> Any:
+def settings_changed(page: Any, url: str, client: Client) -> Any:
     """The page with rows ``1`` and ``2`` reduced, then the bins changed."""
     reduce_rows(page, url, client, '1', '2')
     page.click('[data-tab=settings]')
     page.fill(BINS, '5')
     page.press(BINS, 'Tab')
     page.click('#settings-apply')
-    page.wait_for_selector('.chip.st-earlier .n:text-is("2")')
+    page.wait_for_selector('.chip.st-settings-changed .n:text-is("2")')
     return page
 
 
-def test_rows_reduced_with_earlier_settings_read_earlier_with_what_changed(
-    earlier: Any,
+def test_rows_reduced_with_earlier_settings_read_settings_changed_with_what_changed(
+    settings_changed: Any,
 ) -> None:
-    page = earlier
+    page = settings_changed
 
-    assert pills(page) == ['earlier', 'earlier', 'ready']
+    assert pills(page) == ['settings changed', 'settings changed', 'ready']
     assert page.inner_text('#rows .status .changed >> nth=0') == 'Binning changed'
-    assert page.inner_text('#earlier-badge') == '2'
-    assert page.is_visible('#earlier')
-    assert page.inner_text('#earlier-state') == '2 rows reduced with earlier settings.'
-    page.click('.chip.st-earlier')
+    assert page.inner_text('#settings-changed-badge') == '2'
+    assert page.is_visible('#settings-changed')
+    assert (
+        page.inner_text('#settings-changed-state')
+        == '2 rows reduced with earlier settings.'
+    )
+    page.click('.chip.st-settings-changed')
     page.wait_for_function(f'{PILLS}.length === 2')
-    assert pills(page) == ['earlier', 'earlier']
+    assert pills(page) == ['settings changed', 'settings changed']
 
 
 def test_the_reduce_menu_reduces_the_rows_of_earlier_settings(
-    earlier: Any, client: Client, batch: Batch
+    settings_changed: Any, client: Client, batch: Batch
 ) -> None:
-    page = earlier
+    page = settings_changed
     page.on('dialog', lambda dialog: dialog.accept())
 
     page.click('#reduce-more')
-    assert page.inner_text('#n-earlier') == '2'
-    page.click('[data-reduce=earlier]')
+    assert page.inner_text('#n-settings-changed') == '2'
+    page.click('[data-reduce="settings changed"]')
     client.wait(client.records())
 
     page.wait_for_selector('.chip.st-done .n:text-is("2")')
-    assert page.is_hidden('#earlier-badge')
-    assert page.is_hidden('#earlier')
+    assert page.is_hidden('#settings-changed-badge')
+    assert page.is_hidden('#settings-changed')
     assert {k: s.text for k, s in batch.state().items()} == {
         '1': 'done',
         '2': 'done',
@@ -534,9 +537,9 @@ def test_the_reduce_menu_reduces_the_rows_of_earlier_settings(
 
 
 def test_the_progress_strip_of_an_idle_reduce_button_has_no_width(
-    earlier: Any,
+    settings_changed: Any,
 ) -> None:
-    width = earlier.evaluate(
+    width = settings_changed.evaluate(
         "document.querySelector('#reduce .bar').getBoundingClientRect().width"
     )
 

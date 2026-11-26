@@ -79,7 +79,7 @@ Nothing in the batch layer imports the page or the command.
 | considered | the keys of its source that a batch has taken, left out when it was made, or had in its batch table at a step (`source.json`) |
 | Follow, the batch that follows | Follow is a step every few seconds on the batch that follows (`intake.following`): add the rows of its source that are filled and not considered, then reduce the rows that are ready and have no result |
 
-The value and the request of a row are defined in [The request of a row](#the-request-of-a-row); its state, `outdated` and `earlier` in [The state of a row](#the-state-of-a-row-and-the-rules-over-it).
+The value and the request of a row are defined in [The request of a row](#the-request-of-a-row); its state, `outdated` and `settings changed` in [The state of a row](#the-state-of-a-row-and-the-rules-over-it).
 
 `manager.create` and `intake.create` return the `Batch`, and `manager.batch(label)` gives it again.
 Every other method that names a batch takes its label.
@@ -196,7 +196,7 @@ table.loc['60340', 'thickness'] = 2.0
 batch.put(table)                      # row 60340 is outdated; 60339 still takes 1.5
 ```
 
-Rows 60339 and 60340, reduced in step 2 with the default 1.0, read `earlier` from the setting on, and `make_column` changes no state. At the `put`, row 60340 reads `outdated`, since its cell 2.0 differs from its result; row 60339 stays `earlier`.
+Rows 60339 and 60340, reduced in step 2 with the default 1.0, read `settings changed` from the setting on, and `make_column` changes no state. At the `put`, row 60340 reads `outdated`, since its cell 2.0 differs from its result; row 60339 stays `settings changed`.
 `rows.json` is written with an empty column `thickness`; `settings.json` keeps `thickness: 1.5`.
 A row added later, by a step of Follow, by `take` or by hand, takes 1.5 until its cell is set.
 `batch.put(table.drop(columns='thickness'))` drops the column, and every row takes 1.5 again.
@@ -418,10 +418,10 @@ The settings form of the page has no field for such a column.
 | `changed` | the parameters at which the request differs from the request of the result |
 | `spec_changed` | the result is of another spec than the one bound |
 | `outdated` | `spec_changed`, or `changed` is not empty |
-| `earlier` | the row is ready, its result completed, and its request differs from that of the result only at settings: at parameters that are no column, or where the row's cell is empty |
-| `text` | what the page, a table file written and the command say: `running`, `incomplete`, `ready`, `done`, `earlier`, `outdated`, `failed` or `cancelled` |
+| `settings changed` | the row is ready, its result completed, and its request differs from that of the result only at settings: at parameters that are no column, or where the row's cell is empty |
+| `text` | what the page, a table file written and the command say: `running`, `incomplete`, `ready`, `done`, `settings changed`, `outdated`, `failed` or `cancelled` |
 
-A row with `earlier` reads `earlier`: its result is completed, as that of a row that reads `done`, and is plotted and downloaded as one.
+A row with `settings changed` reads `settings changed`: its result is completed, as that of a row that reads `done`, and is plotted and downloaded as one.
 So a reader that wants the rows with a completed result reads `status` (the field), not `text`.
 `batch.state` raises `SubmitError` if the settings are refused: then no row can run.
 `batch.state(compare=False)` resolves nothing: `changed` is `None`, and so is `outdated` unless the result is of another spec.
@@ -440,10 +440,11 @@ stateDiagram-v2
     running --> done: the record completed
     running --> failed: the record failed
     running --> cancelled: cancel
+    state "settings changed" as settings_changed
     state "with a result" as result {
-        done --> earlier: a setting that it takes changed
+        done --> settings_changed: a setting that it takes changed
         done --> outdated: a cell given another value
-        earlier --> outdated: a cell given another value
+        settings_changed --> outdated: a cell given another value
         failed
         cancelled
     }
@@ -458,7 +459,7 @@ A refusal is not kept, so the next state resolves the cell again, and the proble
 A row with a result whose cell names the file as its record holds it resolves nothing, so it keeps reading `done`.
 A problem goes when a cell is filled or changed, or a setting is applied.
 A row with a problem reads `incomplete` whatever its word but `running`, also when it has a result, as a `done` row whose source-filled cell is emptied; the arrow from the box stands for these.
-A cell emptied counts as a setting: the row reads `earlier` if the setting or default that it then takes differs from what the cell held.
+A cell emptied counts as a setting: the row reads `settings changed` if the setting or default that it then takes differs from what the cell held.
 
 The rules, in `ess.batch`, are functions from the states to keys:
 
@@ -466,12 +467,12 @@ The rules, in `ess.batch`, are functions from the states to keys:
 |---|---|
 | `ready(states)` | no problems, and not pending |
 | `not_reduced(states)` | ready, and without a result: what a step reduces |
-| `earlier_settings(states)` | the rows with `earlier` |
-| `left_to_reduce(states)` | ready, and without a result, failed, cancelled or outdated; not those of `earlier_settings` |
-| `to_reduce(states, which)` | `left_to_reduce` for `'remaining'`, `earlier_settings` for `'earlier'`, `ready` for `'all'` |
-| `publishable(states)` | `done` or `earlier`: the rows whose result may be published |
+| `with_changed_settings(states)` | the rows with `settings changed` |
+| `left_to_reduce(states)` | ready, and without a result, failed, cancelled or outdated; not those of `with_changed_settings` |
+| `to_reduce(states, which)` | `left_to_reduce` for `'remaining'`, `with_changed_settings` for `'settings changed'`, `ready` for `'all'` |
+| `publishable(states)` | `done` or `settings changed`: the rows whose result may be published |
 
-A change of settings applies to the rows not reduced yet, also to a row that takes a setting at a column: it reads `earlier`.
+A change of settings applies to the rows not reduced yet, also to a row that takes a setting at a column: it reads `settings changed`.
 A change of a cell applies to its row: it reads `outdated`.
 Which cells are empty is read from the batch table as it is now, so a row whose cell was emptied since it was reduced counts its value as a setting.
 A person reduces `left_to_reduce`, or chooses the rows.
