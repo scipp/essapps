@@ -490,6 +490,12 @@ class Made(BaseModel):
     label: str
 
 
+class RemoveBatch(BaseModel):
+    """Removes the batch; with ``clear``, the outputs of its records first."""
+
+    clear: bool = False
+
+
 class Notice(BaseModel):
     """What an action of the workspace did, in words for a person."""
 

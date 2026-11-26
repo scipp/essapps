@@ -1898,6 +1898,70 @@ def test_remove_goes_to_another_batch_then_to_the_root_without_one(
     page.errors.clear()
 
 
+def test_clear_outputs_of_the_selected_rows_asks_first_and_shows_them_cleared(
+    page: Any, url: str, client: Client
+) -> None:
+    reduce_rows(page, url, client, '1', '2')
+    asked = []
+    page.on('dialog', lambda dialog: asked.append(dialog.message) or dialog.accept())
+    select(page, 'water')
+
+    page.click('#clear')
+
+    page.wait_for_selector('.chip.st-cleared .n:text-is("1")')
+    page.wait_for_selector('#toast:has-text("Cleared the outputs of 1 row.")')
+    assert asked == [
+        'Clear the outputs of the 1 row selected, to free disk space? The records '
+        'stay, and a reduction of the same rows computes the outputs again. Rows '
+        'of other batches that read these outputs must then be pointed to the new '
+        'results.'
+    ]
+
+
+def test_clear_outputs_on_the_tab_batch_clears_every_row(
+    page: Any, url: str, client: Client
+) -> None:
+    reduce_rows(page, url, client, '1', '2')
+    page.once('dialog', lambda dialog: dialog.accept())
+    page.click('[data-tab=batch]')
+
+    page.click('#clear-batch')
+
+    page.wait_for_selector('.chip.st-cleared .n:text-is("2")')
+    page.wait_for_selector('#toast:has-text("Cleared the outputs of the batch.")')
+
+
+def test_clear_all_outputs_on_the_list_of_batches_clears_the_batch_shown(
+    page: Any, url: str, client: Client
+) -> None:
+    reduce_rows(page, url, client, '1')
+    page.once('dialog', lambda dialog: dialog.accept())
+    page.click('[data-view=batches]')
+
+    page.click('#clear-all')
+
+    page.wait_for_selector('#toast:has-text("Cleared the outputs of every batch.")')
+    page.wait_for_selector('#batches .pill.st-cleared:has-text("1 cleared")')
+    assert client.cleared(client.records()) == [True]
+
+
+def test_remove_with_its_outputs_ticked_clears_them(
+    page: Any, url: str, client: Client, manager: BatchManager
+) -> None:
+    reduce_rows(page, url, client, '1')
+    page.on('dialog', lambda dialog: dialog.accept())
+    page.click('[data-tab=batch]')
+    page.check('#remove-clear')
+
+    page.click('#remove-batch')
+
+    page.wait_for_selector('#toast:has-text("Removed Scan and cleared its outputs.")')
+    assert manager.headers() == {}
+    assert client.cleared(client.records()) == [True]
+    assert all('status of 404' in e for e in page.errors)
+    page.errors.clear()
+
+
 def test_another_page_of_a_removed_batch_shows_why_and_the_list(
     page: Any, pages: Pages, intake: Intake
 ) -> None:

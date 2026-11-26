@@ -9,6 +9,7 @@ The errors that the client raises, beyond Python's own errors for a wrong call.
   be read, such as a released record. An unknown one raises ``KeyError``. Both
   are a ``LookupError``.
 - :class:`RecordFailed`: a read of a record that failed or was cancelled.
+- :class:`NotCleared`: a clear refused, since the outputs are still in use.
 - :class:`Stopped`: any call of a workspace that stopped or is closed.
 
 Each error holds only strings, integers, and tuples of these, so that a wire
@@ -25,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
@@ -116,6 +117,40 @@ class RecordFailed(Exception):
     def __str__(self) -> str:
         why = f': {self.reason}' if self.reason is not None else ''
         return f'record {self.record} {self.status}{why}'
+
+
+type Holder = Literal['pending', 'running', 'record', 'stage', 'accumulator']
+"""What keeps the outputs of a record from being cleared (see :class:`NotCleared`)."""
+
+
+class NotCleared(ValueError):
+    """
+    A clear refused before anything was cleared, since the outputs of
+    ``record`` are in use.
+
+    ``held_by`` says by what, and ``reader`` is its ID, or ``None``::
+
+        held_by        the record                              reader
+        -------        ----------                              ------
+        'pending'      is pending                              None
+        'running'      is cancelled, but its workflow runs     None
+        'record'       is read by a record pending or running  that record
+        'stage'        is read by an open stage                that stage
+        'accumulator'  is read by an accumulator               that accumulator
+    """
+
+    def __init__(self, record: str, held_by: Holder, reader: str | None = None) -> None:
+        self.record = record
+        self.held_by = held_by
+        self.reader = reader
+        super().__init__(record, held_by, reader)
+
+    def __str__(self) -> str:
+        if self.held_by == 'pending':
+            return f'record {self.record} is pending'
+        if self.held_by == 'running':
+            return f'record {self.record} is still running'
+        return f'record {self.record} is read by {self.held_by} {self.reader}'
 
 
 class Stopped(RuntimeError):

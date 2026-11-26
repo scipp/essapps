@@ -31,7 +31,6 @@ from .errors import (
     NotFound,
     Rejected,
     reject_on_error,
-    reject_on_write_error,
     request_error_text,
 )
 from .last_step import LastStep
@@ -339,23 +338,40 @@ class Pages:
             )
         return Made(label=batch.label)
 
-    def remove(self, label: str) -> Notice:
+    def remove(self, label: str, *, clear: bool = False) -> Notice:
         """
         Remove the batch ``label`` (:meth:`~ess.batch.BatchManager.remove`).
 
-        Its definitions are deleted and its records stay. If it follows, no
-        batch follows afterwards. A :class:`~.page.Page` of the batch handed
-        out before raises :class:`~.errors.NotFound` from then on.
+        Its definitions are deleted and its records stay. With ``clear``, the
+        outputs of its records are cleared first. If it follows, no batch
+        follows afterwards. A :class:`~.page.Page` of the batch handed out
+        before raises :class:`~.errors.NotFound` from then on.
 
         Raises :class:`~.errors.NotFound` if no batch has the label, and
-        :class:`~.errors.Rejected` if the definitions cannot be written.
+        :class:`~.errors.Rejected` if the clear is refused or the definitions
+        cannot be written.
         """
-        with self.lock, reject_on_write_error():
+        with self.lock:
             self.check(label)
             title = self.intake.manager.headers()[label].title
-            self.intake.manager.remove(label)
+            with reject_on_error('The batch was not removed'):
+                self.intake.manager.remove(label, clear=clear)
             self._pages.pop(label, None)
-            return Notice(notice=f'Removed {title}.')
+            cleared = ' and cleared its outputs' if clear else ''
+            return Notice(notice=f'Removed {title}{cleared}.')
+
+    def clear(self) -> Notice:
+        """
+        Clear the outputs of every record of the workspace
+        (:meth:`~ess.batch.BatchManager.clear`).
+
+        Raises :class:`~.errors.Rejected` if the manager raises.
+        """
+        with self.lock, reject_on_error('Nothing was cleared'):
+            self.intake.manager.clear()
+        return Notice(
+            notice='Cleared the outputs of every batch. Reduce computes them again.'
+        )
 
     def counts(self) -> BatchCounts:
         """

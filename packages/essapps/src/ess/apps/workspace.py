@@ -83,6 +83,17 @@ A workflow reads an output from memory if the workspace holds it there, and
 from the store otherwise. Persisted outputs are written once the workflow has
 returned, and the record completes after the write.
 
+Clearing
+--------
+A clear is refused while an output of the record has a reader, so no workflow
+and no step loses a value it waits for. It is refused while the record's own
+workflow runs (``_computing``), even after a cancel, since the workflow still
+writes the persisted outputs. It appends ``Cleared`` before it
+deletes from the store. A crash between the two leaves files that the log calls
+cleared, not a completed record without files. The delete runs without the
+lock. A client's read that took the record before the clear may find the file
+gone, and raises as if it came after.
+
 Waits
 -----
 A record waits for the records it references (``_Plan.depends_on``), and so for
@@ -150,9 +161,10 @@ from ess.spec.validation import OutputReads
 
 from .checks import Checks, check_fit, distinct
 from .client import Client
-from .errors import NotReadable, RecordFailed, Stopped, SubmitError
+from .errors import NotCleared, NotReadable, RecordFailed, Stopped, SubmitError
 from .files import Selector, readable
 from .log import (
+    Cleared,
     Environment,
     Event,
     Finished,
@@ -232,6 +244,10 @@ def _outputs_of(
 
 def _not_returned(where: str) -> NotReadable:
     return NotReadable(f'{where}: the workflow did not return it')
+
+
+def _cleared(record_id: str) -> str:
+    return f'record {record_id}: its outputs are cleared'
 
 
 def _element(value: Any, ref: OutputRef) -> Any:
@@ -517,6 +533,8 @@ class Workspace(WorkspaceProtocol):
         # a value to the number of its readers
         self._readers: Counter[_Read] = Counter()
         self._plans: dict[str, _Plan] = {}  # of the records not yet finished
+        # the records whose workflow runs, cancelled or not, to the values it reads
+        self._computing: dict[str, list[_Read]] = {}
         # a record or a state (see _freeze_wait_key) to the records that wait for it
         self._dependents: dict[str, set[str]] = {}
         self._accumulating: set[_Accumulator] = set()  # with steps not yet done
@@ -614,6 +632,8 @@ class Workspace(WorkspaceProtocol):
                 continue
             if (status := views.status(ref.record)) is not Status.COMPLETED:
                 return f'record {ref.record} {status}'
+            if ref.record in views.cleared:
+                return _cleared(ref.record)
             if views.omitted((ref.record, ref.output)):
                 return f'{where}: the workflow did not return it'
             if not views.persists((ref.record, ref.output)):
@@ -861,6 +881,8 @@ class Workspace(WorkspaceProtocol):
         status = self._views.status(record_id)
         if status in (Status.FAILED, Status.CANCELLED):
             return f'record {record_id} {status}'
+        if record_id in self._views.cleared:
+            return _cleared(record_id)
         held = record_id in self._in_memory or key in stage_reads
         if not held and not self._views.persists(key):
             return f'record {record_id} is neither in memory nor persisted'
@@ -905,7 +927,7 @@ class Workspace(WorkspaceProtocol):
             plan = self._plans[record_id]
             # held here, even if the record is cancelled meanwhile, since the
             # workflow reads them
-            reads, plan.reads = plan.reads, []
+            self._computing[record_id], plan.reads = plan.reads, []
         try:
             outputs = plan.compute()
         except Exception as error:  # any failure of a workflow is recorded
@@ -913,11 +935,12 @@ class Workspace(WorkspaceProtocol):
                 self._finish_locked(
                     record_id, Status.FAILED, _reason(error), ran_here=True
                 )
-                self._let_go_locked(reads)
+                self._let_go_locked(self._computing.pop(record_id))
             return
         with self._changed:
             if plan.state is None:
-                self._let_go_locked(reads)
+                self._let_go_locked(self._computing[record_id])
+                self._computing[record_id] = []
             names = self._views.persisted.get(record_id, ())
         failure = self._write(record_id, {n: outputs[n] for n in names if n in outputs})
         with self._changed:
@@ -929,7 +952,7 @@ class Workspace(WorkspaceProtocol):
                     acc.stopped = (
                         f'the accumulator is frozen: read record {record_id} instead'
                     )
-                self._let_go_locked(reads)
+            self._let_go_locked(self._computing.pop(record_id))
 
     def _compute(self, request: Request) -> dict[str, Any]:
         """
@@ -1003,6 +1026,10 @@ class Workspace(WorkspaceProtocol):
         try:
             value = self._store.read(ref.record, ref.output, tp)
         except LookupError as error:
+            with self._changed:  # a read that a clear overtook
+                cleared = ref.record in self._views.cleared
+            if cleared:
+                raise NotReadable(_cleared(ref.record)) from None
             raise NotReadable(
                 f'{ref}: the store no longer holds it: {error}'
             ) from error
@@ -1208,6 +1235,48 @@ class Workspace(WorkspaceProtocol):
                 self._record_locked(record_id)
                 self._finish_locked(record_id, Status.CANCELLED)
 
+    def clear(self, ids: Sequence[str]) -> None:
+        with self._changed:
+            self._check_running()
+            for record_id in ids:
+                self._record_locked(record_id)
+                if (refusal := self._clear_refusal_locked(record_id)) is not None:
+                    raise refusal
+            todo = [i for i in dict.fromkeys(ids) if i not in self._views.cleared]
+            if todo:
+                self._append_locked(Cleared(records=tuple(todo)))
+            for record_id in todo:
+                self._in_memory.discard(record_id)
+                for name in self._views.records.outputs(record_id):
+                    self._outputs.pop((record_id, name), None)
+        if self._store is not None:
+            for record_id in dict.fromkeys(ids):
+                self._store.delete(record_id)
+
+    def _clear_refusal_locked(self, record_id: str) -> NotCleared | None:
+        """Why the outputs of a record may not be cleared now, or ``None``."""
+        if record_id not in self._views.finished:
+            return NotCleared(record_id, 'pending')
+        if record_id in self._computing:  # cancelled, but its workflow runs
+            return NotCleared(record_id, 'running')
+        keys = {
+            _OutputKey(record_id, n) for n in self._views.records.outputs(record_id)
+        }
+        if not any(self._readers[key] for key in keys):
+            return None
+        # the readers of _readers, a stage first, since its calls read through it
+        for stage_id, stage in self._stages.items():
+            if not keys.isdisjoint(stage.reads):
+                return NotCleared(record_id, 'stage', stage_id)
+        not_started = ((i, plan.reads) for i, plan in self._plans.items())
+        for reader, reads in (*not_started, *self._computing.items()):
+            if not keys.isdisjoint(reads):
+                return NotCleared(record_id, 'record', reader)
+        for acc in self._accumulating:
+            if any(not keys.isdisjoint(step.reads) for step in acc.steps):
+                return NotCleared(record_id, 'accumulator', acc.id)
+        raise AssertionError(f'a reader of record {record_id} is unknown')
+
     def bound(self, ids: Sequence[str]) -> list[bool]:
         with self._changed:
             self._check_running()
@@ -1323,6 +1392,9 @@ class Workspace(WorkspaceProtocol):
         output that may not be read.
         """
         views, record_id = self._views, record.id
+        # a failed record raises RecordFailed below, cleared or not
+        if record_id in views.cleared and views.status(record_id) is Status.COMPLETED:
+            raise NotReadable(_cleared(record_id))
         if names is None:
             in_memory = record_id in self._in_memory
             held = [

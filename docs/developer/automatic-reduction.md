@@ -12,7 +12,7 @@ Its stories are E1 to E4 in [user-stories.md](user-stories.md), and [deployments
 A record under the batch's label, with a row's key as its member, is that row's result.
 It may come from any submitter or any batch.
 A step reduces only the ready rows without a result.
-A row with a result, also a failed or cancelled one, is left to a person.
+A row with a result, also a failed, cancelled or cleared one, is left to a person.
 So two `Batch` objects on one label, such as two made in code, share their results: what one reduces, the other does not.
 
 ## What survives a failure
@@ -38,6 +38,7 @@ What only `submit` rejects, and how a batch row meets it:
 |---|---|
 | an output neither in memory nor persisted | a chain's first batch does not persist, and the workspace restarted |
 | a record that failed or was cancelled | the record finished between `state` and `reduce` |
+| a record whose outputs are cleared | the record was cleared between `state` and `reduce` |
 | a record that the workspace does not know | a cell refers to a record of another proposal |
 | an accumulator | a cell refers to an accumulator, not to its freeze |
 | an output of a record of an unbound spec | the spec of the first batch's records is no longer bound |

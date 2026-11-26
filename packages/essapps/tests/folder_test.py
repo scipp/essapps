@@ -11,7 +11,7 @@ import pydantic
 import pytest
 import scipp as sc
 
-from ess.apps import Client, Request, Selector, file, local
+from ess.apps import Client, NotReadable, Request, Selector, Status, file, local
 from ess.apps.folder import (
     ArrivingFiles,
     FolderStore,
@@ -202,6 +202,21 @@ def test_a_request_of_a_second_session_references_a_persisted_output(
         )
         second.wait([total])
         assert second.output(total, 'total') == 4.0
+
+
+def test_a_cleared_record_stays_cleared_in_a_second_session_and_its_files_are_gone(
+    open_client: Callable[[], Client], folder: Path
+) -> None:
+    with open_client() as first:
+        (record,) = first.records(ids=[find_offset(first)])
+        first.clear(record)
+
+    assert not (folder / 'store' / record.id).exists()
+    with open_client() as second:
+        assert second.cleared(record) is True
+        assert second.status(record) is Status.COMPLETED
+        with pytest.raises(NotReadable, match='its outputs are cleared'):
+            second.output(record, 'offset')
 
 
 def test_a_moved_folder_keeps_the_identity_of_its_files_and_what_was_done_with_them(

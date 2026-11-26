@@ -91,6 +91,19 @@ def test_each_completed_row_is_exported_under_its_key_and_the_table_is_unchanged
     assert written['id'] == reduced.loc['a', 'record']
 
 
+def test_a_row_whose_outputs_are_cleared_is_not_exported(
+    client: Client, template: Template, table: pd.DataFrame, tmp_path: Path
+) -> None:
+    out = tmp_path / 'export'
+    reduced = reduce_table(client, template, table, label='scan')
+    (cleared,) = client.records(ids=[reduced.loc['a', 'record']])
+    client.clear(cleared)
+
+    export_table(client, reduced, out, by_writer(client))
+
+    assert sorted(p.name for p in out.iterdir()) == ['b']
+
+
 def test_each_output_returned_is_a_file_and_an_output_left_out_has_none(
     client: Client, tmp_path: Path
 ) -> None:

@@ -605,6 +605,18 @@ class Page:
         self.batch.cancel()
         return 'Cancelled the rows still running.'
 
+    @_action
+    def clear(self, keys: Sequence[str]) -> str:
+        """
+        Clear the outputs of the rows ``keys``, or of every record of the batch
+        if ``keys`` is empty (:meth:`~ess.batch.Batch.clear`).
+        """
+        self._table(keys)
+        with reject_on_error('Nothing was cleared'):
+            self.batch.clear(keys or None)
+        cleared = _rows(len(keys)) if keys else 'the batch'
+        return f'Cleared the outputs of {cleared}. Reduce computes them again.'
+
     # Follow
 
     @_action
@@ -784,7 +796,9 @@ class Page:
         done = [
             s
             for s in states.values()
-            if s.record is not None and s.record_status is Status.COMPLETED
+            if s.record is not None
+            and s.record_status is Status.COMPLETED
+            and not s.cleared
         ]
         if keys:
             chosen = done
@@ -888,7 +902,11 @@ class Page:
         table = batch.table()
         known = [k for k in keys if k in table.index]
         states, _ = self._states(known if keys else None)
-        done = [k for k, s in states.items() if s.record_status is Status.COMPLETED]
+        done = [
+            k
+            for k, s in states.items()
+            if s.record_status is Status.COMPLETED and not s.cleared
+        ]
         if not done:
             raise Rejected('None of these rows has a result.')
         buffer = io.BytesIO()

@@ -27,16 +27,18 @@ from ess.batch.definition import (
     Key,
 )
 
-from ess.apps import Client, Stage, Workspace
+from ess.apps import Client, Request, Stage, Workspace, file
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
 
 from .toys import (
     COLUMNS,
+    FIND,
     PLAIN,
     SOURCES,
     STAGED,
     STAGED_NAMES,
+    Gate,
     Measure,
     Refusing,
     edit,
@@ -357,6 +359,95 @@ def test_a_batch_removed_is_gone_with_its_definitions_and_its_records_stay(
     assert [r.member for r in client.records(label=label)] == ['1']
     with pytest.raises(KeyError):
         manager.batch(label)
+
+
+def test_clearing_the_workspace_takes_the_records_of_a_removed_batch(
+    intake: Intake, client: Client, sample: Measure
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    label = from_pairs(intake, 'plain', title='Morning')
+    records = manager.batch(label).reduce(['1'])
+    client.wait(records)
+    manager.remove(label)
+
+    manager.clear()
+
+    assert client.cleared(records['1']) is True
+
+
+def test_a_batch_removed_with_clear_has_the_outputs_of_its_records_cleared(
+    intake: Intake, client: Client, sample: Measure
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    label = from_pairs(intake, 'plain', title='Morning')
+    records = manager.batch(label).reduce(['1'])
+    client.wait(records)
+
+    manager.remove(label, clear=True)
+
+    assert manager.headers() == {}
+    assert client.cleared(client.records(label=label)) == [True]
+
+
+def test_a_running_batch_is_not_cleared_and_not_removed(
+    intake: Intake, client: Client, sample: Measure, gate: Gate
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    label = from_pairs(intake, 'plain', title='Morning')
+    gate.close()
+    records = manager.batch(label).reduce(['1'])
+
+    for refused in (lambda: manager.remove(label, clear=True), manager.clear):
+        with pytest.raises(ValueError, match=r'^row 1 of Morning is still running$'):
+            refused()
+    gate.open()
+    client.wait(records)
+    assert list(manager.headers()) == [label]
+    assert client.cleared(records['1']) is False
+
+
+def test_a_clear_refused_for_a_record_of_no_batch_says_so(
+    manager: BatchManager, client: Client, sample: Measure, gate: Gate
+) -> None:
+    sample(1, 'water')
+    gate.close()
+    running = client.submit(
+        PLAIN, params={'sample': file(run=1), 'transmission': file(run=1001)}
+    )
+
+    with pytest.raises(ValueError, match=r'^a record of no batch is still running$'):
+        manager.clear()
+    gate.open()
+    client.wait(running)
+
+
+def test_a_clear_refused_for_an_open_stage_names_its_batch(
+    intake: Intake, client: Client, sample: Measure, gate: Gate
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    found = client.compute(
+        {'1': Request(FIND, params={'sample': file(run=1)})}, label='find'
+    )
+    label = from_pairs(intake, STAGED.name, title='Scan')
+    batch = manager.batch(label)
+    batch.settings = {**batch.settings, 'offset': found['1'].ref('offset')}
+    gate.close()
+    # holds the one worker, so that the stage has not staged
+    held = client.submit(
+        PLAIN, params={'sample': file(run=1), 'transmission': file(run=1001)}
+    )
+    records = batch.reduce(['1'])
+
+    with pytest.raises(
+        ValueError, match=r'^row 1 of find is read by the open stage of Scan$'
+    ):
+        manager.clear()
+    gate.open()
+    client.wait([held, *records.values()])
 
 
 class Releases:

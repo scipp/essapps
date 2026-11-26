@@ -248,11 +248,15 @@ class RecordStatus:
     returned them. The default, ``installed_software``, sorts them by name. It
     is ``None`` while the record is pending, and for a record whose workflow
     never ended, such as a cancelled record or one that failed at a restart.
+
+    ``cleared`` is whether the outputs of the record are cleared (see
+    :meth:`~ess.apps.protocol.WorkspaceProtocol.clear`). The status stays.
     """
 
     status: Status
     failure: str | None = None
     software: tuple[str, ...] | None = None
+    cleared: bool = False
 
 
 class Record(BaseModel, frozen=True):

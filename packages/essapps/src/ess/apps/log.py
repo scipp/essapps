@@ -4,12 +4,12 @@
 The workspace's history of one proposal: an append-only log of what ran, with
 which params, and what came of it.
 
-The log holds six events: :class:`Submitted`, :class:`Started`,
-:class:`Finished`, :class:`Environment`, :class:`Opened` and :class:`Pushed`.
-Stages, output values, and anything a binding computed are not in the log. The
-workspace builds its views, such as the records by ID, by applying the events in
-order. It does so when an event is appended, and again when a workspace starts
-from an existing log.
+The log holds seven events: :class:`Submitted`, :class:`Started`,
+:class:`Finished`, :class:`Environment`, :class:`Cleared`, :class:`Opened` and
+:class:`Pushed`. Stages, output values, and anything a binding computed are not
+in the log. The workspace builds its views, such as the records by ID, by
+applying the events in order. It does so when an event is appended, and again
+when a workspace starts from an existing log.
 
 A record starts when a worker begins its work, once what it reads is there. So
 a record that started and did not finish was running when its workspace ended.
@@ -143,6 +143,16 @@ class Environment(BaseModel, frozen=True, extra='forbid'):
         return cls(id=digest, software=tuple(software))
 
 
+class Cleared(BaseModel, frozen=True, extra='forbid'):
+    """
+    Finished records whose outputs the workspace dropped. It is appended before
+    the outputs are deleted from the store.
+    """
+
+    kind: Literal['cleared'] = 'cleared'
+    records: tuple[str, ...]
+
+
 class Opened(BaseModel, frozen=True, extra='forbid'):
     """
     An accumulator that opened, with its template as the workspace accepted it.
@@ -174,7 +184,7 @@ class Pushed(BaseModel, frozen=True, extra='forbid'):
 
 
 Event = Annotated[
-    Submitted | Started | Finished | Environment | Opened | Pushed,
+    Submitted | Started | Finished | Environment | Cleared | Opened | Pushed,
     Field(discriminator='kind'),
 ]
 _event: TypeAdapter[Event] = TypeAdapter(Event)

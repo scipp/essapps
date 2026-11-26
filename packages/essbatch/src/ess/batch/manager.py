@@ -24,6 +24,7 @@ from typing import Any
 import pandas as pd
 
 from ess.apps.client import Client
+from ess.apps.records import Record
 from ess.spec import WorkflowSpec
 
 from .definition import (
@@ -35,7 +36,7 @@ from .definition import (
     DefinitionWriteError,
     Header,
 )
-from .reduction import Batch
+from .reduction import Batch, clear_records
 from .table import typed
 
 
@@ -257,6 +258,21 @@ class BatchManager:
             source_columns=source_columns,
         )
 
+    def clear(self) -> None:
+        """
+        Clear the outputs of every record of the workspace, also of the
+        records of removed batches (:meth:`~ess.apps.Client.clear`).
+
+        Raises ``ValueError``, and clears nothing, if a record is running or
+        another reads it, worded by :func:`~.reduction.clear_refusal`.
+        """
+        self._clear(self.client.records())
+
+    def _clear(self, records: list[Record]) -> None:
+        """Clear ``records``, naming the stage of each batch in a refusal."""
+        stages = {b.stage: label for label, b in self._batches.items() if b.stage}
+        clear_records(self.client, records, self.definitions, stages)
+
     def change(
         self, label: str, *, title: str | None = None, description: str | None = None
     ) -> None:
@@ -270,7 +286,7 @@ class BatchManager:
         self._headers[label] = header
         self._revision += 1
 
-    def remove(self, label: str) -> None:
+    def remove(self, label: str, *, clear: bool = False) -> None:
         """
         Remove the batch of ``label`` and every entry of the label. Its records
         stay, and running ones keep running.
@@ -280,9 +296,15 @@ class BatchManager:
         as an interrupted :meth:`create` or :meth:`remove` leaves it, is
         removed too. Raises ``KeyError`` if the label has neither a batch nor
         an entry.
+
+        With ``clear``, the outputs of the records of the label are cleared
+        first, as :meth:`clear` clears them. If that raises, nothing is
+        removed.
         """
         if label not in self._headers and label not in self.definitions.labels():
             raise KeyError(label)
+        if clear:
+            self._clear(self.client.records(label=label))
         header, *parts = LABEL_ENTRIES
         self.definitions.delete(header.key(label))
         self._headers.pop(label, None)
