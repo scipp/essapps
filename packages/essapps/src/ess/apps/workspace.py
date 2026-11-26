@@ -168,7 +168,7 @@ import uuid
 from collections import Counter, deque
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -372,6 +372,23 @@ def _every[T, R](items: Sequence[T], check: Callable[[int, T], R]) -> list[R]:
     return results
 
 
+@dataclass(frozen=True)
+class _Bound:
+    """
+    What the workspace holds for a bound spec: its binding, its request-phase
+    checks, and its digest, computed once since :attr:`~ess.spec.WorkflowSpec.digest`
+    is computed on each access.
+    """
+
+    binding: Binding
+    checks: Checks
+    digest: str
+
+    @property
+    def spec(self) -> Spec:
+        return self.binding.spec
+
+
 class _Stage:
     """
     A stage: its spec's binding, its template, and the binding's callable
@@ -562,9 +579,7 @@ class Workspace(WorkspaceProtocol):
         self._proposal = proposal
         self._files = files
         self._store = store
-        self._bindings: dict[SpecId, Binding] = {}
-        self._digests: dict[SpecId, str] = {}
-        self._checks: dict[SpecId, Checks] = {}
+        self._bound: dict[SpecId, _Bound] = {}
         if isinstance(bind, Mapping):
             raise TypeError('bind is a list of bindings, each of which names its spec')
         for binding in bind:
@@ -573,11 +588,10 @@ class Workspace(WorkspaceProtocol):
                     f'bind is a list of bindings, such as a PipelineBinding, '
                     f'a DriverBinding, or a function_binding, not {binding!r}'
                 )
-            if (spec_id := SpecId.of(binding.spec)) in self._bindings:
+            if (spec_id := SpecId.of(binding.spec)) in self._bound:
                 raise ValueError(f'two specs are bound as {spec_id}')
-            self._bindings[spec_id] = binding
-            self._digests[spec_id] = binding.spec.digest
-            self._checks[spec_id] = Checks(binding.spec, files)
+            spec = binding.spec
+            self._bound[spec_id] = _Bound(binding, Checks(spec, files), spec.digest)
         self._log = Log() if log is None else log
         self._views = Views()
         try:
@@ -737,7 +751,7 @@ class Workspace(WorkspaceProtocol):
 
     def specs(self) -> list[Spec]:
         self._check_running()
-        return [binding.spec for binding in self._bindings.values()]
+        return [bound.spec for bound in self._bound.values()]
 
     def _other(self, record_id: str) -> str | None:
         """
@@ -746,15 +760,16 @@ class Workspace(WorkspaceProtocol):
         record's (see the module docstring). Needs no lock.
         """
         spec_id = self._views.records.spec(record_id)
-        if spec_id not in self._digests:
+        if (bound := self._bound.get(spec_id)) is None:
             return f'{spec_id} has no binding'
-        if self._digests[spec_id] != self._views.digests[record_id]:
+        if bound.digest != self._views.digests[record_id]:
             return f"{spec_id} is bound with other models than the record's"
         return None
 
-    def _spec(self, spec_id: SpecId) -> Spec:
+    def _known(self, spec_id: SpecId) -> _Bound:
+        """What is bound to a spec a call names; refuses an unknown spec."""
         try:
-            return self._bindings[spec_id].spec
+            return self._bound[spec_id]
         except KeyError:
             raise SubmitError.at((), f'unknown spec {spec_id}') from None
 
@@ -857,11 +872,11 @@ class Workspace(WorkspaceProtocol):
 
     def _unlogged(self, spec_ids: Iterable[SpecId]) -> SpecDigests:
         """The digests an event naming the bound ``spec_ids`` carries; lock held."""
-        return self._views.unlogged({s: self._digests[s] for s in spec_ids})
+        return self._views.unlogged({s: self._bound[s].digest for s in spec_ids})
 
     def _output_names(self, spec_id: SpecId) -> tuple[str, ...]:
         """The names of the outputs the spec declares; needs no lock."""
-        return tuple(self._bindings[spec_id].spec.outputs.model_fields)
+        return tuple(self._bound[spec_id].spec.outputs.model_fields)
 
     def _persisted(
         self, spec_id: SpecId, persist: bool | Sequence[str]
@@ -877,7 +892,7 @@ class Workspace(WorkspaceProtocol):
             raise SubmitError.at(
                 (), 'persisting needs a store, which this workspace lacks'
             )
-        declared = tuple(self._spec(spec_id).outputs.model_fields)
+        declared = tuple(self._known(spec_id).spec.outputs.model_fields)
         if persist is True:
             return declared
         names = (persist,) if isinstance(persist, str) else tuple(persist)
@@ -911,8 +926,8 @@ class Workspace(WorkspaceProtocol):
         if isinstance(item, Request):
             return self._prepare(index, item)[0]
         try:
-            self._spec(item.spec)  # an unknown spec is refused as such
-            _, fixed, _ = self._checks[item.spec].template(item, self._proposal)
+            checks = self._known(item.spec).checks
+            _, fixed, _ = checks.template(item, self._proposal)
         except SubmitError as error:
             raise _refused(index, error) from None
         return Template(item.spec, params=fixed, blanks=item.blanks)
@@ -924,11 +939,8 @@ class Workspace(WorkspaceProtocol):
         outputs in it (see :meth:`_check_reads`); needs no lock. A refusal
         names the request by ``index``.
         """
-        spec_id = request.spec
         try:
-            self._spec(spec_id)  # an unknown spec is refused as such
-            checks = self._checks[spec_id]
-            return checks.request(request, self._proposal)
+            return self._known(request.spec).checks.request(request, self._proposal)
         except SubmitError as error:
             raise _refused(index, error) from None
 
@@ -966,7 +978,7 @@ class Workspace(WorkspaceProtocol):
         """
         for loc, ref, tp in reads:
             source = self._source_spec(ref, loc, also)
-            check_fit(self._bindings[source].spec, ref, tp, loc)
+            check_fit(self._bound[source].spec, ref, tp, loc)
 
     def _check_stage(self, entry: Entry, request: Request) -> _Stage | None:
         """
@@ -1154,12 +1166,13 @@ class Workspace(WorkspaceProtocol):
         if state is not None:
             return dict(state[0].outputs())
         request = record.request
-        spec = self._bindings[request.spec].spec
+        bound = self._bound[request.spec]
+        spec = bound.spec
         if stage is None:
             params = spec.params.model_construct(
                 **self._typed(request.spec, request.params)
             )
-            returned = self._bindings[request.spec].compute(params)
+            returned = bound.binding.compute(params)
         else:
             fixed = {n: v for n, v in request.params.items() if n not in stage.given}
             call = self._staged(
@@ -1184,7 +1197,7 @@ class Workspace(WorkspaceProtocol):
         A plain request makes the params instance from them, and a stage or a
         driver takes them by name.
         """
-        spec = self._bindings[spec_id].spec
+        spec = self._bound[spec_id].spec
         paths = validation.local_paths(values, self._path)
         context = {'read': self._reader(values), 'paths': paths}
         return {
@@ -1274,7 +1287,7 @@ class Workspace(WorkspaceProtocol):
             raise NotReadable(f'{ref}: the workspace has no store')
         tp = None
         if self._other(ref.record) is None:
-            spec = self._bindings[self._views.records.spec(ref.record)].spec
+            spec = self._bound[self._views.records.spec(ref.record)].spec
             tp = spec.outputs.model_fields[ref.output].annotation
         try:
             value = self._store.read(ref.record, ref.output, tp)
@@ -1503,11 +1516,11 @@ class Workspace(WorkspaceProtocol):
         """
         spec_id = template.spec
         self._check_running()
-        self._spec(spec_id)  # an unknown spec is refused as such
-        binding = self._bindings[spec_id]
+        bound = self._known(spec_id)
+        binding = bound.binding
         if not isinstance(binding, StageBinding):
             raise SubmitError.at((), f'{spec_id}: its binding makes no stages')
-        stored, _, reads = self._checks[spec_id].template(template, self._proposal)
+        stored, _, reads = bound.checks.template(template, self._proposal)
         stage_id = uuid.uuid4().hex
         with self._changed:
             self._check_running()
@@ -1530,9 +1543,9 @@ class Workspace(WorkspaceProtocol):
         """
         spec_id, blanks = template.spec, template.blanks
         self._check_running()
-        spec = self._spec(spec_id)
-        tables = spec.tables
-        binding = self._bindings[spec_id]
+        bound = self._known(spec_id)
+        tables = bound.spec.tables
+        binding = bound.binding
         if not isinstance(binding, AccumulatorBinding):
             raise SubmitError.at((), f'{spec_id}: its binding makes no accumulators')
         if not blanks or not set(blanks) <= set(tables):
@@ -1541,7 +1554,7 @@ class Workspace(WorkspaceProtocol):
                 f'{spec_id}: the blanks of an accumulator are tables, '
                 f'{list(tables)}, not {list(blanks)}',
             )
-        stored, fixed, reads = self._checks[spec_id].template(template, self._proposal)
+        stored, fixed, reads = bound.checks.template(template, self._proposal)
         accumulator_id = uuid.uuid4().hex
         with self._changed:
             self._check_running()
@@ -1579,8 +1592,7 @@ class Workspace(WorkspaceProtocol):
         with self._changed:
             self._check_running()
             acc = self._pushed_into(accumulator_id)
-        spec_id = acc.template.spec
-        checks = self._checks[spec_id]
+        checks = self._bound[acc.template.spec].checks
         values, reads = checks.push(acc.template.blanks, rows, self._proposal)
         with self._changed:
             acc = self._settled(accumulator_id)
@@ -1780,7 +1792,7 @@ class Workspace(WorkspaceProtocol):
             return checked[1]
         with self._changed:
             plain = self._views.plain(acc.id, upto)
-        refused = self._checks[plain.spec].state(plain, acc.template.blanks)
+        refused = self._bound[plain.spec].checks.state(plain, acc.template.blanks)
         acc.checked = (upto, refused)  # another check may overwrite it at once
         return refused
 
@@ -2023,7 +2035,7 @@ class Workspace(WorkspaceProtocol):
             raise ValueError('select= needs the name of an output')
         if spec_id is None:
             return
-        declared = self._bindings[spec_id].spec.outputs.model_fields
+        declared = self._bound[spec_id].spec.outputs.model_fields
         for name in (n for n in names if n in declared):  # others raise when read
             if not field_types.has_array(declared[name].annotation):
                 raise ValueError(
@@ -2051,7 +2063,7 @@ class Workspace(WorkspaceProtocol):
                 self._wait_for(lambda: acc.added == upto or acc.stopped is not None)
                 if acc.added != upto:
                     raise NotReadable(acc.stopped)
-            declared = list(self._bindings[acc.template.spec].spec.outputs.model_fields)
+            declared = list(self._bound[acc.template.spec].spec.outputs.model_fields)
             for name in names or ():
                 if name not in declared:
                     raise KeyError(f'{acc.template.spec} has no output {name!r}')
