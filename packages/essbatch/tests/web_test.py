@@ -322,6 +322,7 @@ def test_a_cell_emptied_is_empty_in_the_table(http: TestClient, batch: Batch) ->
     ('request_', 'message'),
     [
         (('post', '/api/cells', {'keys': ['9'], 'column': 'thickness'}), 'no row 9'),
+        (('post', '/api/clear', {'keys': ['1', '9']}), 'no row 9'),
         (('post', '/api/cells', {'keys': ['1'], 'column': 'colour'}), 'no column'),
         (('get', '/api/row?key=a/b', None), 'no row a/b'),
         (
@@ -509,7 +510,7 @@ def test_a_clear_of_a_batch_with_a_running_row_answers_422_and_names_the_row(
     client.wait(client.records())
     assert answer.status_code == 422
     assert answer.json()['message'] == (
-        'Nothing was cleared: water, sds: still running.'
+        'Nothing was cleared: row 1 of Scan is still running.'
     )
 
 
@@ -524,6 +525,39 @@ def test_clear_all_outputs_clears_the_outputs_of_every_batch(
         'notice': 'Cleared the outputs of every batch. Reduce computes them again.'
     }
     assert statuses(http) == {'1': 'cleared', '2': 'cleared', '3': 'incomplete'}
+
+
+def test_clear_all_outputs_with_a_running_row_answers_422_and_clears_nothing(
+    http: TestClient, client: Client, gate: Gate
+) -> None:
+    reduced(http, client, 'all')
+    http.post('/api/clear', json={'keys': ['2']})
+    gate.close()
+    http.post('/api/reduce', json={'which': 'remaining'})
+
+    answer = http.post('/api/outputs/clear')
+
+    gate.open()
+    client.wait(client.records())
+    assert answer.status_code == 422
+    assert answer.json()['message'] == (
+        'Nothing was cleared: row 2 of Scan is still running.'
+    )
+    assert statuses(http)['1'] == 'done'
+
+
+def test_the_plot_and_the_results_leave_out_a_cleared_row(
+    http: TestClient, client: Client
+) -> None:
+    reduced(http, client)
+
+    http.post('/api/clear', json={'keys': ['1']})
+
+    assert http.post('/api/plot', json={}).json()['figure']['drawn'] == ['2']
+    content = http.post('/api/results.zip', json={'keys': []}).content
+    names = zipfile.ZipFile(io.BytesIO(content)).namelist()
+    assert not any(n.startswith('results/1/') for n in names)
+    assert any(n.startswith('results/2/') for n in names)
 
 
 def test_the_action_counts_the_rows_running_and_the_rows_that_can_be_reduced_again(

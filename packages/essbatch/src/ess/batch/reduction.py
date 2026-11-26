@@ -33,7 +33,7 @@ import pandas as pd
 from pydantic_core import to_json
 
 from ess.apps.client import Client, Stage
-from ess.apps.errors import FieldError, SubmitError
+from ess.apps.errors import FieldError, NotCleared, SubmitError
 from ess.apps.records import Record, SpecId, Status, Template
 from ess.spec import FileRef, WorkflowSpec, field_types
 from ess.spec.refs import iter_refs
@@ -136,10 +136,40 @@ class LabelRecords:
         statuses = self.client.status(records)
         return {r.id: s for r, s in zip(records, statuses, strict=True)}
 
-    def cleared(self, records: list[Record]) -> dict[str, str | None]:
-        """The label of each of ``records`` whose outputs are cleared, by ID."""
+    def cleared(self, records: list[Record]) -> dict[str, state.Cleared]:
+        """
+        Each of ``records`` whose outputs are cleared, by ID. Reads the records
+        of the label of each, of any label, to tell whether it holds a newer
+        result of the member.
+        """
+        flags = self.client.cleared(records)
+        gone = [r for r, c in zip(records, flags, strict=True) if c]
+        newest: dict[tuple[str | None, str | None], Record] = {}
+        for label in {r.label for r in gone if r.label is not None}:
+            found = state.results(self.client.records(label=label))
+            newest |= {(label, member): r for member, r in found.items()}
+        newer = {
+            r.id: n
+            for r in gone
+            if (n := newest.get((r.label, r.member))) is not None and n.id != r.id
+        }
+        readable = self._readable(list(newer.values()))
+        return {
+            r.id: state.Cleared(r.label, r.id in newer and newer[r.id].id in readable)
+            for r in gone
+        }
+
+    def _readable(self, records: list[Record]) -> set[str]:
+        """The IDs of the completed ``records`` whose outputs are not cleared."""
+        if not records:
+            return set()
+        status = self.client.status(records)
         cleared = self.client.cleared(records)
-        return {r.id: r.label for r, c in zip(records, cleared, strict=True) if c}
+        return {
+            r.id
+            for r, s, c in zip(records, status, cleared, strict=True)
+            if s is Status.COMPLETED and not c
+        }
 
 
 class Batch:
@@ -311,7 +341,10 @@ class Batch:
 
         An assignment reduces no row. The workspace checks the settings when
         :meth:`state` resolves them. A setting at a column is checked as a
-        cell of each row that uses it.
+        cell of each row that uses it. A reference to a record that failed,
+        was cancelled or is cleared, in a setting outside the columns, is a
+        problem of the settings, once and without a key, that :meth:`shown`
+        reports and that refuses :meth:`reduce`.
 
         An assignment raises ``ValueError``, and changes nothing, for a value
         at :attr:`source_columns`: use :meth:`settable` for settings from
@@ -511,23 +544,27 @@ class Batch:
         """
         cells, found = self._cells_and_results(keys)
         if not compare:
-            return self._states(cells, found, None, {})
+            return self._states(cells, found, None, {})[0]
         changed, refused = self._compare(cells, found)
-        return self._states(cells, found, changed, refused)
+        return self._states(cells, found, changed, refused)[0]
 
     def shown(
         self, keys: Sequence[str] | None = None
     ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
         """
-        The states of the rows of ``keys``, or of all rows, and why the
-        workspace rejects the settings.
+        The states of the rows of ``keys``, or of all rows, and the problems
+        of the settings: why the workspace rejects them, and their references
+        to records that failed, were cancelled or are cleared.
 
-        While it rejects them, the states are not compared.
+        While the workspace rejects the settings, the states are not compared.
         """
+        cells, found = self._cells_and_results(keys)
         try:
-            return self.state(keys), ()
+            changed, refused = self._compare(cells, found)
         except SubmitError as error:
-            return self.state(keys, compare=False), error.errors
+            states, problems = self._states(cells, found, None, {})
+            return states, (*error.errors, *problems)
+        return self._states(cells, found, changed, refused)
 
     def settings_of(self, key: str) -> dict[str, Any]:
         """
@@ -570,12 +607,16 @@ class Batch:
         found: Mapping[str, Record],
         changed: Mapping[str, frozenset[str]] | None,
         refused: Mapping[str, tuple[FieldError, ...]],
-    ) -> dict[str, RowState]:
+    ) -> tuple[dict[str, RowState], tuple[FieldError, ...]]:
+        """
+        The state of each row of ``cells``, and the problems of the settings
+        outside the columns, which name no row (:func:`.state.problems`).
+        """
         settings = {
             n: v for n, v in self._settings.items() if n not in self.parameter_columns
         }
-        checked = {key: {**settings, **row} for key, row in cells.items()}
-        upstream = self._records.known(sorted(state.references(checked.values())))
+        referenced = state.references([settings, *cells.values()])
+        upstream = self._records.known(sorted(referenced))
         status = self._records.status([*found.values(), *upstream])
         cleared = self._records.cleared([*found.values(), *upstream])
         given = self._table.loc[list(cells), list(self.parameter_columns)].notna()
@@ -583,8 +624,8 @@ class Batch:
             key: frozenset(c for c, filled in row.items() if filled)
             for key, row in given.to_dict('index').items()
         }
-        return state.row_states(
-            checked,
+        states = state.row_states(
+            cells,
             self.parameter_columns,
             found,
             status,
@@ -594,6 +635,7 @@ class Batch:
             cleared,
             overrides=overrides,
         )
+        return states, state.problems(None, settings, (), status, cleared)
 
     def _spec_changed(self, found: Mapping[str, Record]) -> set[str]:
         """The keys whose result is of an unbound spec."""
@@ -685,12 +727,13 @@ class Batch:
         key.
 
         Raises ``SubmitError`` if a row cannot run or is still running, naming
-        its key and column. A reason about the settings appears once, without
-        a key.
+        its key and column. A reason about the settings outside the columns,
+        such as a reference to a cleared record, appears once, without a key.
         """
         cells, found = self._cells_and_results(keys)
-        states = self._states(cells, found, None, {})
-        refused = [e for k in keys for e in (*states[k].problems, *_running(states[k]))]
+        states, settings = self._states(cells, found, None, {})
+        rows = [e for k in keys for e in (*states[k].problems, *_running(states[k]))]
+        refused = [*settings, *rows]
         if refused:
             raise SubmitError(refused)
         if not cells:
@@ -708,14 +751,19 @@ class Batch:
         if not self._staged:
             requests = {k: template.fill(params=c) for k, c in each.items()}
             return self.client.submit(requests, **options)
+        opened = self._stage is None or self._stage[0] != template
         try:
             return self.client.submit(self._open(template), each=each, **options)
         except SubmitError as error:
-            # A rejection at a position is of a row or of the settings: the
-            # stage, which may have done its expensive part, stays. One without
+            # A rejection at a position is of a row or of the settings. A stage
+            # opened before, which may have done its expensive part, stays. One
+            # opened for this submit has staged nothing and is released, so that
+            # it holds no output its template references. A rejection without
             # a position is of the stage, which stopped or was released: it is
             # replaced and the rows are submitted once more.
             if any(e.loc for e in error.errors):
+                if opened:
+                    self.close()
                 raise
         self.close()
         return self.client.submit(self._open(template), each=each, **options)
@@ -738,29 +786,32 @@ class Batch:
         ]
         return list(dict.fromkeys(placed))
 
+    @property
+    def stage(self) -> str | None:
+        """The ID of the open stage, if any."""
+        return None if self._stage is None else self._stage[1].id
+
     def clear(self, keys: Sequence[str] | None = None) -> None:
         """
-        Clear the outputs of every record of the members ``keys``, or of every
-        member, under the label (:meth:`~ess.apps.Client.clear`).
+        Clear the outputs of every record of the rows ``keys``, or of every
+        member, also of members no longer rows, under the label
+        (:meth:`~ess.apps.Client.clear`).
 
-        Raises ``ValueError``, and clears nothing, if the result of one of these
-        members is running, naming its row, or as the client raises.
+        Raises ``KeyError`` naming a key that is no row. Raises ``ValueError``,
+        and clears nothing, if a record is running or another reads it, worded
+        by :func:`clear_refusal`.
         """
+        if keys is not None and (
+            unknown := [k for k in keys if k not in self._table.index]
+        ):
+            raise KeyError(f'the batch has no row {", ".join(unknown)}')
         records = [
             r
             for r in self.client.records(label=self.label)
             if keys is None or r.member in keys
         ]
-        self._records.poll()
-        found = self._records.found
-        results = [r for k, r in found.items() if keys is None or k in keys]
-        status = self._records.status(results)
-        if running := [r.member for r in results if status[r.id] is Status.PENDING]:
-            names = row_names(self._table, self.parameter_columns)
-            raise ValueError(
-                f'{", ".join(names.get(k, k) for k in running)}: still running'
-            )
-        self.client.clear(records)
+        stages = {} if self.stage is None else {self.stage: self.label}
+        clear_records(self.client, records, self.definitions, stages)
 
     def cancel(self, keys: Sequence[str] | None = None) -> None:
         """
@@ -780,3 +831,71 @@ class Batch:
         if self._stage is not None:
             self.client.release(self._stage[1])
             self._stage = None
+
+
+def clear_records(
+    client: Client,
+    records: Sequence[Record],
+    definitions: DefinitionStore | None,
+    stages: Mapping[str, str],
+) -> None:
+    """
+    Clear the outputs of ``records`` (:meth:`~ess.apps.Client.clear`).
+
+    Raises ``ValueError``, and clears nothing, if the client refuses, worded
+    by :func:`clear_refusal` with the titles in ``definitions`` and the label
+    of the batch of each stage in ``stages``, by stage ID.
+    """
+    try:
+        client.clear(records)
+    except NotCleared as error:
+        raise ValueError(clear_refusal(client, error, definitions, stages)) from None
+
+
+def clear_refusal(
+    client: Client,
+    error: NotCleared,
+    definitions: DefinitionStore | None,
+    stages: Mapping[str, str],
+) -> str:
+    """
+    The text of a refused clear, which names a record by its row and the title
+    of its batch, from ``definitions``, or its label without them::
+
+        row 1 of Find offset is still running
+        row 1 of Find offset is read by row 2 of Reduce, which is still running
+        row 1 of Find offset is read by the open stage of Reduce
+        row 1 of Find offset is read by an accumulator
+
+    ``stages`` holds the label of the batch of each open stage, by ID. A stage
+    of another batch is ``an open stage``. A record without a member is ``a
+    record of Reduce``, and one without a label ``a record of no batch``.
+    """
+    ids = [error.record] if error.held_by != 'record' else [error.record, error.reader]
+    named = {r.id: r for r in client.records(ids=ids)}
+
+    def title(label: str) -> str:
+        header = (
+            None if definitions is None else definition.HEADER.load(definitions, label)
+        )
+        return label if header is None else header.title
+
+    def name(record: Record) -> str:
+        if record.label is None:
+            return 'a record of no batch'
+        if record.member is None:
+            return f'a record of {title(record.label)}'
+        return f'row {record.member} of {title(record.label)}'
+
+    held = name(named[error.record])
+    if error.held_by in ('pending', 'running'):
+        return f'{held} is still running'
+    if error.held_by == 'record':
+        return f'{held} is read by {name(named[error.reader])}, which is still running'
+    if error.held_by == 'stage':
+        label = stages.get(error.reader)
+        stage = (
+            'an open stage' if label is None else f'the open stage of {title(label)}'
+        )
+        return f'{held} is read by {stage}'
+    return f'{held} is read by an accumulator'

@@ -121,6 +121,28 @@ def test_clear_clears_the_results_of_a_batch_and_reduce_computes_them_again(
     assert set(read_text(shown)['status']) == {'done'}
 
 
+def test_clear_of_a_row_leaves_it_out_of_the_rows_reduced_that_batches_counts(
+    command: list[str], reduced_once: Path
+) -> None:
+    out = reduced_once / 'batches.csv'
+
+    assert main([*command, 'clear', '-l', 'x', 'row-0']) == 0
+
+    assert main([*command, 'batches', '-o', str(out)]) == 0
+    assert read_text(out).loc[0, 'reduced'] == '1'
+
+
+def test_clear_of_a_key_that_is_no_row_says_so_and_clears_nothing(
+    command: list[str], reduced_once: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main([*command, 'clear', '-l', 'x', 'row-0', 'nope']) == 2
+
+    assert capsys.readouterr().err == 'the batch has no row nope\n'
+    with intake_on(reduced_once) as intake:
+        client = intake.manager.client
+        assert client.cleared(client.records(label='x')) == [False, False]
+
+
 def test_clear_all_clears_the_records_of_a_removed_batch(
     command: list[str], reduced_once: Path
 ) -> None:

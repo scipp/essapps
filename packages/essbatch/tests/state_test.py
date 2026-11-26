@@ -15,7 +15,7 @@ from ess.batch import (
     to_reduce,
     with_changed_settings,
 )
-from ess.batch.state import Which, changed_names, results, row_states
+from ess.batch.state import Cleared, Which, changed_names, results, row_states
 from pydantic import BaseModel
 
 from ess.apps import Record, Request, SpecId, Status
@@ -107,7 +107,7 @@ def test_a_row_whose_result_is_cleared_is_shown_so_and_left_to_do() -> None:
         {'a': record('1', 'a')},
         {'1': Status.COMPLETED},
         {'a': frozenset({'shared'})},  # a setting changed, which a clear outranks
-        cleared={'1': 'iofq'},
+        cleared={'1': Cleared('iofq')},
         overrides=OVERRIDES,
     )
 
@@ -116,21 +116,95 @@ def test_a_row_whose_result_is_cleared_is_shown_so_and_left_to_do() -> None:
     assert with_changed_settings(found) == []
 
 
-def test_a_cell_reading_a_cleared_record_names_the_batch_to_reduce_again() -> None:
+@pytest.mark.parametrize(
+    ('cleared', 'problem'),
+    [
+        (
+            Cleared('centres'),
+            'its outputs are cleared; reduce the batch centres again, then set '
+            'sample to the new result',
+        ),
+        (
+            Cleared('centres', newer=True),
+            'its outputs are cleared; the batch centres has a newer result, set '
+            'sample to it',
+        ),
+        (Cleared(None), 'its outputs are cleared'),
+    ],
+)
+def test_a_cell_reading_a_cleared_record_says_how_to_point_it_to_a_result(
+    cleared: Cleared, problem: str
+) -> None:
     ref = OutputRef(record='c', output='centre')
     found = row_states(
         {'a': row(sample=ref)},
         COLUMNS,
         {},
         {'c': Status.COMPLETED},
-        cleared={'c': 'centres'},
+        cleared={'c': cleared},
         overrides=OVERRIDES,
     )
 
     assert ready(found) == []
-    assert [str(e) for e in found['a'].problems] == [
-        'a: sample: its outputs are cleared; reduce the batch centres again'
-    ]
+    assert [str(e) for e in found['a'].problems] == [f'a: sample: {problem}']
+
+
+@pytest.mark.parametrize(
+    ('status', 'changed', 'shown'),
+    [
+        (Status.COMPLETED, frozenset(), 'done'),
+        (Status.COMPLETED, frozenset({'thickness'}), 'incomplete'),
+        (Status.COMPLETED, None, 'incomplete'),  # not compared
+        (Status.FAILED, frozenset(), 'incomplete'),
+        (Status.CANCELLED, frozenset(), 'incomplete'),
+    ],
+)
+def test_a_cell_reading_a_cleared_record_is_a_problem_only_of_a_row_to_reduce(
+    status: Status, changed: frozenset[str] | None, shown: str
+) -> None:
+    ref = OutputRef(record='c', output='centre')
+    found = row_states(
+        {'a': row(sample=ref)},
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': status, 'c': Status.COMPLETED},
+        None if changed is None else {'a': changed},
+        cleared={'c': Cleared('centres')},
+        overrides=OVERRIDES,
+    )
+
+    assert found['a'].status == shown
+
+
+def test_a_row_whose_result_is_cleared_reports_a_cleared_cell() -> None:
+    ref = OutputRef(record='c', output='centre')
+    found = row_states(
+        {'a': row(sample=ref)},
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': Status.COMPLETED, 'c': Status.COMPLETED},
+        cleared={'1': Cleared('iofq'), 'c': Cleared('centres')},
+        overrides=OVERRIDES,
+    )
+
+    assert found['a'].status == 'incomplete'
+
+
+@pytest.mark.parametrize('status', [Status.FAILED, Status.CANCELLED])
+def test_a_cleared_row_that_failed_or_was_cancelled_shows_its_status(
+    status: Status,
+) -> None:
+    found = row_states(
+        {'a': row(sample='x')},
+        COLUMNS,
+        {'a': record('1', 'a')},
+        {'1': status},
+        cleared={'1': Cleared('iofq')},
+        overrides=OVERRIDES,
+    )
+
+    assert found['a'].status == status.value
+    assert left_to_reduce(found) == ['a']
 
 
 def test_a_row_without_a_result_is_left_to_do() -> None:

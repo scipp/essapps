@@ -19,7 +19,7 @@ from collections.abc import Collection, Iterable, Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 from ess.apps.errors import FieldError
 from ess.apps.records import Record, Status
@@ -110,18 +110,29 @@ class RowState:
         return 'done' if self.outdated is False else 'outdated'
 
 
+class Cleared(NamedTuple):
+    """
+    A record whose outputs are cleared, as a reference to it is reported:
+    the label of its batch, and whether the batch holds a newer result of
+    its member, whose outputs a reference can read instead.
+    """
+
+    label: str | None
+    newer: bool = False
+
+
 def problems(
-    key: str,
+    key: str | None,
     cells: Mapping[str, Any],
     parameter_columns: Collection[str],
     status: Mapping[str, Status],
-    cleared: Mapping[str, str | None] = MappingProxyType({}),
+    cleared: Mapping[str, Cleared] = MappingProxyType({}),
 ) -> tuple[FieldError, ...]:
     """
     Why the row ``key`` cannot be reduced: a column of ``parameter_columns``
     missing from ``cells``, or a reference to a record that failed or was
     cancelled, per ``status`` by record ID, or whose outputs are cleared, per
-    ``cleared``, the label of each such record by ID.
+    ``cleared`` by record ID. ``key`` is ``None`` for the settings.
     """
     found = [
         FieldError(key, (c,), 'empty') for c in parameter_columns if c not in cells
@@ -134,15 +145,31 @@ def problems(
                 FieldError(key, loc, f'the record it reads is {record_status}')
             )
         elif ref.record in cleared:
-            found.append(FieldError(key, loc, _cleared(cleared[ref.record])))
+            found.append(FieldError(key, loc, _cleared(cleared[ref.record], loc)))
     return tuple(found)
 
 
-def _cleared(label: str | None) -> str:
-    """The problem of a reference to a record whose outputs are cleared."""
-    if label is None:
+def _cleared(record: Cleared, loc: tuple[str | int, ...]) -> str:
+    """
+    The problem at ``loc`` of a reference to a record whose outputs are
+    cleared, which says how to point it to a result to read::
+
+        its outputs are cleared; the batch find has a newer result, set offset to it
+        its outputs are cleared; reduce the batch find again, then set offset
+        to the new result
+    """
+    if record.label is None:
         return 'its outputs are cleared'
-    return f'its outputs are cleared; reduce the batch {label} again'
+    column = loc[0]
+    if record.newer:
+        return (
+            f'its outputs are cleared; the batch {record.label} has a newer '
+            f'result, set {column} to it'
+        )
+    return (
+        f'its outputs are cleared; reduce the batch {record.label} again, '
+        f'then set {column} to the new result'
+    )
 
 
 def results(records: Iterable[Record]) -> dict[str, Record]:
@@ -183,18 +210,21 @@ def row_states(
     changed: Mapping[str, frozenset[str]] | None = MappingProxyType({}),
     refused: Mapping[str, tuple[FieldError, ...]] | None = None,
     spec_changed: AbstractSet[str] = frozenset(),
-    cleared: Mapping[str, str | None] = MappingProxyType({}),
+    cleared: Mapping[str, Cleared] = MappingProxyType({}),
     *,
     overrides: Mapping[str, AbstractSet[str]],
 ) -> dict[str, RowState]:
     """
     The state of each row of ``cells``, by key.
 
+    A reference to a cleared record is a problem only of a row that would be
+    reduced: without a result, or with one that failed, was cancelled, is
+    cleared, or is outdated or not compared. A ``done`` row stays ``done``.
+
     Parameters
     ----------
     cells:
-        The values of the parameter columns of each row, by key, with the
-        settings outside the columns.
+        The values of the parameter columns of each row, by key.
     found:
         The result of each row that has one, by key.
     status:
@@ -207,8 +237,8 @@ def row_states(
     spec_changed:
         The keys of :attr:`RowState.spec_changed`.
     cleared:
-        The label of each cleared record, by ID: of the results and of the
-        records that the cells reference.
+        Each cleared record by ID, of the results and of the records that the
+        cells reference.
     overrides:
         :attr:`RowState.overrides` of each row, by key.
     """
@@ -221,10 +251,18 @@ def row_states(
             outdated: bool | None = True
         else:
             outdated = None if names is None else bool(names)
-        found_problems = problems(key, row, parameter_columns, status, cleared)
-        found_problems += refused.get(key, ())
         row_status = None if record is None else status[record.id]
         row_cleared = record is not None and record.id in cleared
+        reduced = (
+            row_status is None
+            or row_status in _RERUN
+            or row_cleared
+            or outdated is not False  # not compared counts as outdated here
+        )
+        found_problems = problems(
+            key, row, parameter_columns, status, cleared if reduced else {}
+        )
+        found_problems += refused.get(key, ())
         states[key] = RowState(
             key=key,
             record=record,

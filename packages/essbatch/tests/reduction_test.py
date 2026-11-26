@@ -1201,7 +1201,7 @@ def test_a_cleared_row_shows_so_and_a_reduction_gives_it_a_new_record(
     assert client.cleared([first['1'], again['1']]) == [True, False]
 
 
-def test_a_cell_reading_a_cleared_record_names_the_batch_to_reduce_again(
+def test_a_cell_reading_a_cleared_record_says_to_reduce_its_batch_and_then_to_set_it(
     chain: tuple[Batch, Batch], client: Client
 ) -> None:
     find, reduce = chain
@@ -1210,26 +1210,57 @@ def test_a_cell_reading_a_cleared_record_names_the_batch_to_reduce_again(
     edit(reduce, '1', offset=cell_of(found['1'].ref('offset')))
 
     find.clear()
+    before = [str(e) for e in reduce.state()['1'].problems]
+    client.wait(find.reduce(['1']))
+    after = [str(e) for e in reduce.state()['1'].problems]
 
-    assert [str(e) for e in reduce.state()['1'].problems] == [
-        '1: offset: its outputs are cleared; reduce the batch find again'
+    assert before == [
+        '1: offset: its outputs are cleared; reduce the batch find again, then '
+        'set offset to the new result'
+    ]
+    assert after == [
+        '1: offset: its outputs are cleared; the batch find has a newer result, '
+        'set offset to it'
     ]
 
 
-def test_a_setting_reading_a_cleared_record_is_a_problem_of_every_row(
+def test_a_done_row_stays_done_when_a_record_it_read_is_cleared(
+    chain: tuple[Batch, Batch], client: Client
+) -> None:
+    find, reduce = chain
+    found = find.reduce(['1'])
+    client.wait(found)
+    edit(reduce, '1', offset=cell_of(found['1'].ref('offset')))
+    client.wait(reduce.reduce(['1']))
+
+    find.clear()
+
+    assert reduce.state()['1'].status == 'done'
+    with pytest.raises(SubmitError, match='offset: its outputs are cleared'):
+        reduce.reduce(['1'])
+
+
+def test_a_setting_reading_a_cleared_record_is_one_problem_of_the_settings(
     chain: tuple[Batch, Batch], measured: Batch, client: Client
 ) -> None:
     find, _ = chain
     found = find.reduce(['1'])
     client.wait(found)
     measured.settings = {**SETTINGS, 'offset': found['1'].ref('offset')}
+    client.wait(measured.reduce(['1']))
 
     find.clear()
+    states, problems = measured.shown()
 
-    assert {k: [str(e) for e in s.problems] for k, s in measured.state().items()} == {
-        k: [f'{k}: offset: its outputs are cleared; reduce the batch find again']
-        for k in ('1', '2')
-    }
+    problem = (
+        'offset: its outputs are cleared; reduce the batch find again, then set '
+        'offset to the new result'
+    )
+    assert {k: s.status for k, s in states.items()} == {'1': 'done', '2': 'ready'}
+    assert [str(e) for e in problems] == [problem]
+    with pytest.raises(SubmitError) as refused:
+        measured.reduce(['2'])
+    assert [(e.request_key, str(e)) for e in refused.value.errors] == [(None, problem)]
 
 
 def test_a_batch_with_a_running_row_clears_nothing_and_names_the_row(
@@ -1240,11 +1271,71 @@ def test_a_batch_with_a_running_row_clears_nothing_and_names_the_row(
     gate.close()
     running = measured.reduce(['1'])
 
-    with pytest.raises(ValueError, match=r'^water: still running$'):
+    with pytest.raises(ValueError, match=r'^row 1 of scan is still running$'):
         measured.clear()
     gate.open()
     client.wait(running)
     assert client.cleared(done['2']) is False
+
+
+def test_a_clear_refused_for_a_reader_in_another_batch_names_both_rows(
+    chain: tuple[Batch, Batch], client: Client, gate: Gate
+) -> None:
+    find, reduce = chain
+    found = find.reduce(['1'])
+    client.wait(found)
+    edit(reduce, '1', offset=cell_of(found['1'].ref('offset')))
+    gate.close()
+    running = reduce.reduce(['1'])
+
+    with pytest.raises(
+        ValueError,
+        match=r'^row 1 of find is read by row 1 of reduce, which is still running$',
+    ):
+        find.clear()
+    gate.open()
+    client.wait(running)
+
+
+def test_a_staged_batch_whose_submit_is_rejected_holds_no_record_it_reads(
+    chain: tuple[Batch, Batch], measured: Batch, client: Client
+) -> None:
+    find, _ = chain
+    found = find.reduce(['1'])
+    client.wait(found)
+    measured.settings = {**SETTINGS, 'offset': found['1'].ref('offset')}
+    edit(measured, '2', sample='uuid:run-99')  # no such file
+
+    with pytest.raises(SubmitError):
+        measured.reduce(['1', '2'])
+    find.clear()
+
+    assert client.cleared(found['1']) is True
+
+
+def test_a_clear_of_a_batch_takes_older_records_and_members_no_longer_rows(
+    measured: Batch, client: Client
+) -> None:
+    first = measured.reduce(['1', '2'])
+    client.wait(first)
+    again = measured.reduce(['1'])
+    client.wait(again)
+    measured.set_table(measured.table().drop(index='2'))
+
+    measured.clear()
+
+    assert client.cleared([first['1'], again['1'], first['2']]) == [True] * 3
+
+
+def test_a_clear_of_rows_refuses_a_key_that_is_no_row(
+    measured: Batch, client: Client
+) -> None:
+    records = measured.reduce(['1', '2'])
+    client.wait(records)
+
+    with pytest.raises(KeyError, match='the batch has no row nope'):
+        measured.clear(['1', 'nope'])
+    assert client.cleared(list(records.values())) == [False, False]
 
 
 def test_an_unknown_record_in_a_cell_touches_only_its_row(

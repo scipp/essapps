@@ -707,7 +707,10 @@ def _clear(given: _Context) -> int:
         given.manager.clear()
         sys.stderr.write('cleared the results of every record of the folder\n')
         return 0
-    given.batch(args.label).clear(args.keys or None)
+    try:
+        given.batch(args.label).clear(args.keys or None)
+    except KeyError as error:
+        raise ValueError(error.args[0]) from None
     rows = f'rows {" ".join(args.keys)} of ' if args.keys else ''
     sys.stderr.write(
         f'cleared the results of {rows}{args.label}; '

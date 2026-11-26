@@ -27,12 +27,13 @@ from ess.batch.definition import (
     Key,
 )
 
-from ess.apps import Client, Stage, Workspace
+from ess.apps import Client, Request, Stage, Workspace, file
 from ess.apps.testing import FakeStore, StagedFunction
 from ess.spec import function_binding
 
 from .toys import (
     COLUMNS,
+    FIND,
     PLAIN,
     SOURCES,
     STAGED,
@@ -399,14 +400,54 @@ def test_a_running_batch_is_not_cleared_and_not_removed(
     gate.close()
     records = manager.batch(label).reduce(['1'])
 
-    with pytest.raises(ValueError, match=r'^water: still running$'):
-        manager.remove(label, clear=True)
-    with pytest.raises(ValueError, match=rf'^still running: {label}$'):
-        manager.clear()
+    for refused in (lambda: manager.remove(label, clear=True), manager.clear):
+        with pytest.raises(ValueError, match=r'^row 1 of Morning is still running$'):
+            refused()
     gate.open()
     client.wait(records)
     assert list(manager.headers()) == [label]
     assert client.cleared(records['1']) is False
+
+
+def test_a_clear_refused_for_a_record_of_no_batch_says_so(
+    manager: BatchManager, client: Client, sample: Measure, gate: Gate
+) -> None:
+    sample(1, 'water')
+    gate.close()
+    running = client.submit(
+        PLAIN, params={'sample': file(run=1), 'transmission': file(run=1001)}
+    )
+
+    with pytest.raises(ValueError, match=r'^a record of no batch is still running$'):
+        manager.clear()
+    gate.open()
+    client.wait(running)
+
+
+def test_a_clear_refused_for_an_open_stage_names_its_batch(
+    intake: Intake, client: Client, sample: Measure, gate: Gate
+) -> None:
+    manager = intake.manager
+    sample(1, 'water')
+    found = client.compute(
+        {'1': Request(FIND, params={'sample': file(run=1)})}, label='find'
+    )
+    label = from_pairs(intake, STAGED.name, title='Scan')
+    batch = manager.batch(label)
+    batch.settings = {**batch.settings, 'offset': found['1'].ref('offset')}
+    gate.close()
+    # holds the one worker, so that the stage has not staged
+    held = client.submit(
+        PLAIN, params={'sample': file(run=1), 'transmission': file(run=1001)}
+    )
+    records = batch.reduce(['1'])
+
+    with pytest.raises(
+        ValueError, match=r'^row 1 of find is read by the open stage of Scan$'
+    ):
+        manager.clear()
+    gate.open()
+    client.wait([held, *records.values()])
 
 
 class Releases:
